@@ -1,0 +1,91 @@
+version = 1
+revision = 3
+requires-python = ">=3.12"
+
+[manifest]
+members = [
+    "agent-langgraph",
+    "agent-native",
+    "api",
+    "common",
+    "evaluation",
+    "file-server",
+    "git-server",
+    "knowledge-server",
+    "memory-server",
+    "observability",
+    "operatingagent",
+    "sandbox",
+    "search-server",
+    "terminal-server",
+]
+
+[[package]]
+name = "agent-langgraph"
+version = "0.1.0"
+source = { editable = "packages/agent-langgraph" }
+
+[[package]]
+name = "agent-native"
+version = "0.1.0"
+source = { editable = "packages/agent-native" }
+
+[[package]]
+name = "api"
+version = "0.1.0"
+source = { editable = "packages/api" }
+
+[[package]]
+name = "common"
+version = "0.1.0"
+source = { editable = "packages/common" }
+
+[[package]]
+name = "evaluation"
+version = "0.1.0"
+source = { editable = "packages/evaluation" }
+
+[[package]]
+name = "file-server"
+version = "0.1.0"
+source = { editable = "packages/mcp-servers/file-server" }
+
+[[package]]
+name = "git-server"
+version = "0.1.0"
+source = { editable = "packages/mcp-servers/git-server" }
+
+[[package]]
+name = "knowledge-server"
+version = "0.1.0"
+source = { editable = "packages/mcp-servers/knowledge-server" }
+
+[[package]]
+name = "memory-server"
+version = "0.1.0"
+source = { editable = "packages/mcp-servers/memory-server" }
+
+[[package]]
+name = "observability"
+version = "0.1.0"
+source = { editable = "packages/observability" }
+
+[[package]]
+name = "operatingagent"
+version = "0.1.0"
+source = { virtual = "." }
+
+[[package]]
+name = "sandbox"
+version = "0.1.0"
+source = { editable = "packages/sandbox" }
+
+[[package]]
+name = "search-server"
+version = "0.1.0"
+source = { editable = "packages/mcp-servers/search-server" }
+
+[[package]]
+name = "terminal-server"
+version = "0.1.0"
+source = { editable = "packages/mcp-servers/terminal-server" }

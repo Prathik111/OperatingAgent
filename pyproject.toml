@@ -1,0 +1,12 @@
+[project]
+name = "OperatingAgent"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = []
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["packages/*", "packages/mcp-servers/*"]
+exclude = ["packages/mcp-servers"]
