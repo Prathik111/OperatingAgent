@@ -1,0 +1,35 @@
+flowchart TD
+    A["User Goal\n(apps/desktop + apps/frontend)"] --> B["POST /tasks\npackages/api → TaskService"]
+    B --> C{"Track selection"}
+    C -->|native| D1["agent-native: Plan-and-Execute\ndecomposition (Planner)"]
+    C -->|langgraph| D2["agent-langgraph: StateGraph\nplan node"]
+
+    D1 --> E["Context Collection\n(memory-server + knowledge-server via MCP)"]
+    D2 --> E
+
+    E --> F["ReAct Execution Loop\nThought -> Action -> Observation\n(MCP Client -> mcp-servers)"]
+
+    F --> G{"Context budget\nnear limit?"}
+    G -->|yes| G1["Compact / summarize history\n(ContextCompactor)"]
+    G1 --> H
+    G -->|no| H{"Risk classification\n(deterministic, common/RiskClassifier)"}
+
+    H -->|risky| I["User Approval requested\nvia WebSocket (ApprovalGateway)"]
+    H -->|safe| J["Sandboxed MCP Tool Execution\n(packages/sandbox + target mcp-server)"]
+    I -->|approved| J
+    I -->|denied| K["Abort step\n-> Reflector re-plans"]
+
+    J --> L{"Verification\n(exit code / file exists / build-test)"}
+    L -->|fail| M["Reflection: re-plan\nremaining steps"] --> F
+    L -->|pass| N["Log metrics + trace\n(Postgres via TaskRepository,\nOpenTelemetry -> Langfuse)"]
+
+    N --> O{"More steps\nin plan?"}
+    O -->|yes| F
+    O -->|no| P["Task Completed\nfinal result streamed to frontend"]
+
+    K --> O
+
+    style A fill:#DCE6F5,stroke:#1F3864
+    style P fill:#DCE6F5,stroke:#1F3864
+    style H fill:#FDECC8,stroke:#8A6D3B
+    style L fill:#FDECC8,stroke:#8A6D3B

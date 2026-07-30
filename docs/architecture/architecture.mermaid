@@ -1,0 +1,85 @@
+flowchart TB
+    subgraph APPS["apps/"]
+        DESK["desktop\n(Tauri 2 shell)"]
+        FE["frontend\n(React 18, TS, Vite, Tailwind,\nshadcn/ui, Zustand, TanStack Query)"]
+    end
+    DESK --> FE
+
+    subgraph API_PKG["packages/api  (FastAPI)"]
+        ROUTES["REST routes +\nWebSocket stream"]
+        TASKSVC["TaskService"]
+        APPROVAL["ApprovalGateway"]
+        REPO["TaskRepository"]
+    end
+    FE -- "REST + WebSocket" --> ROUTES
+    ROUTES --> TASKSVC
+    TASKSVC --> APPROVAL
+    TASKSVC --> REPO
+
+    subgraph AGENTS["Orchestration tracks (dual implementation)"]
+        NATIVE["packages/agent-native\nPlan-and-Execute + ReAct\n(hand-written)"]
+        LANG["packages/agent-langgraph\nStateGraph\n(framework)"]
+    end
+    TASKSVC -- "IAgentOrchestrator" --> NATIVE
+    TASKSVC -- "IAgentOrchestrator" --> LANG
+
+    subgraph COMMON["packages/common  (shared contracts)"]
+        CONTRACTS["Task / Plan / ToolCall schemas\nIMCPClient interface\nRiskClassifier (deterministic)"]
+    end
+    NATIVE --> CONTRACTS
+    LANG --> CONTRACTS
+    APPROVAL --> CONTRACTS
+
+    subgraph MCP["packages/mcp-servers  (fastmcp, MCP protocol)"]
+        FSRV["file-server"]
+        TSRV["terminal-server"]
+        GSRV["git-server"]
+        SSRV["search-server"]
+        KSRV["knowledge-server\n(Phase 2)"]
+        MSRV["memory-server\n(Phase 2)"]
+    end
+    NATIVE -- "MCP client calls\n(manual)" --> MCP
+    LANG -- "MCP client calls\n(LangGraph adapter)" --> MCP
+
+    subgraph SANDBOX_PKG["packages/sandbox"]
+        SBX["SandboxManager\n(per-task Docker container,\nresource + time limits)"]
+    end
+    TSRV --> SBX
+    FSRV --> SBX
+
+    subgraph OBS["packages/observability"]
+        OTEL["TracingService\n(OpenTelemetry GenAI spans)"]
+    end
+    NATIVE --> OTEL
+    LANG --> OTEL
+    TASKSVC --> OTEL
+
+    subgraph EVAL["packages/evaluation"]
+        BENCH["BenchmarkRunner\n(runs Appendix A task set\nagainst both tracks)"]
+    end
+    BENCH -- "IAgentOrchestrator" --> NATIVE
+    BENCH -- "IAgentOrchestrator" --> LANG
+    BENCH --> REPO
+
+    subgraph INFRA["infra/docker"]
+        PG[("PostgreSQL\nstate, plans, eval results")]
+        QD[("Qdrant\nmemory + RAG embeddings")]
+        LF["Langfuse\n(trace dashboard)"]
+    end
+    REPO --> PG
+    MSRV --> QD
+    KSRV --> QD
+    OTEL --> LF
+
+    subgraph LLM["Local LLM layer"]
+        OLLAMA["Ollama / llama.cpp\n(Llama 3.1 8B, Qwen2.5-Coder 7B,\nlocal embeddings)"]
+    end
+    NATIVE --> OLLAMA
+    LANG --> OLLAMA
+
+    style APPS fill:#EEF2F8,stroke:#1F3864
+    style API_PKG fill:#EEF2F8,stroke:#1F3864
+    style AGENTS fill:#FDECC8,stroke:#8A6D3B
+    style COMMON fill:#E4F0E6,stroke:#2E6B3E
+    style MCP fill:#EEF2F8,stroke:#1F3864
+    style INFRA fill:#F3E8F5,stroke:#6B2E8A

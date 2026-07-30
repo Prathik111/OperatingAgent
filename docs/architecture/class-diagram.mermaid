@@ -1,0 +1,294 @@
+classDiagram
+    direction LR
+
+    %% =========================================================
+    %% packages/common — shared contracts every other package depends on
+    %% =========================================================
+    class AgentTask {
+        +id : str
+        +goal : str
+        +track : TrackType
+        +status : TaskStatus
+        +created_at : datetime
+    }
+    class Plan {
+        +task_id : str
+        +steps : PlanStep[]
+    }
+    class PlanStep {
+        +id : str
+        +description : str
+        +tool_name : str
+        +status : StepStatus
+    }
+    class ToolCallRequest {
+        +tool_name : str
+        +arguments : dict
+    }
+    class ToolCallResult {
+        +success : bool
+        +output : str
+        +error : str
+    }
+    class RiskLevel {
+        <<enumeration>>
+        SAFE
+        RISKY
+        BLOCKED
+    }
+    class AgentRunResult {
+        +status : TaskStatus
+        +steps_taken : int
+        +tokens_used : int
+        +latency_s : float
+    }
+    class IMCPClient {
+        <<interface>>
+        +list_tools() ToolInfo[]
+        +call_tool(request IoolCallRequest) ToolCallResult
+    }
+    class RiskClassifier {
+        +classify(call ToolCallRequest) RiskLevel
+        -patterns : list
+    }
+    class IAgentOrchestrator {
+        <<interface>>
+        +run(task AgentTask, on_event Callable) AgentRunResult
+    }
+
+    Plan "1" *-- "many" PlanStep
+    AgentTask ..> Plan : produces
+    RiskClassifier ..> RiskLevel : returns
+    RiskClassifier ..> ToolCallRequest : inspects
+    IAgentOrchestrator ..> AgentTask : consumes
+    IAgentOrchestrator ..> AgentRunResult : returns
+
+    %% =========================================================
+    %% packages/agent-native — Plan-and-Execute + ReAct (hand-written)
+    %% =========================================================
+    class NativeAgent {
+        -planner : Planner
+        -executor : ReactExecutor
+        -reflector : Reflector
+        -verifier : Verifier
+        -compactor : ContextCompactor
+        -mcp_client : NativeMCPClient
+        +run(task, on_event) AgentRunResult
+    }
+    class Planner {
+        +plan(goal str) Plan
+    }
+    class ReactExecutor {
+        -max_calls_per_step : int
+        +execute_step(step PlanStep) Observation
+    }
+    class Reflector {
+        +replan(plan Plan, failure str) Plan
+    }
+    class Verifier {
+        +verify(step PlanStep, result ToolCallResult) bool
+    }
+    class ContextCompactor {
+        -token_budget : int
+        +check_budget(history) bool
+        +compact(history) str
+    }
+    class NativeMCPClient {
+        +list_tools() ToolInfo[]
+        +call_tool(request) ToolCallResult
+    }
+
+    IAgentOrchestrator <|.. NativeAgent
+    IMCPClient <|.. NativeMCPClient
+    NativeAgent *-- Planner
+    NativeAgent *-- ReactExecutor
+    NativeAgent *-- Reflector
+    NativeAgent *-- Verifier
+    NativeAgent *-- ContextCompactor
+    NativeAgent --> NativeMCPClient
+    ReactExecutor --> RiskClassifier : checks before execution
+    ReactExecutor ..> ToolCallRequest : builds
+    Verifier ..> ToolCallResult : inspects
+    Planner ..> Plan : produces
+
+    %% =========================================================
+    %% packages/agent-langgraph — StateGraph (framework)
+    %% =========================================================
+    class LangGraphAgent {
+        -graph : CompiledStateGraph
+        -mcp_adapter : LangGraphMCPAdapter
+        +run(task, on_event) AgentRunResult
+    }
+    class AgentState {
+        <<TypedDict>>
+        +goal : str
+        +plan : Plan
+        +history : list
+        +context : dict
+    }
+    class PlanNode {
+        +__call__(state AgentState) AgentState
+    }
+    class ActNode {
+        +__call__(state AgentState) AgentState
+    }
+    class ObserveNode {
+        +__call__(state AgentState) AgentState
+    }
+    class RouterNode {
+        +__call__(state AgentState) str
+    }
+    class LangGraphMCPAdapter {
+        +list_tools() ToolInfo[]
+        +call_tool(request) ToolCallResult
+    }
+
+    IAgentOrchestrator <|.. LangGraphAgent
+    IMCPClient <|.. LangGraphMCPAdapter
+    LangGraphAgent --> AgentState : builds graph over
+    LangGraphAgent *-- PlanNode
+    LangGraphAgent *-- ActNode
+    LangGraphAgent *-- ObserveNode
+    LangGraphAgent *-- RouterNode
+    LangGraphAgent --> LangGraphMCPAdapter
+    ActNode --> RiskClassifier : checks before execution
+
+    %% =========================================================
+    %% packages/mcp-servers — fastmcp servers (File/Terminal/Git/Search/Knowledge/Memory)
+    %% =========================================================
+    class IToolServer {
+        <<interface>>
+        +register_tools(mcp FastMCP) void
+    }
+    class FileServer {
+        +read_file(path) str
+        +write_file(path, content) ToolCallResult
+        +edit_file(path, diff) ToolCallResult
+        +list_dir(path) str[]
+    }
+    class TerminalServer {
+        +run_command(cmd) ToolCallResult
+    }
+    class GitServer {
+        +status() str
+        +diff() str
+        +commit(message) ToolCallResult
+        +branch(name) ToolCallResult
+    }
+    class SearchServer {
+        +search_docs(query) SearchResult[]
+        +search_codebase(query) SearchResult[]
+    }
+    class KnowledgeServer {
+        +query_rag(question) str
+    }
+    class MemoryServer {
+        +store_memory(entry) void
+        +retrieve_memory(query) MemoryEntry[]
+    }
+
+    IToolServer <|.. FileServer
+    IToolServer <|.. TerminalServer
+    IToolServer <|.. GitServer
+    IToolServer <|.. SearchServer
+    IToolServer <|.. KnowledgeServer
+    IToolServer <|.. MemoryServer
+    NativeMCPClient ..> IToolServer : calls over MCP protocol
+    LangGraphMCPAdapter ..> IToolServer : calls over MCP protocol
+
+    %% =========================================================
+    %% packages/sandbox
+    %% =========================================================
+    class SandboxManager {
+        +create_session(task_id) SandboxSession
+        +destroy_session(id) void
+    }
+    class SandboxSession {
+        +container_id : str
+        +workspace_path : str
+        +cpu_limit : str
+        +time_limit_s : int
+        +run(cmd) ToolCallResult
+    }
+    SandboxManager *-- SandboxSession
+    TerminalServer --> SandboxManager : executes inside
+    FileServer --> SandboxManager : scoped to workspace
+
+    %% =========================================================
+    %% packages/observability
+    %% =========================================================
+    class TracingService {
+        +start_span(name) Span
+        +end_span(span) void
+    }
+    class LangfuseExporter {
+        +export_trace(spans) void
+    }
+    TracingService --> LangfuseExporter
+    NativeAgent --> TracingService : instrumented by
+    LangGraphAgent --> TracingService : instrumented by
+
+    %% =========================================================
+    %% packages/evaluation
+    %% =========================================================
+    class BenchmarkRunner {
+        +run_suite(tasks TaskCase[], orchestrator IAgentOrchestrator) EvaluationResult[]
+    }
+    class TaskCase {
+        +id : str
+        +category : str
+        +goal : str
+        +expected_outcome : str
+    }
+    class EvaluationResult {
+        +task_id : str
+        +track : TrackType
+        +success : bool
+        +steps : int
+        +latency_s : float
+        +tokens : int
+    }
+    class SafetyClassifierEvaluator {
+        +evaluate(classifier RiskClassifier, labeled_set) PrecisionRecall
+    }
+
+    BenchmarkRunner --> IAgentOrchestrator : drives
+    BenchmarkRunner --> TaskCase : reads
+    BenchmarkRunner ..> EvaluationResult : produces
+    BenchmarkRunner --> SafetyClassifierEvaluator
+
+    %% =========================================================
+    %% packages/api — FastAPI (ties everything together for the frontend)
+    %% =========================================================
+    class TaskService {
+        -orchestrators : dict~TrackType, IAgentOrchestrator~
+        +create_task(goal, track) AgentTask
+        +get_task(id) AgentTask
+        +stream_task(id) AsyncIterator
+    }
+    class ApprovalGateway {
+        +request_approval(step PlanStep) void
+        +resolve_approval(step_id, approved bool) void
+    }
+    class TaskRepository {
+        +save(task AgentTask) void
+        +get(id) AgentTask
+        +log_metrics(result EvaluationResult) void
+    }
+    class TaskRouter {
+        +post_task(goal, track) AgentTask
+        +get_task(id) AgentTask
+    }
+    class TaskStreamSocket {
+        +on_connect(task_id) void
+        +push_event(event) void
+    }
+
+    TaskService --> IAgentOrchestrator : dispatches to native or langgraph
+    TaskService --> TaskRepository
+    TaskService --> ApprovalGateway
+    ApprovalGateway --> RiskClassifier
+    TaskRouter --> TaskService
+    TaskStreamSocket --> TaskService
+    TaskRepository --> AgentTask
+    TaskRepository --> EvaluationResult
