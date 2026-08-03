@@ -45,7 +45,7 @@ classDiagram
     class IMCPClient {
         <<interface>>
         +list_tools() ToolInfo[]
-        +call_tool(request IoolCallRequest) ToolCallResult
+        +call_tool(request ToolCallRequest) ToolCallResult
     }
     class RiskClassifier {
         +classify(call ToolCallRequest) RiskLevel
@@ -95,7 +95,7 @@ classDiagram
     }
     class NativeMCPClient {
         +list_tools() ToolInfo[]
-        +call_tool(request) ToolCallResult
+        +call_tool(request ToolCallRequest) ToolCallResult
     }
 
     IAgentOrchestrator <|.. NativeAgent
@@ -140,7 +140,7 @@ classDiagram
     }
     class LangGraphMCPAdapter {
         +list_tools() ToolInfo[]
-        +call_tool(request) ToolCallResult
+        +call_tool(request ToolCallRequest) ToolCallResult
     }
 
     IAgentOrchestrator <|.. LangGraphAgent
@@ -213,7 +213,8 @@ classDiagram
     SandboxManager *-- SandboxSession
     TerminalServer --> SandboxManager : executes inside
     FileServer --> SandboxManager : scoped to workspace
-
+    GitServer --> SandboxManager : scoped to workspace 
+    
     %% =========================================================
     %% packages/observability
     %% =========================================================

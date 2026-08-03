@@ -7,7 +7,11 @@ authors = [
     { name = "amisharun412", email = "anisharunsamy12@gmail.com" }
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "common",
+    "fastmcp>=3.4.5",
+    "langgraph>=1.2.10",
+]
 
 [project.scripts]
 agent-langgraph = "agent_langgraph:main"
@@ -15,3 +19,6 @@ agent-langgraph = "agent_langgraph:main"
 [build-system]
 requires = ["uv_build>=0.11.2,<0.12.0"]
 build-backend = "uv_build"
+
+[tool.uv.sources]
+common = { workspace = true }
