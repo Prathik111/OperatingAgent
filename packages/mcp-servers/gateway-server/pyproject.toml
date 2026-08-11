@@ -1,0 +1,29 @@
+[project]
+name = "gateway-server"
+version = "0.1.0"
+description = "Composition gateway that mounts every operating-agent MCP server behind one endpoint"
+readme = "README.md"
+authors = [
+    { name = "amisharun412", email = "anisharunsamy12@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "fastmcp>=3.4.5",
+    "file-server",
+    "git-server",
+    "terminal-server",
+    "search-server",
+]
+
+[project.scripts]
+gateway-server = "gateway_server:main"
+
+[build-system]
+requires = ["uv_build>=0.11.2,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.uv.sources]
+file-server = { workspace = true }
+git-server = { workspace = true }
+terminal-server = { workspace = true }
+search-server = { workspace = true }
