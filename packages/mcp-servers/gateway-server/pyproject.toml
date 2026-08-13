@@ -7,6 +7,11 @@ authors = [
     { name = "amisharun412", email = "anisharunsamy12@gmail.com" }
 ]
 requires-python = ">=3.12"
+# The four sub-servers are private workspace members, resolved via
+# [tool.uv.sources] below. They are deliberately NOT published to any index, so
+# this package is marked private to keep it from being uploaded or installed
+# standalone (which would try to resolve those names from PyPI).
+classifiers = ["Private :: Do Not Upload"]
 dependencies = [
     "fastmcp>=3.4.5",
     "file-server",

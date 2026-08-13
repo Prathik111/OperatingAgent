@@ -18,21 +18,53 @@ from typing import Any
 
 LOGGER = logging.getLogger(__name__)
 
+#: Environment variable that pins the workspace root every path is confined to.
+ROOT_ENV_VAR = "FILE_SERVER_ROOT"
+
+#: Chunk size used when streaming file copies, so large files never land in RAM.
+COPY_CHUNK_SIZE = 1024 * 1024
+
+
+def _default_root() -> Path:
+    """Resolve the workspace root from the environment, defaulting to the CWD."""
+
+    configured = os.environ.get(ROOT_ENV_VAR)
+    return Path(configured).expanduser().resolve() if configured else Path.cwd().resolve()
+
 
 @dataclass(slots=True)
 class FileSystemService:
     """Concrete filesystem service that implements reusable file operations.
 
+    Every path is confined to ``root``; requests that escape it are rejected.
+
     Args:
         logger: Logger for request-scoped diagnostics.
+        root: Workspace root that bounds every path this service touches.
     """
 
     logger: logging.Logger = field(default_factory=lambda: LOGGER)
+    root: Path = field(default_factory=_default_root)
 
     def _normalize_path(self, path: str) -> Path:
-        """Resolve a path into a normalized absolute ``Path`` object."""
+        """Resolve a path inside the workspace root.
 
-        return Path(path).expanduser().resolve()
+        Relative paths resolve against ``root``. Absolute paths are accepted
+        only when they already point inside ``root``. Anything that escapes -
+        via ``..``, a symlink, or an unrelated absolute path - is rejected.
+
+        Raises:
+            PermissionError: If the resolved path falls outside ``root``.
+        """
+
+        root = self.root
+        candidate = Path(path).expanduser()
+        if not candidate.is_absolute():
+            candidate = root / candidate
+        resolved = candidate.resolve()
+        if resolved != root and root not in resolved.parents:
+            raise PermissionError(f"Path escapes the workspace root {root}: {path}")
+        return resolved
 
     def _ensure_directory(self, path: Path) -> None:
         """Create all missing directory parents for a target file path."""
@@ -83,7 +115,9 @@ class FileSystemService:
         self._ensure_directory(destination_path)
         if destination_path.exists() and not overwrite:
             raise FileExistsError(f"Destination already exists: {destination_path}")
-        destination_path.write_bytes(source_path.read_bytes())
+        with source_path.open("rb") as source_file, destination_path.open("wb") as destination_file:
+            while chunk := source_file.read(COPY_CHUNK_SIZE):
+                destination_file.write(chunk)
         if context is not None:
             context.logger.info("file_copied", source=str(source_path), destination=str(destination_path))
         return {"source": str(source_path), "destination": str(destination_path), "copied": True}
@@ -126,7 +160,7 @@ class FileSystemService:
                         "is_file": child.is_file(),
                     }
                 )
-                if recursive and child.is_dir():
+                if recursive and child.is_dir() and not child.is_symlink():
                     entries.extend(walk(child))
             return entries
 
@@ -199,7 +233,7 @@ class FileSystemService:
         if not resolved.exists() or not resolved.is_dir():
             raise NotADirectoryError(f"Directory not found: {resolved}")
         results: list[dict[str, Any]] = []
-        for current_root, _, files in os.walk(resolved):
+        for current_root, _, files in os.walk(resolved, followlinks=False):
             for file_name in files:
                 if query.lower() in file_name.lower():
                     file_path = Path(current_root, file_name)
