@@ -22,6 +22,7 @@ VERSION: Final[str] = "0.1.0"
 mcp = FastMCP(
     name="git-server",
     version=VERSION,
+    mask_error_details=True,
 )
 
 git_service = GitService()

@@ -31,6 +31,7 @@ VERSION: Final[str] = "0.1.0"
 mcp = FastMCP(
     name="file-server",
     version=VERSION,
+    mask_error_details=True,
 )
 
 filesystem_service = FileSystemService()

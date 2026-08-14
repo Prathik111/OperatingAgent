@@ -30,6 +30,7 @@ LOGGER: Final[logging.Logger] = logging.getLogger(__name__)
 mcp = FastMCP(
     name="terminal-server",
     version=VERSION,
+    mask_error_details=True,
 )
 
 terminal_service = TerminalService()

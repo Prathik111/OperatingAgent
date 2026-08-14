@@ -21,6 +21,7 @@ VERSION: Final[str] = "0.1.0"
 mcp = FastMCP(
     name="search-server",
     version=VERSION,
+    mask_error_details=True,
 )
 
 search_service = SearchService()

@@ -57,7 +57,7 @@ class FileSystemService:
             PermissionError: If the resolved path falls outside ``root``.
         """
 
-        root = self.root
+        root = self.root.resolve()
         candidate = Path(path).expanduser()
         if not candidate.is_absolute():
             candidate = root / candidate
@@ -115,6 +115,10 @@ class FileSystemService:
         self._ensure_directory(destination_path)
         if destination_path.exists() and not overwrite:
             raise FileExistsError(f"Destination already exists: {destination_path}")
+        if destination_path.exists() and source_path.samefile(destination_path):
+            raise PermissionError(
+                f"Source and destination refer to the same file: {source_path}"
+            )
         with source_path.open("rb") as source_file, destination_path.open("wb") as destination_file:
             while chunk := source_file.read(COPY_CHUNK_SIZE):
                 destination_file.write(chunk)
