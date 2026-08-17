@@ -7,7 +7,9 @@ authors = [
     { name = "amisharun412", email = "anisharunsamy12@gmail.com" }
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "fastmcp>=2.0.0",
+]
 
 [project.scripts]
 file-server = "file_server:main"

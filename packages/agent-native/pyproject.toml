@@ -7,10 +7,13 @@ authors = [
     { name = "amisharun412", email = "anisharunsamy12@gmail.com" }
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "groq",
+    "python-dotenv",
+]
 
-[project.scripts]
-agent-native = "agent_native:main"
+[project.optional-dependencies]
+ollama = ["ollama>=0.5.0"]
 
 [build-system]
 requires = ["uv_build>=0.11.2,<0.12.0"]

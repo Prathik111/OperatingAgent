@@ -1,2 +1,5 @@
+from .server import mcp
+
+
 def main() -> None:
-    print("Hello from file-server!")
+    mcp.run()
