@@ -34,13 +34,20 @@ class RiskRule:
 # form (see _haystacks), so tool names like "git_push" match \bpush\b.
 DEFAULT_RULES: tuple[RiskRule, ...] = (
     # --- BLOCKED: destructive or unrecoverable ---------------------------
-    # Recursive-force delete in any flag spelling. After separator
-    # normalisation every flag becomes a bare token (``-rf`` -> ``rf``,
-    # ``--recursive`` -> ``recursive``), so the two lookaheads just require a
-    # recursive token AND a force token somewhere after ``rm`` — covering
-    # ``rm -rf``, ``rm -fr``, ``rm -r -f`` and ``rm --recursive --force``.
+    # Recursive-force delete in any flag spelling. Each lookahead needs a
+    # recursive indicator AND (independently) a force indicator somewhere after
+    # ``rm``. Three alternatives per side cover every spelling: a bare token
+    # from the separator-normalised form (``rf``/``fr``/``r``/``recursive``),
+    # the long ``--recursive`` / ``--force`` word, and a short-flag *cluster*
+    # on the raw form — ``(?:^|\s)-[a-z]*r`` finds the ``r`` inside ``-rf``,
+    # ``-rfv``, ``-frv`` or ``-vrf``, while the leading-whitespace anchor skips
+    # ``--``-prefixed long flags so an incidental ``r`` in ``--interactive`` /
+    # ``--verbose`` is not misread as recursive. Covers ``rm -rf``, ``rm -fr``,
+    # ``rm -rfv``, ``rm -r -f`` and ``rm --recursive --force``.
     RiskRule(
-        r"\brm\b(?=.*\b(?:rf|fr|r|recursive)\b)(?=.*\b(?:rf|fr|f|force)\b)",
+        r"\brm\b"
+        r"(?=.*(?:\b(?:rf|fr|r|recursive)\b|(?:^|\s)-[a-z]*r))"
+        r"(?=.*(?:\b(?:rf|fr|f|force)\b|(?:^|\s)-[a-z]*f))",
         RiskLevel.BLOCKED,
         "recursive force delete",
     ),
@@ -111,11 +118,23 @@ def _iter_arg_values(value: Any) -> Iterator[str]:
     positives: a benign ``{"output": ...}`` key would read as a network ``put``
     and ``{"format": ...}`` as a disk format. Only the values carry the command
     text worth classifying, so only they go into the haystack.
+
+    Dicts and ordered sequences (list/tuple) are walked recursively. A ``set``
+    or ``frozenset`` is *rejected*, not iterated: its order is undefined, so the
+    tokens it contributes could reorder between runs and flip the verdict for a
+    multi-token rule (e.g. ``\\bpush\\b.*\\bforce\\b`` matches only one order).
+    Classification is a security control and must be deterministic, so the
+    caller must supply an ordered sequence before risk evaluation.
     """
     if isinstance(value, dict):
         for nested in value.values():
             yield from _iter_arg_values(nested)
-    elif isinstance(value, (list, tuple, set)):
+    elif isinstance(value, (set, frozenset)):
+        raise TypeError(
+            "risk classification requires ordered arguments; a set has no "
+            "defined order. Convert set values to a list or tuple first."
+        )
+    elif isinstance(value, (list, tuple)):
         for item in value:
             yield from _iter_arg_values(item)
     else:

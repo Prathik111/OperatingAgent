@@ -12,9 +12,8 @@ from typing import Any
 class LLMConfig:
     provider: str
     model: str
-    # repr=False keeps the secret out of the generated __repr__ so it never
-    # lands in logs, tracebacks, or Langfuse metadata. Field access is
-    # unchanged; only the string representation is redacted.
+    # repr=False excludes the secret from the dataclass-generated __repr__.
+    # Field access is unchanged; only the string representation omits it.
     api_key: str = field(repr=False)
 
     timeout_seconds: int = 60
