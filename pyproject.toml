@@ -10,3 +10,67 @@ package = false
 [tool.uv.workspace]
 members = ["packages/*", "packages/mcp-servers/*"]
 exclude = ["packages/mcp-servers"]
+
+# The test suite imports every workspace package, so they are dev dependencies
+# of the root. `uv sync` then installs them editable into .venv and pytest can
+# `import common`, `import agent_langgraph`, ... without any sys.path hacks.
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.0.0",
+    "python-dotenv>=1.0.1",
+    "common",
+    "observability",
+    "agent-langgraph",
+    "file-server",
+    "git-server",
+    "terminal-server",
+    "search-server",
+    "gateway-server",
+    "pytest-cov>=7.1.0",
+]
+
+[tool.uv.sources]
+common = { workspace = true }
+observability = { workspace = true }
+agent-langgraph = { workspace = true }
+file-server = { workspace = true }
+git-server = { workspace = true }
+terminal-server = { workspace = true }
+search-server = { workspace = true }
+gateway-server = { workspace = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+    "-ra",
+    # Live tests are opt-in and cost real money/network. `.env.test` sets
+    # OPERATING_AGENT_ENABLE_LIVE_TESTS=1, so the flag alone cannot be the gate —
+    # they are deselected here and re-enabled by an explicit `-m live` on the
+    # command line (a later -m wins over this one).
+    "-m", "not live",
+]
+# Every async test is collected without needing a per-test decorator.
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+# Levels are applied automatically from the directory a test lives in (see
+# `pytest_collection_modifyitems` in tests/conftest.py), so `-m unit`,
+# `-m integration` and `-m e2e` select the pyramid tiers without every module
+# having to declare a `pytestmark`. `regression` and `slow` are hand-applied.
+markers = [
+    "unit: exercises one component in isolation (tests/unit) — fast and deterministic",
+    "integration: exercises several real components together (tests/integration)",
+    "e2e: drives the whole agent flow end to end (tests/e2e)",
+    "live: needs real external credentials/network; skipped unless OPERATING_AGENT_ENABLE_LIVE_TESTS=1",
+    "regression: guards a fixed bug or a safety invariant — do not delete lightly",
+    "slow: takes more than a second to run",
+]
+filterwarnings = [
+    # `common.agent.AgentTask.created_at` defaults to `datetime.utcnow`, which
+    # is deprecated on 3.12+. Ignored (not an error) so the suite stays green
+    # until the default moves to `datetime.now(timezone.utc)`.
+    "ignore:datetime.datetime.utcnow:DeprecationWarning",
+]
