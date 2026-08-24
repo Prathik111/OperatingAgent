@@ -9,7 +9,9 @@ tool to decide whether a human gate is required.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass
+from typing import Any
 
 from .enums import RiskLevel
 from .tools import ToolCallRequest
@@ -19,7 +21,8 @@ from .tools import ToolCallRequest
 class RiskRule:
     """One classification rule. The first matching rule (highest risk first)
     wins. ``pattern`` is matched case-insensitively against the tool name and
-    the stringified arguments."""
+    the stringified argument *values* (dict keys are excluded — see
+    ``_haystacks``)."""
 
     pattern: str
     level: RiskLevel
@@ -31,7 +34,16 @@ class RiskRule:
 # form (see _haystacks), so tool names like "git_push" match \bpush\b.
 DEFAULT_RULES: tuple[RiskRule, ...] = (
     # --- BLOCKED: destructive or unrecoverable ---------------------------
-    RiskRule(r"\brm\s+-?rf\b", RiskLevel.BLOCKED, "recursive force delete"),
+    # Recursive-force delete in any flag spelling. After separator
+    # normalisation every flag becomes a bare token (``-rf`` -> ``rf``,
+    # ``--recursive`` -> ``recursive``), so the two lookaheads just require a
+    # recursive token AND a force token somewhere after ``rm`` — covering
+    # ``rm -rf``, ``rm -fr``, ``rm -r -f`` and ``rm --recursive --force``.
+    RiskRule(
+        r"\brm\b(?=.*\b(?:rf|fr|r|recursive)\b)(?=.*\b(?:rf|fr|f|force)\b)",
+        RiskLevel.BLOCKED,
+        "recursive force delete",
+    ),
     RiskRule(r"\bmkfs\b|\bformat\b", RiskLevel.BLOCKED, "filesystem format"),
     RiskRule(r"\bdrop\s+(table|database)\b", RiskLevel.BLOCKED, "destructive SQL"),
     RiskRule(r"\bpush\b.*\bforce\b", RiskLevel.BLOCKED, "force push"),
@@ -42,7 +54,14 @@ DEFAULT_RULES: tuple[RiskRule, ...] = (
     RiskRule(r"write|edit|create|update|move|rename|chmod|chown", RiskLevel.REVIEW, "filesystem mutation"),
     RiskRule(r"shell|terminal|exec|subprocess|command|bash|powershell", RiskLevel.REVIEW, "arbitrary execution"),
     RiskRule(r"\bgit\b.*(commit|push|reset|rebase|merge)", RiskLevel.REVIEW, "git state change"),
-    RiskRule(r"http|request|fetch|curl|wget|post|put", RiskLevel.REVIEW, "network access"),
+    # Network tokens are word-bounded so benign payloads don't trip them:
+    # ``put`` must not match inside ``input``/``output``, nor ``post`` inside a
+    # filename. ``https?`` keeps both http and https.
+    RiskRule(
+        r"\bhttps?\b|\brequest\b|\bfetch\b|\bcurl\b|\bwget\b|\bpost\b|\bput\b",
+        RiskLevel.REVIEW,
+        "network access",
+    ),
     RiskRule(r"install|pip|npm|apt|uv\s+add", RiskLevel.REVIEW, "dependency change"),
 )
 
@@ -66,7 +85,8 @@ class RiskClassifier:
     def classify(self, call: ToolCallRequest) -> RiskLevel:
         """Return the risk level for a tool call.
 
-        Inspects both the tool name and its arguments; the first matching rule
+        Inspects the tool name and its argument *values* (not the dict keys —
+        parameter names are structural, not payload); the first matching rule
         (rules are ordered most-dangerous first) determines the verdict.
         Defaults to SAFE when nothing matches.
         """
@@ -83,12 +103,33 @@ class RiskClassifier:
         return RiskLevel.SAFE, "no risk pattern matched"
 
 
+def _iter_arg_values(value: Any) -> Iterator[str]:
+    """Yield the stringified *values* of an argument tree, ignoring dict keys.
+
+    Parameter names (dict keys) are structural — they come from a tool's
+    schema, not from the payload — so matching against them produces false
+    positives: a benign ``{"output": ...}`` key would read as a network ``put``
+    and ``{"format": ...}`` as a disk format. Only the values carry the command
+    text worth classifying, so only they go into the haystack.
+    """
+    if isinstance(value, dict):
+        for nested in value.values():
+            yield from _iter_arg_values(nested)
+    elif isinstance(value, (list, tuple, set)):
+        for item in value:
+            yield from _iter_arg_values(item)
+    else:
+        yield str(value)
+
+
 def _haystacks(call: ToolCallRequest) -> tuple[str, str]:
     """The raw text and a separator-normalised copy.
 
-    Matching both means punctuation-sensitive patterns (``rm -rf``, fork bombs)
-    still work on the raw form, while word-boundary patterns also catch
-    underscore/dot-separated tool names such as ``git_push`` or ``fs.delete``.
+    The text is the tool name plus the flattened argument *values* (never the
+    keys). Matching both forms means punctuation-sensitive patterns (``rm -rf``,
+    fork bombs) still work on the raw form, while word-boundary patterns also
+    catch underscore/dot-separated tool names such as ``git_push`` or
+    ``fs.delete``.
     """
-    raw = f"{call.tool_name} {call.arguments}"
+    raw = " ".join([call.tool_name, *_iter_arg_values(call.arguments)])
     return raw, _SEPARATORS.sub(" ", raw)

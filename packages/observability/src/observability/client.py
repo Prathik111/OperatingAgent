@@ -17,9 +17,10 @@ Design notes:
 from __future__ import annotations
 
 import logging
+import threading
 from typing import TYPE_CHECKING, Any
 
-from .masking import mask
+from .masking import mask, mask_otel_spans
 from .settings import LangfuseSettings
 
 if TYPE_CHECKING:  # avoid importing heavy SDK at type-check time
@@ -29,44 +30,61 @@ log = logging.getLogger(__name__)
 
 _client: "Langfuse | None" = None
 _initialised = False
+# Guards the one-time init so a concurrent caller can never observe
+# ``_initialised is True`` while ``_client`` is still unset (see init_tracing).
+_init_lock = threading.Lock()
 
 
 def init_tracing(settings: LangfuseSettings | None = None) -> "Langfuse | None":
     """Initialise (once) and return the Langfuse singleton, or None if disabled.
 
-    Idempotent: safe to call from multiple entry points. Import happens after
-    settings resolution so env vars are read before the SDK reads them.
+    Idempotent and thread-safe: safe to call from multiple entry points/threads.
+    ``_initialised`` is flipped to True only *after* ``_client`` reaches its
+    final value (a client, or None when disabled/failed), so a racing
+    ``get_client`` never returns a half-initialised ``None``. Import happens
+    after settings resolution so env vars are read before the SDK reads them.
     """
     global _client, _initialised
 
     if _initialised:
         return _client
 
-    settings = settings or LangfuseSettings.from_env()
-    _initialised = True
+    with _init_lock:
+        # Re-check under the lock: another thread may have finished init while
+        # we were blocked acquiring it.
+        if _initialised:
+            return _client
 
-    if not settings.enabled:
-        log.info("Langfuse tracing disabled: credentials not set (LANGFUSE_PUBLIC_KEY/SECRET_KEY).")
-        _client = None
-        return None
+        resolved = settings or LangfuseSettings.from_env()
 
-    try:
-        from langfuse import Langfuse
+        if not resolved.enabled:
+            log.info("Langfuse tracing disabled: credentials not set (LANGFUSE_PUBLIC_KEY/SECRET_KEY).")
+            _client = None
+            _initialised = True
+            return None
 
-        _client = Langfuse(
-            public_key=settings.public_key,
-            secret_key=settings.secret_key,
-            host=settings.host,
-            environment=settings.environment,
-            release=settings.release,
-            mask=mask,
-        )
-        log.info("Langfuse tracing enabled (env=%s, host=%s).", settings.environment, settings.host)
-    except Exception as exc:  # never let tracing setup break the app
-        log.warning("Langfuse initialisation failed; continuing without tracing: %s", exc)
-        _client = None
+        client: "Langfuse | None"
+        try:
+            from langfuse import Langfuse
 
-    return _client
+            client = Langfuse(
+                public_key=resolved.public_key,
+                secret_key=resolved.secret_key,
+                host=resolved.host,
+                environment=resolved.environment,
+                release=resolved.release,
+                mask=mask,
+                mask_otel_spans=mask_otel_spans,
+            )
+            log.info("Langfuse tracing enabled (env=%s, host=%s).", resolved.environment, resolved.host)
+        except Exception as exc:  # never let tracing setup break the app
+            log.warning("Langfuse initialisation failed; continuing without tracing: %s", exc)
+            client = None
+
+        # Publish the final client before marking initialisation complete.
+        _client = client
+        _initialised = True
+        return _client
 
 
 def get_client() -> "Langfuse | None":

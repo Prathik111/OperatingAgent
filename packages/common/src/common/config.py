@@ -12,7 +12,10 @@ from typing import Any
 class LLMConfig:
     provider: str
     model: str
-    api_key: str
+    # repr=False keeps the secret out of the generated __repr__ so it never
+    # lands in logs, tracebacks, or Langfuse metadata. Field access is
+    # unchanged; only the string representation is redacted.
+    api_key: str = field(repr=False)
 
     timeout_seconds: int = 60
     temperature: float = 0.0
@@ -93,7 +96,8 @@ class CheckpointConfig:
 
     backend: str = "postgres"
 
-    connection_string: str | None = None
+    # A DSN carries the DB password; keep it out of __repr__ (see LLMConfig).
+    connection_string: str | None = field(default=None, repr=False)
 
     namespace: str = "default"
 
