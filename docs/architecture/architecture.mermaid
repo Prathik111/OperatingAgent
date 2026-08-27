@@ -1,85 +1,173 @@
 flowchart TB
-    subgraph APPS["apps/"]
-        DESK["desktop\n(Tauri 2 shell)"]
-        FE["frontend\n(React 18, TS, Vite, Tailwind,\nshadcn/ui, Zustand, TanStack Query)"]
-    end
-    DESK --> FE
+    %% OperatingAgent - component architecture
+    %% This diagram is intentionally package-aware but keeps the view at an
+    %% architecture level: presentation, API, orchestration, tool access,
+    %% execution services, and infrastructure.
 
-    subgraph API_PKG["packages/api  (FastAPI)"]
-        ROUTES["REST routes +\nWebSocket stream"]
-        TASKSVC["TaskService"]
-        APPROVAL["ApprovalGateway"]
-        REPO["TaskRepository"]
-    end
-    FE -- "REST + WebSocket" --> ROUTES
-    ROUTES --> TASKSVC
-    TASKSVC --> APPROVAL
-    TASKSVC --> REPO
+    USER["User"]
 
-    subgraph AGENTS["Orchestration tracks (dual implementation)"]
-        NATIVE["packages/agent-native\nPlan-and-Execute + ReAct\n(hand-written)"]
-        LANG["packages/agent-langgraph\nStateGraph\n(framework)"]
+    subgraph PRESENTATION["Presentation Layer"]
+        DESKTOP["apps/desktop\nTauri desktop shell"]
+        FRONTEND["apps/frontend\nReact, TypeScript, Vite\nTask UI and live stream"]
     end
-    TASKSVC -- "IAgentOrchestrator" --> NATIVE
-    TASKSVC -- "IAgentOrchestrator" --> LANG
 
-    subgraph COMMON["packages/common  (shared contracts)"]
-        CONTRACTS["Task / Plan / ToolCall schemas\nIMCPClient interface\nRiskClassifier (deterministic)"]
+    subgraph API_LAYER["Application API Layer"]
+        API["packages/api\nFastAPI application\nREST commands and WebSocket events"]
+        TASK_SERVICE["TaskService\nCreates tasks, selects track,\nstreams lifecycle events"]
+        APPROVAL_GATEWAY["ApprovalGateway\nHuman approval for reviewed tools"]
+        TASK_REPOSITORY["TaskRepository\nPersists tasks, runs, events,\nmetrics, and evaluation results"]
     end
-    NATIVE --> CONTRACTS
-    LANG --> CONTRACTS
-    APPROVAL --> CONTRACTS
 
-    subgraph MCP["packages/mcp-servers  (fastmcp, MCP protocol)"]
-        FSRV["file-server"]
-        TSRV["terminal-server"]
-        GSRV["git-server"]
-        SSRV["search-server"]
-        KSRV["knowledge-server\n(Phase 2)"]
-        MSRV["memory-server\n(Phase 2)"]
+    subgraph CONTRACTS_LAYER["Shared Domain Contracts"]
+        COMMON["packages/common\nAgentTask, AgentRunResult\nToolCallRequest, ToolCallResult\nAgent events, config, enums"]
+        ORCH_PORT["IAgentOrchestrator\nCommon interface for both tracks"]
+        MCP_PORT["IMCPClient\nCommon interface for tool calls"]
+        RISK_CLASSIFIER["RiskClassifier\nDeterministic tool risk policy"]
     end
-    NATIVE -- "MCP client calls\n(manual)" --> MCP
-    LANG -- "MCP client calls\n(LangGraph adapter)" --> MCP
 
-    subgraph SANDBOX_PKG["packages/sandbox"]
-        SBX["SandboxManager\n(per-task Docker container,\nresource + time limits)"]
+    subgraph ORCHESTRATION["Agent Orchestration Layer"]
+        subgraph NATIVE_TRACK["packages/agent-native\nNative Plan-and-Execute plus ReAct"]
+            NATIVE_AGENT["NativeAgent\nHand-written orchestrator"]
+            NATIVE_PLANNER["Planner\nCreates ordered plan steps"]
+            REACT_EXECUTOR["ReactExecutor\nThought, action, observation loop"]
+            REFLECTOR["Reflector\nReplans after failures or denials"]
+            NATIVE_VERIFIER["Verifier\nChecks step outcome"]
+            CONTEXT_COMPACTOR["ContextCompactor\nSummarizes long histories"]
+            NATIVE_MCP_CLIENT["NativeMCPClient\nMCP client implementation"]
+        end
+
+        subgraph LANGGRAPH_TRACK["packages/agent-langgraph\nLangGraph orchestration"]
+            LANGGRAPH_AGENT["LangGraphAgent\nFramework-backed orchestrator"]
+            GRAPH_FACTORY["GraphFactory\nBuilds the state graph"]
+            COMPILED_GRAPH["CompiledStateGraph\nReusable graph runtime"]
+            GRAPH_NODES["Planner, Executor,\nVerifier, Responder,\nErrorHandler nodes"]
+            AGENT_RUNTIME["AgentRuntime\nRuntime dependencies for nodes"]
+            TOOL_REGISTRY["ToolRegistry\nNormalizes available tools"]
+            MCP_ADAPTER["MCPAdapter\nMCP client implementation"]
+            CHECKPOINTER["Checkpoint saver\nPostgres in prod\nMemory in dev"]
+        end
     end
-    TSRV --> SBX
-    FSRV --> SBX
 
-    subgraph OBS["packages/observability"]
-        OTEL["TracingService\n(OpenTelemetry GenAI spans)"]
+    subgraph TOOL_LAYER["Tool Access Layer"]
+        MCP_GATEWAY["packages/mcp-servers/gateway-server\nFastMCP gateway\nSingle tool entrypoint for agents\nMounts focused subservers"]
+
+        subgraph MCP_SERVERS["Mounted FastMCP Subservers"]
+            FILE_SERVER["file-server\nRead, write, list, move,\ncopy, delete, metadata, search"]
+            TERMINAL_SERVER["terminal-server\nRun command and list processes"]
+            GIT_SERVER["git-server\nStatus, diff, log, branches"]
+            SEARCH_SERVER["search-server\nIndex, list, search documents"]
+            KNOWLEDGE_SERVER["knowledge-server\nRAG retrieval\nPhase 2"]
+            MEMORY_SERVER["memory-server\nSemantic memory\nPhase 2"]
+        end
     end
-    NATIVE --> OTEL
-    LANG --> OTEL
-    TASKSVC --> OTEL
 
-    subgraph EVAL["packages/evaluation"]
-        BENCH["BenchmarkRunner\n(runs Appendix A task set\nagainst both tracks)"]
+    subgraph EXECUTION_SERVICES["Execution and Runtime Services"]
+        SANDBOX["packages/sandbox\nSandboxManager\nPer-task Docker execution boundary"]
+        MODEL_PROVIDER["Local LLM layer\nOllama or llama.cpp\nChat models and embeddings"]
+        OBSERVABILITY["packages/observability\nOpenTelemetry GenAI spans"]
+        EVALUATION["packages/evaluation\nBenchmarkRunner\nNative versus LangGraph comparison"]
     end
-    BENCH -- "IAgentOrchestrator" --> NATIVE
-    BENCH -- "IAgentOrchestrator" --> LANG
-    BENCH --> REPO
 
-    subgraph INFRA["infra/docker"]
-        PG[("PostgreSQL\nstate, plans, eval results")]
-        QD[("Qdrant\nmemory + RAG embeddings")]
-        LF["Langfuse\n(trace dashboard)"]
+    subgraph INFRA["Infrastructure and Data Stores"]
+        POSTGRES[("PostgreSQL\nTasks, runs, events,\ncheckpoints, metrics")]
+        QDRANT[("Qdrant\nMemory and RAG vectors")]
+        LANGFUSE["Langfuse\nTrace dashboard"]
     end
-    REPO --> PG
-    MSRV --> QD
-    KSRV --> QD
-    OTEL --> LF
 
-    subgraph LLM["Local LLM layer"]
-        OLLAMA["Ollama / llama.cpp\n(Llama 3.1 8B, Qwen2.5-Coder 7B,\nlocal embeddings)"]
-    end
-    NATIVE --> OLLAMA
-    LANG --> OLLAMA
+    %% Presentation to API
+    USER --> DESKTOP
+    DESKTOP --> FRONTEND
+    FRONTEND -->|REST and WebSocket| API
 
-    style APPS fill:#EEF2F8,stroke:#1F3864
-    style API_PKG fill:#EEF2F8,stroke:#1F3864
-    style AGENTS fill:#FDECC8,stroke:#8A6D3B
-    style COMMON fill:#E4F0E6,stroke:#2E6B3E
-    style MCP fill:#EEF2F8,stroke:#1F3864
-    style INFRA fill:#F3E8F5,stroke:#6B2E8A
+    %% API services
+    API --> TASK_SERVICE
+    TASK_SERVICE --> APPROVAL_GATEWAY
+    TASK_SERVICE --> TASK_REPOSITORY
+    APPROVAL_GATEWAY --> RISK_CLASSIFIER
+
+    %% Shared contracts
+    TASK_SERVICE --> ORCH_PORT
+    TASK_SERVICE --> COMMON
+    APPROVAL_GATEWAY --> COMMON
+    NATIVE_AGENT --> ORCH_PORT
+    LANGGRAPH_AGENT --> ORCH_PORT
+    NATIVE_MCP_CLIENT --> MCP_PORT
+    MCP_ADAPTER --> MCP_PORT
+
+    %% Track selection
+    TASK_SERVICE -->|native track| NATIVE_AGENT
+    TASK_SERVICE -->|langgraph track| LANGGRAPH_AGENT
+
+    %% Native agent internals
+    NATIVE_AGENT --> NATIVE_PLANNER
+    NATIVE_AGENT --> REACT_EXECUTOR
+    NATIVE_AGENT --> REFLECTOR
+    NATIVE_AGENT --> NATIVE_VERIFIER
+    NATIVE_AGENT --> CONTEXT_COMPACTOR
+    NATIVE_AGENT --> NATIVE_MCP_CLIENT
+    REACT_EXECUTOR --> RISK_CLASSIFIER
+    REACT_EXECUTOR --> NATIVE_MCP_CLIENT
+    NATIVE_VERIFIER --> TASK_REPOSITORY
+
+    %% LangGraph internals
+    LANGGRAPH_AGENT --> GRAPH_FACTORY
+    LANGGRAPH_AGENT --> COMPILED_GRAPH
+    LANGGRAPH_AGENT --> AGENT_RUNTIME
+    LANGGRAPH_AGENT --> CHECKPOINTER
+    GRAPH_FACTORY --> GRAPH_NODES
+    GRAPH_FACTORY --> COMPILED_GRAPH
+    COMPILED_GRAPH --> GRAPH_NODES
+    GRAPH_NODES --> AGENT_RUNTIME
+    AGENT_RUNTIME --> TOOL_REGISTRY
+    AGENT_RUNTIME --> MODEL_PROVIDER
+    AGENT_RUNTIME --> OBSERVABILITY
+    TOOL_REGISTRY --> MCP_ADAPTER
+    GRAPH_NODES --> RISK_CLASSIFIER
+
+    %% Tool access through FastMCP gateway
+    NATIVE_MCP_CLIENT -->|MCP transport| MCP_GATEWAY
+    MCP_ADAPTER -->|MCP transport| MCP_GATEWAY
+    MCP_GATEWAY -->|mount file| FILE_SERVER
+    MCP_GATEWAY -->|mount terminal| TERMINAL_SERVER
+    MCP_GATEWAY -->|mount git| GIT_SERVER
+    MCP_GATEWAY -->|mount search| SEARCH_SERVER
+    MCP_GATEWAY -.->|mount knowledge| KNOWLEDGE_SERVER
+    MCP_GATEWAY -.->|mount memory| MEMORY_SERVER
+
+    %% Execution boundaries
+    FILE_SERVER --> SANDBOX
+    TERMINAL_SERVER --> SANDBOX
+    GIT_SERVER --> SANDBOX
+    NATIVE_AGENT --> MODEL_PROVIDER
+
+    %% Persistence and observability
+    TASK_REPOSITORY --> POSTGRES
+    CHECKPOINTER --> POSTGRES
+    OBSERVABILITY --> LANGFUSE
+    NATIVE_AGENT --> OBSERVABILITY
+    LANGGRAPH_AGENT --> OBSERVABILITY
+    KNOWLEDGE_SERVER -.-> QDRANT
+    MEMORY_SERVER -.-> QDRANT
+
+    %% Evaluation harness
+    EVALUATION --> ORCH_PORT
+    EVALUATION --> NATIVE_AGENT
+    EVALUATION --> LANGGRAPH_AGENT
+    EVALUATION --> TASK_REPOSITORY
+
+    classDef presentation fill:#EEF2F8,stroke:#1F3864,color:#111827
+    classDef api fill:#EAF7F0,stroke:#236B46,color:#111827
+    classDef contracts fill:#FFF7E6,stroke:#8A6D3B,color:#111827
+    classDef orchestration fill:#FDECC8,stroke:#8A6D3B,color:#111827
+    classDef tools fill:#E8F1FF,stroke:#315F9A,color:#111827
+    classDef runtime fill:#F5F5F5,stroke:#666666,color:#111827
+    classDef infra fill:#F3E8F5,stroke:#6B2E8A,color:#111827
+
+    class DESKTOP,FRONTEND presentation
+    class API,TASK_SERVICE,APPROVAL_GATEWAY,TASK_REPOSITORY api
+    class COMMON,ORCH_PORT,MCP_PORT,RISK_CLASSIFIER contracts
+    class NATIVE_AGENT,NATIVE_PLANNER,REACT_EXECUTOR,REFLECTOR,NATIVE_VERIFIER,CONTEXT_COMPACTOR,NATIVE_MCP_CLIENT orchestration
+    class LANGGRAPH_AGENT,GRAPH_FACTORY,COMPILED_GRAPH,GRAPH_NODES,AGENT_RUNTIME,TOOL_REGISTRY,MCP_ADAPTER,CHECKPOINTER orchestration
+    class MCP_GATEWAY,FILE_SERVER,TERMINAL_SERVER,GIT_SERVER,SEARCH_SERVER,KNOWLEDGE_SERVER,MEMORY_SERVER tools
+    class SANDBOX,MODEL_PROVIDER,OBSERVABILITY,EVALUATION runtime
+    class POSTGRES,QDRANT,LANGFUSE infra

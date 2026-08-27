@@ -1,0 +1,562 @@
+erDiagram
+    ACTORS ||--o{ AGENT_THREADS : owns
+    ACTORS o|--o{ APPROVAL_REQUESTS : resolves
+    ACTORS o|--o{ MEMORY_ITEMS : owns
+
+    AGENT_THREADS ||--o{ AGENT_TASKS : groups
+    AGENT_THREADS o|--o{ MEMORY_ITEMS : scopes
+    AGENT_TASKS ||--o{ TASK_ATTACHMENTS : includes
+    AGENT_TASKS ||--o{ AGENT_RUNS : executes_as
+
+    %% ---------------------------------------------------------
+    %% Run execution spine
+    %% ---------------------------------------------------------
+    CONFIG_SNAPSHOTS ||--o{ AGENT_RUNS : configures
+    CONFIG_SNAPSHOTS ||--o{ EVALUATION_RUNS : configures
+
+    AGENT_RUNS ||--o{ RUN_PHASES : advances_through
+    AGENT_RUNS ||--o{ PLANS : replans_as
+    AGENT_RUNS ||--o{ TOOL_CALLS : performs
+    AGENT_RUNS ||--o{ LLM_CALLS : invokes
+    AGENT_RUNS ||--o{ AGENT_EVENTS : emits
+    AGENT_RUNS ||--o{ SANDBOX_SESSIONS : isolates_in
+    AGENT_RUNS ||--o{ TRACE_REFS : traced_by
+    AGENT_RUNS ||--o{ RUN_FINDINGS : accumulates
+    AGENT_RUNS ||--o{ VERIFICATION_RESULTS : records
+    AGENT_RUNS ||--o| EVALUATION_RESULTS : benchmarked_as
+
+    RUN_PHASES ||--o{ PLANS : planned_in
+    RUN_PHASES ||--o{ RUN_FINDINGS : recorded_during
+
+    PLANS ||--o{ PLAN_STEPS : contains
+    PLAN_STEPS ||--o{ TOOL_CALLS : attempts
+    PLAN_STEPS ||--o{ APPROVAL_REQUESTS : gated_by
+    PLAN_STEPS ||--o{ VERIFICATION_RESULTS : verified_by
+    PLAN_STEPS ||--o{ RUN_FINDINGS : yields
+    PLAN_STEPS ||--o{ LLM_CALLS : reasons_with
+
+    %% ---------------------------------------------------------
+    %% Tool access
+    %% ---------------------------------------------------------
+    MCP_SERVERS ||--o{ TOOLS : exposes
+    TOOLS ||--o{ PLAN_STEPS : planned_for
+    TOOLS ||--o{ TOOL_CALLS : invoked_as
+    RISK_POLICIES ||--o{ TOOL_CALLS : classified_by
+    SANDBOX_SESSIONS ||--o{ TOOL_CALLS : executes
+    TOOL_CALLS o|--o| APPROVAL_REQUESTS : authorized_by
+    TOOL_CALLS o|--o{ VERIFICATION_RESULTS : evidenced_by
+
+    %% ---------------------------------------------------------
+    %% Evaluation
+    %% ---------------------------------------------------------
+    EVALUATION_SUITES ||--o{ EVALUATION_CASES : contains
+    EVALUATION_SUITES ||--o{ EVALUATION_RUNS : launches
+    EVALUATION_RUNS ||--o{ EVALUATION_RESULTS : records
+    EVALUATION_CASES ||--o{ EVALUATION_RESULTS : measured_by
+    EVALUATION_RESULTS ||--o{ EVALUATION_SCORES : scored_by
+
+    %% ---------------------------------------------------------
+    %% Knowledge
+    %% ---------------------------------------------------------
+    KNOWLEDGE_SOURCES ||--o{ KNOWLEDGE_CHUNKS : split_into
+
+    %% ---------------------------------------------------------
+    %% Cross-boundary joins - no enforced FK
+    %% ---------------------------------------------------------
+    AGENT_THREADS ||..o{ LG_CHECKPOINTS : logical_thread_join
+    LG_CHECKPOINTS ||..o{ LG_CHECKPOINT_WRITES : pending_writes
+    LG_CHECKPOINTS ||..o{ LG_CHECKPOINT_BLOBS : channel_versions
+    MEMORY_ITEMS ||..|| QDRANT_MEMORY_VECTORS : mirrored_as
+    KNOWLEDGE_CHUNKS ||..|| QDRANT_KNOWLEDGE_VECTORS : mirrored_as
+
+    %% =========================================================
+    %% Postgres - identity and conversation
+    %% =========================================================
+
+    %% Added in this revision: approvals previously recorded a free-text
+    %% resolved_by, and threads had no owner, so there was no tenancy boundary
+    %% and no referential record of who authorized a risky action.
+    ACTORS {
+        uuid id PK
+        text kind "human | agent | system"
+        text external_id UK "idp subject, api key id, or service name"
+        text display_name
+        jsonb metadata
+        timestamptz created_at
+    }
+
+    %% id is text holding a canonical UUID string, not uuid: this is the exact
+    %% value handed to LangGraph as configurable.thread_id, and checkpoints.thread_id
+    %% is TEXT. Matching the type keeps the join cast-free.
+    AGENT_THREADS {
+        text id PK
+        text external_thread_id UK
+        uuid owner_actor_id FK "NOT NULL - every thread has an owner"
+        text title
+        text trace_session_id "Langfuse session id - one per thread, not per run"
+        jsonb metadata
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    %% track lives here and only here; AGENT_RUNS no longer copies it.
+    %% status is TaskStatus, not RunStatus - the previous draft annotated the
+    %% wrong enum on this column.
+    AGENT_TASKS {
+        uuid id PK
+        text thread_id FK
+        text goal
+        text track "native | langgraph"
+        text status "planning | executing | verifying | responding | completed | failed | skipped | interrupted"
+        jsonb metadata
+        timestamptz created_at
+        timestamptz updated_at
+    }
+
+    TASK_ATTACHMENTS {
+        uuid id PK
+        uuid task_id FK
+        text kind "file | url | image | snippet"
+        text uri
+        jsonb metadata
+        timestamptz created_at
+    }
+
+    %% =========================================================
+    %% Postgres - run execution
+    %% =========================================================
+
+    %% Content-addressed, so N runs sharing one AgentConfig store one row.
+    %% content_hash is a candidate key determining every config column, which is
+    %% what makes the table BCNF-clean. Shared with EVALUATION_RUNS.
+    CONFIG_SNAPSHOTS {
+        uuid id PK
+        text content_hash UK "sha256 over the canonical JSON of all sections"
+        jsonb llm_config
+        jsonb execution_config
+        jsonb sandbox_config
+        jsonb permissions_config
+        jsonb checkpoint_config
+        jsonb tracing_config
+        jsonb behaviour_config
+        jsonb prompts_config
+        timestamptz created_at
+    }
+
+    %% Dropped from the previous draft: track (task determines it),
+    %% langfuse_trace_id (TRACE_REFS owns it), and the five counter columns
+    %% steps_taken / llm_calls / tool_calls / total_tokens / cost, which are now
+    %% aggregates over PLAN_STEPS, TOOL_CALLS and LLM_CALLS exposed as v_run_metrics.
+    AGENT_RUNS {
+        uuid id PK
+        uuid task_id FK
+        integer attempt "UNIQUE with task_id - a retried task gets attempt 2"
+        uuid config_snapshot_id FK
+        text status "created | pending | running | completed | failed | interrupted"
+        text output "responder answer"
+        text last_error
+        integer retry_count
+        integer duration_ms "GENERATED from finished_at - started_at"
+        jsonb metadata
+        timestamptz started_at
+        timestamptz finished_at
+    }
+
+    %% Added in this revision: workflow_phase had no home, so a two-phase run
+    %% (investigate then remediate) was indistinguishable from a single-phase one.
+    RUN_PHASES {
+        uuid id PK
+        uuid run_id FK
+        integer sequence "UNIQUE with run_id - workflow-assigned order"
+        text phase "investigate | remediate | complete"
+        text entry_reason
+        timestamptz entered_at
+        timestamptz exited_at
+    }
+
+    %% Added in this revision. A run produces several plans - one per phase, plus
+    %% reflection replans - and AgentPlan.summary / reasoning / requires_remediation
+    %% had nowhere to live. Without this table the second plan's step_number 1
+    %% collides with the first plan's.
+    PLANS {
+        uuid id PK
+        uuid run_id FK
+        uuid phase_id FK
+        integer revision "UNIQUE with run_id"
+        text summary
+        text reasoning
+        boolean requires_remediation
+        timestamptz created_at
+    }
+
+    %% run_id is redundant against plan_id -> plans.run_id but is enforced by the
+    %% composite FK (run_id, plan_id) -> PLANS(run_id, id), so the two can never
+    %% disagree. It earns its place as the partition key for every per-run query.
+    %% Dropped: verified (derivable from VERIFICATION_RESULTS).
+    %% tool_name replaced by tool_id FK.
+    PLAN_STEPS {
+        uuid id PK
+        uuid plan_id FK
+        uuid run_id FK
+        integer step_number "UNIQUE with plan_id"
+        text description
+        uuid tool_id FK "null for a reasoning-only step"
+        jsonb arguments "planned arguments - TOOL_CALLS holds what was actually sent"
+        text status "RunStatus, matching PlanStep.status in graph state"
+        text output
+        timestamptz started_at
+        timestamptz finished_at
+    }
+
+    %% Added in this revision. Findings are the one piece of graph state the code
+    %% designs for durability - appended never replaced, so they survive the
+    %% replan that swaps out the plan - and the previous draft had no table.
+    RUN_FINDINGS {
+        uuid id PK
+        uuid run_id FK
+        uuid phase_id FK
+        uuid plan_step_id FK
+        text description "what was being investigated"
+        text detail "the step output that matters"
+        uuid source_tool_id FK
+        timestamptz created_at
+    }
+
+    %% Added in this revision: without it, llm_calls / total_tokens / cost on
+    %% AGENT_RUNS had no source of truth anywhere in the schema, which is why the
+    %% orchestrator hardcodes them to zero.
+    LLM_CALLS {
+        uuid id PK
+        uuid run_id FK
+        uuid plan_step_id FK
+        text node_name "planner | verifier | responder | error_handler"
+        text provider
+        text model
+        integer prompt_tokens
+        integer completion_tokens
+        integer total_tokens "GENERATED from prompt + completion"
+        numeric cost
+        integer duration_ms "GENERATED from finished_at - started_at"
+        text trace_observation_id
+        text error
+        timestamptz started_at
+        timestamptz finished_at
+    }
+
+    AGENT_EVENTS {
+        uuid id PK
+        uuid run_id FK
+        bigint sequence_number "UNIQUE with run_id"
+        text event_type "state | error | finished | planning_started | tool_started | tool_finished"
+        jsonb payload "shape varies by event_type - EER specialization mapped to a discriminator"
+        timestamptz created_at
+    }
+
+    %% session_id moved to AGENT_THREADS.trace_session_id: it is the thread id, so
+    %% storing it per run was a two-hop transitive dependency.
+    TRACE_REFS {
+        uuid id PK
+        uuid run_id FK
+        text provider "langfuse"
+        text trace_id "UNIQUE with provider"
+        jsonb metadata
+        timestamptz created_at
+    }
+
+    %% =========================================================
+    %% Postgres - tool access
+    %% =========================================================
+
+    MCP_SERVERS {
+        uuid id PK
+        text name UK "gateway | file-server | terminal-server | git-server | search-server | knowledge-server | memory-server"
+        text base_url
+        boolean enabled
+        timestamptz created_at
+    }
+
+    %% Added in this revision: tool_name was free text repeated across PLAN_STEPS
+    %% and TOOL_CALLS with no registry, so a typo was indistinguishable from a
+    %% real tool. Upserted on MCP discovery, never hand-maintained.
+    TOOLS {
+        uuid id PK
+        uuid server_id FK
+        text name "UNIQUE with server_id"
+        text description
+        jsonb input_schema
+        jsonb output_schema
+        text default_risk_level "safe | review | blocked - the advertised level, not a verdict"
+        timestamptz discovered_at
+        timestamptz last_seen_at
+    }
+
+    %% Added in this revision. Risk is a pure function of (tool, arguments,
+    %% ruleset), and the ruleset changes over time; naming the ruleset version is
+    %% what turns TOOL_CALLS.risk_level from a redundant derivation into a record
+    %% of a decision that was actually made.
+    RISK_POLICIES {
+        uuid id PK
+        text version UK
+        jsonb ruleset "ordered RiskRule list, most dangerous first"
+        timestamptz created_at
+    }
+
+    %% (run_id, plan_step_id) is a composite FK to PLAN_STEPS(run_id, id), so the
+    %% redundant run_id cannot disagree with the step's run. plan_step_id is
+    %% nullable because a ReAct-style call has no plan step.
+    %% Dropped: duration_ms is now generated. risk_level kept but anchored on
+    %% risk_policy_id and paired with the matched rule in risk_reason.
+    TOOL_CALLS {
+        uuid id PK
+        uuid run_id FK
+        uuid plan_step_id FK
+        uuid tool_id FK
+        uuid sandbox_session_id FK
+        integer attempt "retry number within the step"
+        jsonb arguments "what was actually sent"
+        uuid risk_policy_id FK
+        text risk_level "safe | review | blocked"
+        text risk_reason "the rule that matched"
+        boolean success
+        jsonb output
+        text error
+        integer duration_ms "GENERATED from finished_at - started_at"
+        text trace_span_id
+        timestamptz started_at
+        timestamptz finished_at
+    }
+
+    %% Dropped: memory_limit_mb, cpu_limit, time_limit_s - all determined by the
+    %% run's config snapshot, and run_id is not a superkey here.
+    SANDBOX_SESSIONS {
+        uuid id PK
+        uuid run_id FK
+        text container_id UK
+        text workspace_path
+        text status "creating | ready | destroyed | failed"
+        timestamptz created_at
+        timestamptz destroyed_at
+    }
+
+    %% Anchored on plan_step_id, not tool_call_id: the human gate fires before the
+    %% tool runs, so at insert time there is no tool call to point at - and if the
+    %% decision is a denial there never will be one. tool_call_id is backfilled
+    %% after an approved call executes.
+    %% Dropped: risk_level and requested_action, both determined by the step.
+    %% CHECK (authoritative): pending <-> resolved_at AND resolved_by_actor_id both
+    %% NULL; approved/denied/expired <-> both set. A partial unique index allows one
+    %% pending approval per step.
+    APPROVAL_REQUESTS {
+        uuid id PK
+        uuid run_id FK
+        uuid plan_step_id FK
+        uuid tool_call_id FK "backfilled after an approved call runs"
+        text status "pending | approved | denied | expired"
+        text reason "why approval was required"
+        uuid resolved_by_actor_id FK
+        text decision_note
+        timestamptz requested_at
+        timestamptz expires_at
+        timestamptz resolved_at
+    }
+
+    %% A step can be verified more than once: on a RETRY/ANOTHER_TOOL verdict the
+    %% verifier re-runs and re-checks the same step, so results are attempt-numbered
+    %% (like TOOL_CALLS) rather than one-per-step. UNIQUE(plan_step_id, attempt)
+    %% keeps the history append-only. A REPLAN instead produces a new plan_step.
+    VERIFICATION_RESULTS {
+        uuid id PK
+        uuid run_id FK
+        uuid plan_step_id FK
+        uuid tool_call_id FK "optional evidence pointer"
+        integer attempt "UNIQUE with plan_step_id - verification round within the step"
+        text result "verified | not_verified | skipped"
+        text reason
+        boolean deterministic "true when decided without an LLM round-trip"
+        jsonb evidence
+        timestamptz created_at
+    }
+
+    %% =========================================================
+    %% Postgres - evaluation
+    %% =========================================================
+
+    EVALUATION_SUITES {
+        uuid id PK
+        text name "UNIQUE with version"
+        text version
+        text description
+        jsonb metadata
+        timestamptz created_at
+    }
+
+    %% (id, suite_id) is UNIQUE so EVALUATION_RESULTS can composite-FK to it and
+    %% pin a result's case to the result's suite.
+    EVALUATION_CASES {
+        uuid id PK "UNIQUE with suite_id too - composite-FK target"
+        uuid suite_id FK
+        text case_key "UNIQUE with suite_id - stable slug"
+        text category
+        text goal
+        text expected_outcome
+        jsonb metadata
+        timestamptz created_at
+    }
+
+    %% (id, suite_id) is UNIQUE - the other composite-FK target for EVALUATION_RESULTS.
+    EVALUATION_RUNS {
+        uuid id PK "UNIQUE with suite_id too - composite-FK target"
+        uuid suite_id FK
+        text track "native | langgraph"
+        uuid config_snapshot_id FK
+        timestamptz started_at
+        timestamptz finished_at
+    }
+
+    %% Dropped: track (partial dependency on evaluation_run_id - the one 2NF
+    %% violation in the previous draft) and steps / latency_ms / tokens /
+    %% tool_calls / cost (all determined by agent_run_id, and the most dangerous
+    %% duplication in the design - two copies of the numbers a benchmark reports).
+    %% suite_id is carried (denormalized from both parents) so the two composite
+    %% FKs (evaluation_run_id, suite_id) -> EVALUATION_RUNS(id, suite_id) and
+    %% (case_id, suite_id) -> EVALUATION_CASES(id, suite_id) force the run and the
+    %% case into the same suite; a bare pair of single-column FKs would let
+    %% run(suite A) pair with case(suite B). agent_run_id stays UNIQUE (1 eval/run).
+    EVALUATION_RESULTS {
+        uuid id PK
+        uuid evaluation_run_id FK "UNIQUE with case_id, composite FK with suite_id"
+        uuid case_id FK "composite FK with suite_id"
+        uuid suite_id FK "shared by both composite FKs - pins run.suite = case.suite"
+        uuid agent_run_id FK,UK "the run that produced this result"
+        boolean success
+        text failure_reason
+        timestamptz created_at
+    }
+
+    %% Replaces EVALUATION_RESULTS.metrics jsonb, which was a repeating group of
+    %% name/value pairs - a 1NF violation on facts the suite exists to compare.
+    EVALUATION_SCORES {
+        uuid id PK
+        uuid result_id FK
+        text metric "UNIQUE with result_id"
+        numeric value
+        text unit
+        text comment
+        timestamptz created_at
+    }
+
+    %% =========================================================
+    %% Postgres - memory and knowledge (system of record)
+    %% =========================================================
+
+    %% scope is the discriminator the EER model would draw as a disjoint ("d")
+    %% specialization. Crow's-foot cannot express it: the two relationships above
+    %% (ACTORS o|--o{ MEMORY_ITEMS and AGENT_THREADS o|--o{ MEMORY_ITEMS) are each
+    %% individually optional, but the true rule is mutually exclusive and total per
+    %% scope, enforced by the memory_scope_binding CHECK in the DDL (authoritative):
+    %%   actor  -> owner_actor_id set, thread_id NULL
+    %%   thread -> thread_id set,      owner_actor_id NULL
+    %%   global -> both NULL
+    %% The previous draft's mandatory thread_id made every memory thread-local,
+    %% which defeats cross-thread recall.
+    MEMORY_ITEMS {
+        uuid id PK
+        text scope "actor | thread | global"
+        uuid owner_actor_id FK
+        text thread_id FK
+        text memory_type "preference | fact | summary | correction"
+        text content
+        numeric confidence
+        uuid superseded_by_id FK
+        jsonb metadata
+        timestamptz created_at
+        timestamptz last_accessed_at
+    }
+
+    KNOWLEDGE_SOURCES {
+        uuid id PK
+        text source_uri UK
+        text source_type "file | url | repo | doc"
+        text content_hash "indexed not unique - detects a changed source on re-index, source_uri is identity"
+        jsonb metadata
+        timestamptz indexed_at
+    }
+
+    KNOWLEDGE_CHUNKS {
+        uuid id PK
+        uuid source_id FK
+        integer chunk_index "UNIQUE with source_id"
+        text content
+        integer token_count
+        jsonb metadata
+        timestamptz indexed_at
+    }
+
+    %% =========================================================
+    %% Qdrant collections - vector mirror, NOT a system of record
+    %% =========================================================
+    %% point_id equals the Postgres id, which is the only thing linking the two
+    %% stores; no database enforces it. Postgres owns the text and metadata so a
+    %% failed vector write leaves a recoverable row rather than an orphan.
+
+    QDRANT_MEMORY_VECTORS {
+        uuid point_id PK "= MEMORY_ITEMS.id"
+        vector embedding
+        json payload "filterable subset only: scope, memory_type, actor, thread"
+    }
+
+    QDRANT_KNOWLEDGE_VECTORS {
+        uuid point_id PK "= KNOWLEDGE_CHUNKS.id"
+        vector embedding
+        json payload "filterable subset only: source_uri, source_type, chunk_index"
+    }
+
+    %% =========================================================
+    %% LangGraph PostgresSaver-owned tables - DO NOT MODIFY
+    %% =========================================================
+    %% Created and migrated by langgraph.checkpoint.postgres. Reproduced here
+    %% exactly as the library's MIGRATIONS list defines them, for reference only:
+    %% do not reshape, do not add foreign keys, do not hand-migrate. There are no
+    %% FKs between these three tables in the real schema.
+    %% Corrections from the previous draft: checkpoints has no created_at column;
+    %% checkpoint_writes was missing task_path; checkpoint_migrations was missing
+    %% entirely; blob is nullable on checkpoint_blobs; and the drawn
+    %% blobs -> writes relationship does not exist - checkpoints joins to blobs on
+    %% (thread_id, checkpoint_ns, channel, version) taken from the checkpoint's
+    %% channel_versions map.
+
+    LG_CHECKPOINT_MIGRATIONS {
+        integer v PK
+    }
+
+    LG_CHECKPOINTS {
+        text thread_id PK
+        text checkpoint_ns PK "defaults to empty string"
+        text checkpoint_id PK
+        text parent_checkpoint_id "self-reference, no FK"
+        text type
+        jsonb checkpoint
+        jsonb metadata
+    }
+
+    LG_CHECKPOINT_BLOBS {
+        text thread_id PK
+        text checkpoint_ns PK
+        text channel PK
+        text version PK
+        text type
+        bytea blob "nullable"
+    }
+
+    LG_CHECKPOINT_WRITES {
+        text thread_id PK
+        text checkpoint_ns PK
+        text checkpoint_id PK
+        text task_id PK
+        integer idx PK
+        text channel
+        text type
+        bytea blob
+        text task_path
+    }
+
