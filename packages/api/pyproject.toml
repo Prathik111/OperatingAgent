@@ -1,13 +1,23 @@
 [project]
 name = "api"
 version = "0.1.0"
-description = "Add your description here"
+description = "HTTP/WebSocket entry point for OperatingAgent — submit goals, stream events, resolve approvals"
 readme = "README.md"
 authors = [
-    { name = "amisharun412", email = "anisharunsamy12@gmail.com" }
+    { name = "anisharun412", email = "anisharunsamy12@gmail.com" }
 ]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "common",
+    "observability",
+    "agent-langgraph",
+    "fastapi>=0.141.1",
+    "uvicorn[standard]>=0.30",
+    "psycopg[binary,pool]>=3.2",
+    "sse-starlette>=2.0",
+    "httpx>=0.27",
+    "pydantic>=2",
+]
 
 [project.scripts]
 api = "api:main"
@@ -15,3 +25,8 @@ api = "api:main"
 [build-system]
 requires = ["uv_build>=0.11.2,<0.12.0"]
 build-backend = "uv_build"
+
+[tool.uv.sources]
+common = { workspace = true }
+observability = { workspace = true }
+agent-langgraph = { workspace = true }
