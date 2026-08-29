@@ -431,9 +431,7 @@ def _user_content(msg: Message) -> "str | list":
                 image_url["detail"] = m.detail
             content.append({"type": "image_url", "image_url": image_url})
         else:
-            content.append(
-                {"type": "text", "text": f"[attached {m.mime_type} document]"}
-            )
+            raise ValueError(f"Unsupported document attachment MIME type: {m.mime_type}")
     return content
 
 

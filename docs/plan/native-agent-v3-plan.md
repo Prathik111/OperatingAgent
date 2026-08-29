@@ -19,7 +19,7 @@ Same conventions as the v1 plan. Each step says what changes, which files and sy
 it worked, and its size (S = a few hours, M = a day or two, L = several days). Steps are grouped
 into five stages and ordered so nothing needs anything from a later step.
 
-### One caveat on sourcing, inherited honestly
+## One caveat on sourcing, inherited honestly
 
 The frontier comparisons below are a strong prior, not a fresh citation. The 2026 feature set of the
 leading harness (subagents, hooks, skills, checkpoint/rewind, plan mode, background tasks) was

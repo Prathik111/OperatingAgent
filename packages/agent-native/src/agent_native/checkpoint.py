@@ -105,8 +105,11 @@ def _mirror(src: str, dst: str) -> None:
         rel_dir = "" if rel_dir == "." else rel_dir
         for name in filenames:
             rel = os.path.join(rel_dir, name) if rel_dir else name
+            full = os.path.join(dst, rel)
+            if os.path.islink(full):
+                continue
             if rel not in src_files:
-                os.remove(os.path.join(dst, rel))
+                os.remove(full)
 
     # 3. any directory the target has that the snapshot doesn't - deepest first, so
     #    a parent is only removed after its (now-empty) children.
@@ -208,8 +211,17 @@ class CheckpointStore:
         fresh process (the in-memory dict is gone with the process that made it).
         """
         payload = [asdict(cp) for cp in self._checkpoints.values()]
-        with open(self._index_path, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, indent=2)
+        directory = os.path.dirname(self._index_path)
+        fd, temp_path = tempfile.mkstemp(prefix=".index-", dir=directory)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(payload, handle, indent=2)
+                handle.flush(); os.fsync(handle.fileno())
+            os.replace(temp_path, self._index_path)
+        except Exception:
+            try: os.unlink(temp_path)
+            except FileNotFoundError: pass
+            raise
 
     @classmethod
     def load(cls, base_dir: str) -> "CheckpointStore":

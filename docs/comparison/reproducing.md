@@ -36,15 +36,14 @@ uv sync --package evaluation --extra native
 ```
 
 The `evaluation` command is a console script (`evaluation.cli:main`). Run it through uv with
-`uv run --package evaluation evaluation ...`, or activate the venv and call `evaluation`
-directly. The commands below use the bare `evaluation` form for brevity.
+`uv run --package evaluation evaluation ...`.
 
 ## 2. See the suite without running anything
 
 This needs no model and no key — a good check that the install worked:
 
 ```bash
-evaluation list
+uv run --package evaluation evaluation list
 ```
 
 It prints the sixteen tasks and their categories (suite version `1.0`).
@@ -71,16 +70,16 @@ ollama pull qwen3.5:4b-q4_K_M       # the native track's default ollama model
 
 ```bash
 # Whole suite, Groq:
-evaluation run --track native
+uv run --package evaluation evaluation run --track native
 
 # ...or against a local model:
-evaluation run --track native --provider ollama
+uv run --package evaluation evaluation run --track native --provider ollama
 
 # A quick smoke run of two tasks:
-evaluation run --track native --tasks read_config_port,count_data_lines
+uv run --package evaluation evaluation run --track native --tasks read_config_port,count_data_lines
 
 # Tag the run with a git sha so a later compare can identify it:
-evaluation run --track native --label "$(git rev-parse --short HEAD)"
+uv run --package evaluation evaluation run --track native --label "$(git rev-parse --short HEAD)"
 ```
 
 Each run writes a JSON record to `docs/comparison/results/`, keyed by the run id printed at the
@@ -91,10 +90,10 @@ in a container instead.
 
 ```bash
 # Newest run of every track found in results/:
-evaluation compare
+uv run --package evaluation evaluation compare
 
 # ...or fix the tracks and order explicitly:
-evaluation compare --tracks native,langgraph --out docs/comparison/comparison.md
+uv run --package evaluation evaluation compare --tracks native,langgraph --out docs/comparison/comparison.md
 ```
 
 The report gives a headline (pass rate, deterministic-only pass rate, cost, tokens, turns,
@@ -109,7 +108,7 @@ A number you can't reproduce isn't evidence. The reproducibility harness runs th
 times and checks the pass set is stable:
 
 ```bash
-evaluation repro --track native --runs 3
+uv run --package evaluation evaluation repro --track native --runs 3
 ```
 
 It writes `docs/comparison/reproducibility.md`. An unstable pass set must be fixed before any
@@ -122,7 +121,7 @@ Alongside the JSON records, a run can be written to the evaluation tables
 
 ```bash
 uv sync --package evaluation --extra native --extra postgres
-evaluation run --track native --postgres "postgresql://user:pass@host/db"
+uv run --package evaluation evaluation run --track native --postgres "postgresql://user:pass@host/db"
 ```
 
 The tables are created on first use. Both the JSON record and the row are keyed by the same run

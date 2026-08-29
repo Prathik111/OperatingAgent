@@ -60,6 +60,7 @@ class EventBus:
     def __init__(self, database: "Database", redactor: "Redactor | None" = None) -> None:
         self._db = database
         self._subscribers: dict = {}  # session_id -> list[asyncio.Queue]
+        self._locks: dict[str, asyncio.Lock] = {}
         # Every event's data passes through here before it is stored or streamed,
         # so a secret in a tool's output or an error can't reach an event row, a
         # replayed stream, or a log that prints from it. None means no redaction -
@@ -74,27 +75,26 @@ class EventBus:
         run_id: str = "",
     ) -> Event:
         """Build the next event for a session, store it, and fan it out. The common path."""
-        sequence = await self._db.next_sequence(session_id)
-        clean = data or {}
-        if self._redactor is not None:
-            # Redact once, here, at the single point every event is born: cheaper
-            # than trusting each call site, and it can't be forgotten at a new one.
-            clean = self._redactor.redact(clean)
-        event = Event(
-            sequence=sequence,
-            type=type,
-            session_id=session_id,
-            run_id=run_id,
-            data=clean,
-        )
-        await self.publish(event)
-        return event
+        lock = self._locks.setdefault(session_id, asyncio.Lock())
+        async with lock:
+            sequence = await self._db.next_sequence(session_id)
+            clean = data or {}
+            if self._redactor is not None:
+                clean = self._redactor.redact(clean)
+            event = Event(sequence, type, session_id, run_id, clean)
+            await self.publish(event)
+            return event
 
     async def publish(self, event: Event) -> None:
         """Store an already-numbered event and push it to any live listeners."""
-        await self._db.save_event(event)
-        for queue in self._subscribers.get(event.session_id, []):
-            queue.put_nowait(event)
+        lock = self._locks.setdefault(event.session_id, asyncio.Lock())
+        if lock.locked():
+            await self._db.save_event(event)
+            for queue in self._subscribers.get(event.session_id, []): queue.put_nowait(event)
+            return
+        async with lock:
+            await self._db.save_event(event)
+            for queue in self._subscribers.get(event.session_id, []): queue.put_nowait(event)
 
     async def subscribe(self, session_id: str, from_sequence: int = 0):
         """Yield events for a session: first the stored ones after `from_sequence`,

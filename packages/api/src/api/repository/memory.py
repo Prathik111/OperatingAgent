@@ -73,7 +73,7 @@ class InMemoryTaskRepository:
         self._runs[run_id].llm_calls.append(record)
 
     async def save_tool_call(self, run_id: str, record: ToolCallRecord) -> None:
-        await self.upsert_tool(
+        tool_id = await self.upsert_tool(
             record.server_name,
             record.base_url,
             {
@@ -82,7 +82,8 @@ class InMemoryTaskRepository:
                 "input_schema": record.input_schema,
             },
         )
-        self._runs[run_id].tool_calls.append(record)
+        from dataclasses import replace
+        self._runs[run_id].tool_calls.append(replace(record, tool_id=tool_id))
 
     async def upsert_tool(
         self, server_name: str, base_url: str | None, tool_spec: dict

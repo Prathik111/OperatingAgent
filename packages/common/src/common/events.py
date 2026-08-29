@@ -12,10 +12,12 @@ class AgentEvent:
 
 
 def _payload(data: dict[str, Any]) -> dict[str, Any]:
-    return {
-        key: value.isoformat() if isinstance(value, datetime) else value
-        for key, value in data.items()
-    }
+    def convert(value: Any) -> Any:
+        if isinstance(value, datetime): return value.isoformat()
+        if isinstance(value, dict): return {k: convert(v) for k, v in value.items()}
+        if isinstance(value, list): return [convert(v) for v in value]
+        return value
+    return {key: convert(value) for key, value in data.items()}
 
 
 def _record_values(payload: dict[str, Any]) -> dict[str, Any]:
@@ -49,6 +51,7 @@ class LLMCallRecord:
 @dataclass(slots=True)
 class ToolCallRecord:
     tool_name: str
+    tool_id: str | None = None
     server_name: str = "gateway"
     base_url: str | None = None
     description: str | None = None

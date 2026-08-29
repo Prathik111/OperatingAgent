@@ -583,8 +583,8 @@ class ModelProvider(Protocol):
 
 One registry file resolves `groq/llama-3.3-70b-versatile` to a `ModelRef` carrying its context
 window and price. This single addition fixes three separate problems at once: the three
-disagreeing default model names across `config.py:27`, `llm/__init__.py:72` and README decision
-#7; `AgentRunResult.cost` defaulting to `0.0` with nothing ever assigning it; and a context
+disagreeing default model names across `config.py:27`, `llm/__init__.py:72` and README decision #7;
+`AgentRunResult.cost` defaulting to `0.0` with nothing ever assigning it; and a context
 budget that defaults to 20,000 tokens (`config.py:32`) with no relationship to the actual context
 window of the model in use — it is configurable, but only by hand, and nothing checks it against
 the model.

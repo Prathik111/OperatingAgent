@@ -25,7 +25,7 @@ separator in the run id, because a helper never reaches the service.
 
 Offline by construction: a scripted stand-in model, no network, no key. Run under
 pytest, or straight on a box without it:
-    PYTHONPATH=packages/agent-native/src python3 packages/agent-native/tests/test_hooks.py
+    PYTHONPATH=packages/agent-native/src:packages/agent-native python3 packages/agent-native/tests/test_hooks.py
 """
 
 from __future__ import annotations

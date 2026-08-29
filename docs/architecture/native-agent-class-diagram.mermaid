@@ -730,7 +730,7 @@ classDiagram
 
     %% NOTE COMPOSITION IS INVERTED vs the target diagram: there
     %%      AgentRuntime *-- AgentService, here AgentService holds a runtime.
-    %% NOTE PostgresDatabase does NOT exist. MemoryDatabase is the only store.
+    %% NOTE MemoryDatabase and PostgresDatabase are shipped stores.
     %% NOTE EventType is a plain class of strings, not an Enum, so values
     %%      survive storage unchanged.
     %% NOTE subscribe registers its queue BEFORE replaying stored events and
@@ -765,38 +765,37 @@ classDiagram
     Monitoring o-- Trace
     Monitoring ..> AgentLoop : spans opened per run, turn and tool
 
-    %% NOTE in-memory only. No OpenTelemetry exporter is wired, so shutdown()
-    %%      is a no-op. AgentRuntime constructs it with enabled=False by default.
+    %% NOTE OTLP export is wired when configured; local JSON remains available.
 
     %% =========================================================
     %% 10. GAPS vs native-agent-v2-classes.mermaid (the TARGET native design)
     %% Declared in the target, absent from the code.
     %% =========================================================
     class MCPTool {
-        <<absent>>
+        <<present>>
     }
     class MCPClient {
-        <<absent>>
+        <<present>>
     }
     class PlanTool {
-        <<absent>>
+        <<present>>
     }
     class SubtaskTool {
-        <<absent>>
+        <<present>>
     }
     class VerifyTool {
         <<absent>>
     }
     class PostgresDatabase {
-        <<absent>>
+        <<present>>
     }
 
-    Tool <|.. MCPTool : planned
-    Tool <|.. PlanTool : planned
-    Tool <|.. SubtaskTool : planned
+    Tool <|.. MCPTool
+    Tool <|.. PlanTool
+    Tool <|.. SubtaskTool
     Tool <|.. VerifyTool : planned
-    MCPTool ..> MCPClient : planned
-    Database <|.. PostgresDatabase : planned
+    MCPTool ..> MCPClient
+    Database <|.. PostgresDatabase
     SubtaskTool ..> Subagent : planned
     SubtaskTool ..> AgentLoop : planned recursive run
 

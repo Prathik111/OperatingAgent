@@ -42,7 +42,7 @@ fi
 
 # Default the working folder to ./scratch so a first run can't touch the source.
 case " $* " in
-    *" --dir "*) ;;
+    *" --dir "*|*" --dir="*) ;;
     *) mkdir -p "$root/scratch"; set -- "$@" --dir "$root/scratch" ;;
 esac
 

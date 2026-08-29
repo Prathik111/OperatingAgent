@@ -277,7 +277,7 @@ class AgentService:
         if session is None:
             raise KeyError(f"No such session: {session_id!r}")
 
-        events = await self.runtime.database.load_events(session_id, 0)
+        events = [e for e in await self.runtime.database.load_events(session_id, 0) if not is_helper_run(e.run_id)]
         if events and events[-1].type == EventType.RUN_FINISHED:
             # Already finished - rebuild the receipt and don't touch the model.
             return _run_result_from_event(events[-1])

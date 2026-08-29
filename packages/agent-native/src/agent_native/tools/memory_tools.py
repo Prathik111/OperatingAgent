@@ -46,7 +46,7 @@ class RememberTool(Tool):
                     },
                     "kind": {
                         "type": "string",
-                        "enum": list(VALID_KINDS),
+                        "enum": sorted(VALID_KINDS),
                         "description": (
                             "preference (how the user likes things done), fact "
                             "(something true about the project), or correction "

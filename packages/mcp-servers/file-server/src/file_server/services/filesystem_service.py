@@ -113,6 +113,7 @@ class FileSystemService:
         if old_string == new_string:
             raise ValueError("old_string and new_string are identical")
 
+        bytes_before = resolved.stat().st_size
         content = resolved.read_text(encoding=encoding)
         matches = content.count(old_string)
         if matches == 0:
@@ -125,6 +126,7 @@ class FileSystemService:
         replacements = matches if replace_all else 1
         updated = content.replace(old_string, new_string, -1 if replace_all else 1)
         resolved.write_text(updated, encoding=encoding)
+        bytes_after = resolved.stat().st_size
         if context is not None:
             context.logger.info(
                 "file_edited", path=str(resolved), replacements=replacements
@@ -132,8 +134,8 @@ class FileSystemService:
         return {
             "path": str(resolved),
             "replacements": replacements,
-            "bytes_before": len(content.encode(encoding)),
-            "bytes_after": len(updated.encode(encoding)),
+            "bytes_before": bytes_before,
+            "bytes_after": bytes_after,
             "encoding": encoding,
         }
 

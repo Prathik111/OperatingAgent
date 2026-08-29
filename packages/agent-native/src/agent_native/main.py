@@ -244,6 +244,7 @@ async def _run(args: argparse.Namespace) -> int:
                 file=sys.stderr,
                 flush=True,
             )
+            await runtime.sandbox.close()
             await runtime.database.close()
             return 1
     else:
@@ -257,6 +258,10 @@ async def _run(args: argparse.Namespace) -> int:
         tools = await mcp.connect(root=str(workdir))
     except RuntimeError as exc:
         print(f"[error] {exc}", file=sys.stderr, flush=True)
+        await mcp.close()
+        if runtime.sandbox is not None:
+            await runtime.sandbox.close()
+        await runtime.database.close()
         return 1
     for tool in tools:
         runtime.tools.register(tool)
