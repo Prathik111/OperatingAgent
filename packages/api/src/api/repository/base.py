@@ -15,7 +15,7 @@ from typing import Protocol, runtime_checkable
 from common.agent import AgentRunResult, AgentTask
 from common.config import AgentConfig
 from common.enums import RunStatus, TaskStatus
-from common.events import AgentEvent
+from common.events import AgentEvent, LLMCallRecord, ToolCallRecord
 
 
 @runtime_checkable
@@ -40,6 +40,20 @@ class TaskRepository(Protocol):
         self, run_id: str, event: AgentEvent, sequence_number: int
     ) -> None:
         """Append one ordered event to a run."""
+        ...
+
+    async def save_llm_call(self, run_id: str, record: LLMCallRecord) -> None:
+        """Persist one model invocation for run metrics and reconciliation."""
+        ...
+
+    async def save_tool_call(self, run_id: str, record: ToolCallRecord) -> None:
+        """Persist one resolved tool invocation."""
+        ...
+
+    async def upsert_tool(
+        self, server_name: str, base_url: str | None, tool_spec: dict
+    ) -> str:
+        """Register a discovered tool and return its canonical id."""
         ...
 
     async def finalize_run(self, run_id: str, result: AgentRunResult) -> None:

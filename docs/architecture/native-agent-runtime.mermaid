@@ -1,0 +1,151 @@
+%% agent-native - RUNTIME architecture (target state)
+%%
+%% Deployment / process view: what processes exist, who owns whose lifetime,
+%% and what crosses which trust boundary. The logical design lives in
+%% native-agent-v2.md - the boxes inside "Agent Core" are its components.
+%%
+%% Confirmed delivery shape:
+%%   - the normal agent ships inside a Tauri + Rust desktop app
+%%   - the core runs as a Tauri SIDECAR: Rust spawns it, Rust kills it
+%%   - desktop talks to the core over LOOPBACK HTTP: POST commands, SSE events,
+%%     resumed by event seq via Last-Event-ID
+%%   - CLI, test harness and benchmark runner import the core IN-PROCESS
+%%   - every agent track must use the SAME transport, or IPC latency gets
+%%     misattributed to the orchestration being measured
+%%
+%% Reading the diagram:
+%%   solid edge      = wired or required for v1
+%%   dotted edge     = designed, not built yet
+%%   "(planned)"     = component does not exist yet
+%%   RED subgraph    = runs with the user's full privileges, no isolation
+%%   GREEN subgraph  = isolated execution
+%%
+%% MCP is deliberately unchanged: the stdio JSON-RPC protocol and
+%% packages/mcp-servers keep their current contract. What is new is that
+%% something now OWNS their lifetime.
+
+flowchart TB
+
+    %% ========================= DESKTOP APP =========================
+    subgraph DESKTOP["Desktop App - Tauri, separate process"]
+        UI["Webview Frontend\nChat, diffs, permission prompts"]
+        RUST["Rust Host\nStarts the agent, holds the auth token,\nkills the whole tree on quit"]
+    end
+
+    %% ====================== IN-PROCESS CLIENTS =====================
+    subgraph LOCAL["Developer and Thesis Clients - import the core directly"]
+        CLI["CLI\nOne goal in, event lines out"]
+        HARNESS["Test Harness\nMeasures tool-calling reliability"]
+        BENCH["Benchmark Runner (planned)\nSame code path for every track"]
+    end
+
+    %% ======================= THE AGENT CORE ========================
+    subgraph HOST["Agent Core Process - sidecar binary, one event loop"]
+        HTTPAPI["HTTP Surface - packages/api\n127.0.0.1 only, OS-assigned port,\nbearer token required"]
+        BOOT["Agent Runtime\nValidates config, wires everything,\nowns the shutdown ladder"]
+
+        subgraph CORE["Agent Core"]
+            SESSION["Session Manager\nCreate / prompt / cancel /\npermissions / resume"]
+            AGENT["Agent Loop\nThinks, calls tools, observes, continues"]
+            TOOLS["Tool Dispatcher\nChecks permission, then runs the tool"]
+            EVENTS["Event Bus\nNumbered, replayable, streamed"]
+        end
+
+        subgraph SERVICES["Resource Owners - one owner per OS resource"]
+            MCPHOST["Tool Host Supervisor\nStarts, monitors and closes MCP tools"]
+            SANDBOXMGR["Sandbox Manager\nLabelled containers, reaps orphans"]
+            DBMGR["Store\nConnection pool and migrations"]
+            TRACE["Monitoring\nOne trace per run, flushed before exit"]
+        end
+    end
+
+    %% ===================== TOOLS WITH NO SANDBOX ===================
+    subgraph NORMAL["Normal Tools - child processes with FULL user permissions"]
+        FILE["File Tool\nOnly tool that enforces a path root"]
+        TERMINAL["Terminal Tool\nUnrestricted shell"]
+        GIT["Git Tool\nGit operations on real repos"]
+        SEARCH["Search Tool\nIn-memory document index"]
+    end
+
+    %% ========================= THE SANDBOX =========================
+    subgraph SANDBOX_AREA["Sandbox - isolated, network denied by default"]
+        CONTAINER["Sandbox Container\nRuns risky or unrestricted tools"]
+        WORKSPACE["Sandbox Workspace\nThe only folder it can reach"]
+    end
+
+    %% ====================== THE USER'S DISK ========================
+    subgraph COMPUTER["User's Computer"]
+        WORKSPACE_HOST["Agent Workspace\nOne folder per session"]
+        OTHER_FILES["Everything Else\nUser's files and system"]
+    end
+
+    %% ======================= OFF THE MACHINE =======================
+    subgraph EXTERNAL["External Services"]
+        DB[("PostgreSQL\nSessions, messages, events, runs, grants")]
+        MODEL["AI Model\nGroq over HTTPS or Ollama on localhost"]
+        OBSERVE[("Observability\nLangfuse / OTLP - debugging only,\nnever the source of thesis metrics")]
+    end
+
+    %% ==================== DESKTOP TO CORE PATH =====================
+    UI -->|"Tauri invoke"| RUST
+    RUST -->|"Spawn sidecar, read chosen port from stdout"| BOOT
+    RUST -->|"POST prompt / cancel / permission verdict"| HTTPAPI
+    HTTPAPI -->|"SSE stream, resumed by Last-Event-ID"| UI
+    HTTPAPI --> SESSION
+
+    %% =================== IN-PROCESS CLIENT PATH ====================
+    CLI --> SESSION
+    HARNESS --> SESSION
+    BENCH -. "planned, same interface" .-> SESSION
+    EVENTS -->|"Live events and replay"| LOCAL
+    EVENTS -->|"Numbered events"| HTTPAPI
+
+    %% ===================== RUNTIME OWNERSHIP =======================
+    BOOT --> SESSION
+    BOOT --> MCPHOST
+    BOOT --> SANDBOXMGR
+    BOOT --> DBMGR
+    BOOT --> TRACE
+
+    %% ========================= CORE FLOW ===========================
+    SESSION --> AGENT
+    AGENT --> TOOLS
+    AGENT -->|"Prompt and tool output leave the machine"| MODEL
+    AGENT --> EVENTS
+    TOOLS --> EVENTS
+    EVENTS -->|"Append-only save"| DBMGR
+    AGENT -->|"Transcript and run record"| DBMGR
+    DBMGR --> DB
+    AGENT --> TRACE
+    TOOLS --> TRACE
+    TRACE -. "Batched spans" .-> OBSERVE
+
+    %% ======================= TOOL EXECUTION ========================
+    TOOLS -->|"Scoped tools"| MCPHOST
+    TOOLS -. "Risky or unrestricted tools" .-> SANDBOXMGR
+    MCPHOST -->|"Spawn and monitor"| FILE
+    MCPHOST -->|"Spawn and monitor"| TERMINAL
+    MCPHOST -->|"Spawn and monitor"| GIT
+    MCPHOST -->|"Spawn and monitor"| SEARCH
+    SANDBOXMGR -. "Create, start, exec, destroy" .-> CONTAINER
+
+    %% ==================== WHAT TOUCHES THE DISK ====================
+    FILE -->|"Read and write under its root"| OTHER_FILES
+    TERMINAL -->|"NO CONTAINMENT: full user privileges"| OTHER_FILES
+    GIT -->|"Read and write"| OTHER_FILES
+    CONTAINER --> WORKSPACE
+    WORKSPACE -->|"Mounted: container writes land on the host"| WORKSPACE_HOST
+
+    %% ========================== STYLING ============================
+    style DESKTOP fill:#E8EEF9,stroke:#1F3864
+    style LOCAL fill:#EEF2F8,stroke:#1F3864
+    style HOST fill:#FFFDF5,stroke:#8A6D3B
+    style CORE fill:#FDECC8,stroke:#8A6D3B
+    style SERVICES fill:#FDF3E0,stroke:#8A6D3B
+    style NORMAL fill:#FCE4E4,stroke:#A33A3A
+    style SANDBOX_AREA fill:#E4F0E6,stroke:#2E6B3E
+    style COMPUTER fill:#F2F2F2,stroke:#666666
+    style EXTERNAL fill:#F3E8F5,stroke:#6B2E8A
+    style BOOT fill:#FFFFFF,stroke:#8A6D3B,stroke-width:2px
+    style HTTPAPI fill:#FFFFFF,stroke:#1F3864,stroke-width:2px
+    style TERMINAL fill:#F7C6C6,stroke:#A33A3A,stroke-width:2px

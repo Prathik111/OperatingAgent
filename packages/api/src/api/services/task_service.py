@@ -17,7 +17,7 @@ from uuid import uuid4
 
 from common.agent import AgentRunResult, AgentTask
 from common.enums import AgentTrack, RunStatus, TaskStatus
-from common.events import AgentEvent
+from common.events import AgentEvent, LLMCallRecord, ToolCallRecord
 from common.interfaces import IAgentOrchestrator
 
 from packages.api.src.api.repository.base import TaskRepository
@@ -114,6 +114,14 @@ class TaskService:
         async def on_event(event: AgentEvent) -> None:
             # Persist first (ordered, durable), then fan out to subscribers.
             await self._repo.append_event(run_id, event, next(sequence))
+            if event.type == "llm_call":
+                await self._repo.save_llm_call(
+                    run_id, LLMCallRecord.from_payload(event.payload)
+                )
+            elif event.type == "tool_call":
+                await self._repo.save_tool_call(
+                    run_id, ToolCallRecord.from_payload(event.payload)
+                )
             await self._broker.publish(task.id, event)
 
         try:

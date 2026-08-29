@@ -1,0 +1,112 @@
+%% agent-native - ONE MESSAGE, START TO FINISH.
+%%
+%% Same names as native-agent-v2-classes.mermaid. This is the target design,
+%% not what the code does today. Companion diagrams:
+%%   native-agent-v2-classes.mermaid  - the parts and how they connect
+%%   native-agent-v2-flow.mermaid     - the decisions the loop makes
+%%   native-agent-runtime.mermaid     - processes and machines
+%%
+%% Three things worth noticing:
+%%   1. Everything the user sees arrives as a NUMBERED event. A client that
+%%      drops off can reconnect and ask for "everything after 412".
+%%   2. The permission prompt is raised by ToolManager AFTER the tool call has
+%%      been parsed, so it shows the real tool name and the real arguments -
+%%      not a planner's guess made before the call existed.
+%%   3. A refusal, a bad argument or a crashed tool all come back as an
+%%      ordinary ToolResult the model reads on its next turn. Nothing throws
+%%      the run away.
+%%
+%% MCP is unchanged: "Tool" here is the wrapper, the protocol underneath keeps
+%% its current contract.
+
+sequenceDiagram
+    autonumber
+    participant APP as App - desktop or CLI
+    participant SVC as AgentService
+    participant BUS as EventBus
+    participant DB as Database
+    participant LOOP as AgentLoop
+    participant CTX as ContextManager
+    participant AI as AIModel
+    participant TM as ToolManager
+    participant PM as PermissionManager
+    participant TOOL as Tool
+
+    APP->>SVC: send_message(session, text)
+    SVC->>DB: save_message(the user text)
+    SVC->>BUS: publish(message added)
+    BUS->>DB: save_event(with the next number)
+    BUS-->>APP: numbered event
+    SVC->>LOOP: run(session, prompt, agent, limits)
+    Note over LOOP: A run is a series of turns. One turn is one call to the model plus any tools it asks for.
+
+    loop one turn at a time, until the model stops asking for tools
+        LOOP->>CTX: needs_compaction(conversation)
+        alt the conversation is getting too long
+            CTX->>AI: summarise the older messages
+            AI-->>CTX: short summary
+            CTX-->>LOOP: CompactionResult - recent messages kept, tool pairs kept together
+            LOOP->>DB: save_message(the summary)
+        else it still fits
+            CTX-->>LOOP: nothing to do
+        end
+
+        LOOP->>AI: stream(messages, tools, model)
+        loop each piece of the reply
+            AI-->>LOOP: StreamEvent - text, thinking, tool call or usage
+            LOOP->>BUS: publish(that piece)
+            BUS-->>APP: numbered event, shown as it arrives
+        end
+        LOOP->>DB: save_message(the assistant reply)
+
+        alt the model asked for no tools
+            Note over LOOP: This is the answer. Leave the loop.
+        else the model asked for one or more tools
+            loop each tool call
+                LOOP->>TM: execute(tool_call)
+                TM->>TM: find the tool by name
+                TM->>TM: check the arguments against its schema
+                TM->>TM: ask the policy - allow, ask or deny
+                alt the policy says ask
+                    TM->>PM: ask(real tool name, real arguments, preview)
+                    PM->>DB: look for a grant saved earlier
+                    alt a saved grant already covers this
+                        PM-->>TM: allowed
+                    else the user has to decide
+                        PM->>BUS: publish(permission requested)
+                        BUS-->>APP: prompt with the exact arguments and a preview
+                        APP->>SVC: resolve_permission(call_id, answer, how long)
+                        SVC->>PM: resolve(call_id, answer, how long)
+                        opt the answer was this session or always
+                            PM->>DB: save the grant
+                        end
+                        PM-->>TM: allowed or refused
+                    end
+                end
+
+                alt allowed
+                    TM->>TOOL: execute(arguments, context)
+                    TOOL-->>TM: ToolResult - output or error
+                    TM->>TM: shorten the output if it is huge
+                else refused, unknown tool, or bad arguments
+                    TM->>TM: build a ToolResult that says why
+                end
+                TM-->>LOOP: ToolResult
+                LOOP->>DB: save_message(the tool result)
+                LOOP->>BUS: publish(tool finished)
+                BUS-->>APP: numbered event
+            end
+            Note over LOOP: The results are part of the conversation now, so the next turn can build on them.
+        end
+
+        LOOP->>LOOP: check the budget and the cancel flag
+    end
+
+    LOOP->>DB: save_run(RunResult - status, turns, tokens, tool calls)
+    LOOP->>BUS: publish(run finished)
+    BUS-->>APP: final event
+    LOOP-->>SVC: RunResult
+    SVC-->>APP: RunResult
+
+    Note over APP,SVC: cancel() is a separate call. It sets a flag, the loop notices between steps and stops cleanly.
+    Note over BUS,DB: Because every event is numbered and stored, a client that reconnects asks for everything after the last number it saw.

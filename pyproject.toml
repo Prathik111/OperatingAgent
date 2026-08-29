@@ -20,6 +20,8 @@ dev = [
     "pytest-asyncio>=1.0.0",
     "python-dotenv>=1.0.1",
     "common",
+    "api",
+    "agent-native",
     "observability",
     "agent-langgraph",
     "file-server",
@@ -32,6 +34,8 @@ dev = [
 
 [tool.uv.sources]
 common = { workspace = true }
+api = { workspace = true }
+agent-native = { workspace = true }
 observability = { workspace = true }
 agent-langgraph = { workspace = true }
 file-server = { workspace = true }

@@ -1,0 +1,490 @@
+classDiagram
+    direction LR
+
+    %% =========================================================
+    %% agent-native - the parts inside the agent and how they connect.
+    %% Target design. Companion diagrams:
+    %%   native-agent-v2-sequence.mermaid  - one message, start to finish
+    %%   native-agent-v2-flow.mermaid      - the decisions the loop makes
+    %%   native-agent-runtime.mermaid      - processes and machines
+    %% MCPClient is left exactly as it is today and only touched via MCPTool.
+    %% =========================================================
+
+    %% =========================================================
+    %% 1. CONVERSATION / STATE
+    %% =========================================================
+    class Role {
+        <<enumeration>>
+        SYSTEM
+        USER
+        ASSISTANT
+        TOOL
+    }
+    class PartType {
+        <<enumeration>>
+        TEXT
+        REASONING
+        TOOL_CALL
+        COMPACTION
+    }
+    class ToolCallStatus {
+        <<enumeration>>
+        PENDING
+        WAITING_PERMISSION
+        DENIED
+        RUNNING
+        SUCCESS
+        ERROR
+    }
+    class MessagePart {
+        <<interface>>
+    }
+    class Text {
+        +text : string
+    }
+    class Reasoning {
+        +text : string
+        +hidden : bool
+    }
+    class ToolCall {
+        +id : string
+        +name : string
+        +arguments : object
+        +status : ToolCallStatus
+        +output : string
+        +error : string
+    }
+    class Compaction {
+        +summary : string
+        +old_messages : string[]
+        +tokens_before : int
+        +tokens_after : int
+    }
+    class Message {
+        +id : string
+        +session_id : string
+        +role : Role
+        +parts : MessagePart[]
+        +model : string
+        +usage : Usage
+        +created_at : datetime
+    }
+    class Usage {
+        +input_tokens : int
+        +output_tokens : int
+        +cached_tokens : int
+    }
+    class Session {
+        +id : string
+        +agent : string
+        +title : string
+        +working_directory : string
+        +revision : int
+    }
+    class Conversation {
+        +messages : Message[]
+        +add(message)
+        +render()
+        +get_recent_messages()
+        +is_valid()
+        +estimate_tokens()
+    }
+    MessagePart <|-- Text
+    MessagePart <|-- Reasoning
+    MessagePart <|-- ToolCall
+    MessagePart <|-- Compaction
+    Message *-- MessagePart
+    Message --> Role
+    Message --> Usage
+    Conversation *-- Message
+    Session ..> Conversation
+
+    %% =========================================================
+    %% 2. AGENT LOOP
+    %% =========================================================
+    class Limits {
+        +max_time
+        +max_turns
+        +max_tool_calls
+        +max_context_tokens
+        +tool_timeout
+    }
+    class Cancellation {
+        +cancelled : bool
+        +cancel()
+        +check()
+    }
+    class RunContext {
+        +run_id : string
+        +session : Session
+        +agent : AgentConfig
+        +limits : Limits
+        +cancellation : Cancellation
+        +depth : int
+    }
+    class RunStatus {
+        <<enumeration>>
+        COMPLETED
+        FAILED
+        CANCELLED
+        LIMIT_REACHED
+    }
+    class RunResult {
+        +run_id : string
+        +status : RunStatus
+        +output : string
+        +turns : int
+        +model_calls : int
+        +tool_calls : int
+        +total_tokens : int
+        +failure_reason : string
+    }
+    class AgentLoop {
+        +run(session, prompt, agent, limits)
+        -run_turn()
+        -run_tools()
+        -finish()
+    }
+    AgentLoop ..> RunContext
+    AgentLoop ..> RunResult
+    AgentLoop --> Conversation
+    AgentLoop --> ContextManager
+    AgentLoop --> Model
+    AgentLoop --> ToolManager
+    AgentLoop --> EventBus
+    AgentLoop --> Monitoring
+    RunContext --> Limits
+    RunContext --> Cancellation
+    RunResult --> RunStatus
+
+    %% =========================================================
+    %% 3. TOOLS
+    %% =========================================================
+    class ExecutionMode {
+        <<enumeration>>
+        DIRECT
+        HOST_PROCESS
+        SANDBOX
+    }
+    class ToolPermissions {
+        +read_only : bool
+        +destructive : bool
+        +needs_network : bool
+        +execution_mode : ExecutionMode
+    }
+    class ToolDefinition {
+        +name : string
+        +namespace : string
+        +description : string
+        +input_schema : object
+        +permissions : ToolPermissions
+    }
+    class ToolResult {
+        +success : bool
+        +output : string
+        +error : string
+        +truncated : bool
+    }
+    class Tool {
+        <<interface>>
+        +definition : ToolDefinition
+        +execute(arguments, context)
+    }
+    class ToolRegistry {
+        +register(tool)
+        +find(name)
+        +get_available_tools(agent)
+    }
+    class ArgumentChecker {
+        +validate(schema, arguments)
+    }
+    class ToolManager {
+        +execute(tool_call)
+        -find_tool()
+        -check_permissions()
+        -limit_output()
+    }
+    class MCPTool {
+        +definition : ToolDefinition
+        +execute(arguments, context)
+    }
+    class MCPClient {
+        <<external>>
+        +list_tools()
+        +call_tool()
+        +close()
+    }
+    class PlanTool {
+        +execute(arguments, context)
+    }
+    class SubtaskTool {
+        +execute(arguments, context)
+    }
+    class VerifyTool {
+        +execute(arguments, context)
+    }
+    Tool <|.. MCPTool
+    Tool <|.. PlanTool
+    Tool <|.. SubtaskTool
+    Tool <|.. VerifyTool
+    MCPTool --> MCPClient
+    Tool --> ToolDefinition
+    ToolDefinition --> ToolPermissions
+    ToolPermissions --> ExecutionMode
+    ToolRegistry o-- Tool
+    ToolManager --> ToolRegistry
+    ToolManager --> ArgumentChecker
+    ToolManager --> Policy
+    ToolManager --> PermissionManager
+    ToolManager ..> ToolResult
+    ToolManager ..> ToolCall
+    SubtaskTool --> Subagent
+
+    %% =========================================================
+    %% 4. PERMISSIONS / SECURITY
+    %% =========================================================
+    class PermissionDecision {
+        <<enumeration>>
+        ALLOW
+        ASK
+        DENY
+    }
+    class Decision {
+        +result : PermissionDecision
+        +reason : string
+        +rule : string
+    }
+    class Policy {
+        <<interface>>
+        +check(context, tool, arguments)
+    }
+    class RulePolicy {
+        +check()
+        -rules
+    }
+    class PermissionRule {
+        +id : string
+        +tool_pattern : string
+        +argument_pattern : string
+        +result : PermissionDecision
+    }
+    class SessionPolicy {
+        +check()
+        -seen_hosts
+        -destructive_actions
+    }
+    class PermissionDuration {
+        <<enumeration>>
+        ONCE
+        SESSION
+        ALWAYS
+    }
+    class PermissionGrant {
+        +tool_pattern : string
+        +duration : PermissionDuration
+        +session_id : string
+    }
+    class PermissionStore {
+        +find()
+        +save()
+    }
+    class PermissionRequest {
+        +call_id : string
+        +tool : string
+        +arguments : object
+        +preview : string
+        +reason : string
+    }
+    class PermissionManager {
+        +ask()
+        +resolve()
+        -pending_requests
+    }
+    Policy <|.. RulePolicy
+    Policy <|.. SessionPolicy
+    RulePolicy o-- PermissionRule
+    PermissionRule --> PermissionDecision
+    Decision --> PermissionDecision
+    PermissionStore o-- PermissionGrant
+    PermissionGrant --> PermissionDuration
+    PermissionManager --> PermissionStore
+    PermissionManager --> PermissionRequest
+    PermissionManager --> Decision
+    PermissionManager --> EventBus
+    Policy ..> Decision
+
+    %% =========================================================
+    %% 5. CONTEXT MANAGEMENT
+    %% =========================================================
+    class TokenCounter {
+        +count(messages)
+        +record_usage()
+        +get_total()
+    }
+    class CompactionResult {
+        +summary : Compaction
+        +old_messages : Message[]
+        +tokens_before : int
+        +tokens_after : int
+    }
+    class ContextManager {
+        +needs_compaction()
+        +compact()
+        -protect_recent_messages()
+        -check_tool_pairs()
+    }
+    ContextManager --> TokenCounter
+    ContextManager ..> CompactionResult
+    CompactionResult --> Compaction
+
+    %% =========================================================
+    %% 6. AGENT CONFIGURATION
+    %% =========================================================
+    class AgentConfig {
+        +name : string
+        +model : Model
+        +system_prompt : string[]
+        +allowed_tools : string[]
+        +max_depth : int
+        +temperature : float
+    }
+    class PromptBuilder {
+        +build_prompt()
+        +get_version()
+    }
+    class Subagent {
+        +run(prompt, parent_context)
+        -budget_fraction
+    }
+    AgentConfig --> Model
+    PromptBuilder --> AgentConfig
+    Subagent --> AgentLoop
+    Subagent --> RunContext
+
+    %% =========================================================
+    %% 7. AI MODELS
+    %% =========================================================
+    class ToolFormat {
+        <<enumeration>>
+        NATIVE
+        TEXT
+        JSON
+    }
+    class Model {
+        +provider : string
+        +model_id : string
+        +context_size : int
+        +max_output : int
+        +parallel_tools : bool
+        +tool_format : ToolFormat
+    }
+    class ModelRegistry {
+        +get(model)
+        +get_provider(model)
+    }
+    class StreamType {
+        <<enumeration>>
+        TEXT
+        REASONING
+        TOOL_CALL
+        USAGE
+        DONE
+    }
+    class StreamEvent {
+        +type : StreamType
+        +data : object
+    }
+    class AIModel {
+        <<interface>>
+        +stream(messages, tools, model)
+        +count_tokens(messages)
+    }
+    class Groq {
+        +stream()
+    }
+    class Ollama {
+        +stream()
+    }
+    AIModel <|.. Groq
+    AIModel <|.. Ollama
+    Model --> ToolFormat
+    ModelRegistry --> Model
+    ModelRegistry --> AIModel
+    AIModel --> StreamEvent
+    StreamEvent --> StreamType
+    StreamEvent ..> ToolCall
+    Conversation ..> ToolFormat
+
+    %% =========================================================
+    %% 8. EVENTS / STORAGE / SERVICE
+    %% =========================================================
+    class Event {
+        +sequence : int
+        +session_id : string
+        +run_id : string
+        +type : string
+        +time : datetime
+        +data : object
+    }
+    class EventBus {
+        +publish(event)
+        +subscribe(session, from_sequence)
+    }
+    class Database {
+        <<interface>>
+        +create_session()
+        +save_message()
+        +save_event()
+        +load_conversation()
+        +save_run()
+        +load_permissions()
+    }
+    class PostgresDatabase {
+        +migrate()
+        -connection_pool
+    }
+    class MemoryDatabase {
+        -sessions
+    }
+    class AgentService {
+        +create_session()
+        +send_message()
+        +cancel()
+        +resolve_permission()
+        +subscribe()
+        +resume()
+    }
+    class AgentRuntime {
+        +settings
+        +service
+        +shutdown()
+    }
+    Database <|.. PostgresDatabase
+    Database <|.. MemoryDatabase
+    EventBus *-- Event
+    EventBus --> Database
+    AgentService --> AgentLoop
+    AgentService --> EventBus
+    AgentService --> Database
+    AgentService --> PermissionManager
+    AgentRuntime *-- AgentService
+    AgentRuntime --> ToolRegistry
+    AgentRuntime --> ModelRegistry
+    AgentRuntime --> Monitoring
+
+    %% =========================================================
+    %% 9. MONITORING
+    %% =========================================================
+    class Monitoring {
+        +run_span()
+        +turn_span()
+        +tool_span()
+        +shutdown()
+    }
+    class Trace {
+        +name : string
+        +attributes : object
+        +finish()
+    }
+    Monitoring o-- Trace
+    Monitoring ..> RunResult

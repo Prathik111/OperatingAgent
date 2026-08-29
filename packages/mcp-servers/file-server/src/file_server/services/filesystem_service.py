@@ -94,6 +94,49 @@ class FileSystemService:
             context.logger.info("file_written", path=str(resolved))
         return {"path": str(resolved), "bytes": len(content.encode(encoding)), "encoding": encoding}
 
+    def edit_file(
+        self,
+        path: str,
+        old_string: str,
+        new_string: str,
+        *,
+        replace_all: bool = False,
+        encoding: str = "utf-8",
+        context: Any = None,
+    ) -> dict[str, Any]:
+        """Replace an exact text anchor without rewriting unrelated content."""
+        resolved = self._normalize_path(path)
+        if not resolved.exists() or not resolved.is_file():
+            raise FileNotFoundError(f"File not found: {resolved}")
+        if not old_string:
+            raise ValueError("old_string must be provided and non-empty")
+        if old_string == new_string:
+            raise ValueError("old_string and new_string are identical")
+
+        content = resolved.read_text(encoding=encoding)
+        matches = content.count(old_string)
+        if matches == 0:
+            raise ValueError("old_string was not found; file was not changed")
+        if matches > 1 and not replace_all:
+            raise ValueError(
+                f"old_string matched in {matches} places; add context or set replace_all"
+            )
+
+        replacements = matches if replace_all else 1
+        updated = content.replace(old_string, new_string, -1 if replace_all else 1)
+        resolved.write_text(updated, encoding=encoding)
+        if context is not None:
+            context.logger.info(
+                "file_edited", path=str(resolved), replacements=replacements
+            )
+        return {
+            "path": str(resolved),
+            "replacements": replacements,
+            "bytes_before": len(content.encode(encoding)),
+            "bytes_after": len(updated.encode(encoding)),
+            "encoding": encoding,
+        }
+
     def delete_file(self, path: str, context: Any = None) -> dict[str, Any]:
         """Delete a file from the filesystem."""
 

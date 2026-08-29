@@ -93,3 +93,36 @@ WHERE task_id = %s
 ORDER BY attempt DESC
 LIMIT 1
 """
+
+UPSERT_MCP_SERVER = """
+INSERT INTO mcp_servers (name, base_url)
+VALUES (%s, %s)
+ON CONFLICT (name) DO UPDATE SET base_url = EXCLUDED.base_url, enabled = true
+RETURNING id
+"""
+
+UPSERT_TOOL = """
+INSERT INTO tools (server_id, name, description, input_schema)
+VALUES (%s, %s, %s, %s)
+ON CONFLICT (server_id, name) DO UPDATE SET
+    description = EXCLUDED.description,
+    input_schema = EXCLUDED.input_schema,
+    last_seen_at = now()
+RETURNING id
+"""
+
+INSERT_LLM_CALL = """
+INSERT INTO llm_calls (
+    run_id, node_name, provider, model, prompt_tokens, completion_tokens,
+    cost, error, started_at, finished_at
+)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+"""
+
+INSERT_TOOL_CALL = """
+INSERT INTO tool_calls (
+    run_id, tool_id, arguments, success, output, error, risk_level,
+    risk_reason, attempt, started_at, finished_at
+)
+VALUES (%s, %s, %s, %s, %s, %s, %s::risk_level, %s, %s, %s, %s)
+"""
