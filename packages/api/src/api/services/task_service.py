@@ -122,6 +122,22 @@ class TaskService:
                 await self._repo.save_tool_call(
                     run_id, ToolCallRecord.from_payload(event.payload)
                 )
+            elif event.type == "phase_entered":
+                await self._repo.save_phase(run_id, event.payload)
+            elif event.type == "phase_exited":
+                await self._repo.close_phase(run_id, event.payload)
+            elif event.type == "plan_created":
+                await self._repo.save_plan(run_id, event.payload)
+            elif event.type == "finding_recorded":
+                await self._repo.save_finding(run_id, event.payload)
+            elif event.type == "verification_recorded":
+                await self._repo.save_verification(run_id, event.payload)
+            elif event.type == "trace_ref":
+                await self._repo.save_trace_ref(run_id, event.payload)
+            elif event.type == "approval_requested":
+                await self._repo.save_approval(run_id, event.payload)
+            elif event.type == "approval_resolved":
+                await self._repo.resolve_approval(event.payload)
             await self._broker.publish(task.id, event)
 
         try:

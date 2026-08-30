@@ -185,6 +185,88 @@ class PostgresTaskRepository:
                         ),
                     )
 
+    async def save_phase(self, run_id: str, payload: dict) -> str:
+        async with self._pool.connection() as conn, conn.cursor() as cur:
+            await cur.execute(_sql.INSERT_PHASE, (
+                payload.get("id"), run_id, payload["sequence"], payload["phase"],
+                payload.get("entry_reason"), payload.get("entered_at"),
+            ))
+            return str((await cur.fetchone())[0])
+
+    async def close_phase(self, run_id: str, payload: dict) -> None:
+        async with self._pool.connection() as conn, conn.cursor() as cur:
+            await cur.execute(
+                _sql.CLOSE_PHASE,
+                (payload.get("exited_at"), run_id, payload["phase_id"]),
+            )
+
+    async def save_plan(self, run_id: str, payload: dict) -> str:
+        async with self._pool.connection() as conn:
+            async with conn.transaction(), conn.cursor() as cur:
+                await cur.execute(_sql.INSERT_PLAN, (
+                    payload.get("id"), run_id, payload["phase_id"], payload["revision"],
+                    payload.get("summary"), payload.get("reasoning"),
+                    bool(payload.get("requires_remediation", False)),
+                ))
+                plan_id = (await cur.fetchone())[0]
+                for index, step in enumerate(payload.get("steps", [])):
+                    await cur.execute(_sql.INSERT_PLAN_STEP, (
+                        step.get("id"), plan_id, run_id,
+                        step.get("step_number", index), step.get("description"),
+                        step.get("tool_id"), Jsonb(step.get("arguments")),
+                        step.get("status"), step.get("output"),
+                    ))
+                return str(plan_id)
+
+    async def save_finding(self, run_id: str, payload: dict) -> str:
+        async with self._pool.connection() as conn, conn.cursor() as cur:
+            await cur.execute(_sql.INSERT_FINDING, (
+                payload.get("id"), run_id, payload.get("phase_id"),
+                payload.get("plan_step_id"), payload.get("description"),
+                payload.get("detail"), payload.get("source_tool_id"),
+            ))
+            return str((await cur.fetchone())[0])
+
+    async def save_verification(self, run_id: str, payload: dict) -> str:
+        async with self._pool.connection() as conn, conn.cursor() as cur:
+            await cur.execute(_sql.INSERT_VERIFICATION, (
+                payload.get("id"), run_id, payload["plan_step_id"],
+                payload.get("tool_call_id"), payload.get("attempt", 1),
+                payload["result"], payload.get("reason"),
+                bool(payload.get("deterministic", False)), Jsonb(payload.get("evidence")),
+            ))
+            return str((await cur.fetchone())[0])
+
+    async def save_trace_ref(self, run_id: str, payload: dict) -> str:
+        async with self._pool.connection() as conn, conn.cursor() as cur:
+            await cur.execute(_sql.INSERT_TRACE_REF, (
+                payload.get("id"), run_id, payload.get("provider", "langfuse"),
+                payload["trace_id"], Jsonb(payload.get("metadata") or {}),
+            ))
+            return str((await cur.fetchone())[0])
+
+    async def save_approval(self, run_id: str, payload: dict) -> str:
+        async with self._pool.connection() as conn, conn.cursor() as cur:
+            await cur.execute(_sql.INSERT_APPROVAL, (
+                payload.get("id"), run_id, payload["plan_step_id"],
+                payload.get("reason"), payload.get("expires_at"),
+            ))
+            return str((await cur.fetchone())[0])
+
+    async def resolve_approval(self, payload: dict) -> None:
+        async with self._pool.connection() as conn:
+            async with conn.transaction(), conn.cursor() as cur:
+                external_id = payload.get("resolved_by_external_id", "system:api-approval")
+                await cur.execute(_sql.RESOLVE_APPROVAL_ACTOR, (
+                    external_id, payload.get("resolved_by_display_name", "API approver"),
+                ))
+                actor_id = (await cur.fetchone())[0]
+                await cur.execute(_sql.RESOLVE_APPROVAL, (
+                    "approved" if payload["approved"] else "denied", actor_id,
+                    payload.get("note"), payload.get("resolved_at"),
+                    payload.get("tool_call_id"), payload["approval_id"],
+                ))
+
     async def finalize_run(self, run_id: str, result: AgentRunResult) -> None:
         async with self._pool.connection() as conn:
             async with conn.cursor() as cur:

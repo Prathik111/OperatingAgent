@@ -42,6 +42,8 @@ class ApprovalRequest:
     tool_name: str
     arguments: dict[str, Any]
     risk_level: RiskLevel | None = None
+    run_id: str | None = None
+    plan_step_id: str | None = None
 
 
 class _Pending:
@@ -63,9 +65,11 @@ class ApprovalGateway:
         classifier: RiskClassifier | None = None,
         *,
         threshold: RiskLevel = RiskLevel.REVIEW,
+        repository: Any = None,
     ) -> None:
         self._classifier = classifier or RiskClassifier()
         self._threshold = threshold
+        self._repository = repository
         self._pending: dict[str, _Pending] = {}
         self._lock = asyncio.Lock()
 
@@ -86,6 +90,15 @@ class ApprovalGateway:
             return False
 
         pending = _Pending(request)
+        if self._repository is not None and request.run_id and request.plan_step_id:
+            await self._repository.save_approval(
+                request.run_id,
+                {
+                    "id": request.id,
+                    "plan_step_id": request.plan_step_id,
+                    "reason": f"risk level {level.value}",
+                },
+            )
         async with self._lock:
             self._pending[request.id] = pending
         await pending.event.wait()
@@ -109,6 +122,15 @@ class ApprovalGateway:
             pending.note = note
             pending.resolved = True
         pending.event.set()
+        request = pending.request
+        if self._repository is not None and request.run_id and request.plan_step_id:
+            await self._repository.resolve_approval(
+                {
+                    "approval_id": request.id,
+                    "approved": approved,
+                    "note": note,
+                }
+            )
 
     def list_pending(self) -> list[ApprovalRequest]:
         return [p.request for p in self._pending.values() if not p.resolved]

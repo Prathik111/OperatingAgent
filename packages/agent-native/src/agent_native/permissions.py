@@ -531,13 +531,14 @@ class PermissionManager:
         """Choose where answers come from (e.g. the CLI installs a terminal one)."""
         self._responder = responder
 
-    async def ask(self, request: PermissionRequest, session_id: str) -> bool:
+    async def ask(self, request: PermissionRequest, session_id: str, run_id: str = "") -> bool:
         """Return True if the call may proceed. Reuses a saved grant if one covers it."""
         if await self._store.covering(request.tool, session_id, request.arguments):
             await self._bus.emit(
                 session_id,
                 EventType.PERMISSION_RESOLVED,
                 {"call_id": request.call_id, "tool": request.tool, "allowed": True, "reused_grant": True},
+                run_id,
             )
             return True
 
@@ -551,6 +552,7 @@ class PermissionManager:
                 "preview": request.preview,
                 "reason": request.reason,
             },
+            run_id,
         )
 
         # The one thing that differs between a terminal and an API: getting the answer.
@@ -575,6 +577,7 @@ class PermissionManager:
                 "duration": answer.duration.value,
                 "scope": answer.scope.strip(),
             },
+            run_id,
         )
         return answer.allowed
 

@@ -10,7 +10,7 @@ on the run, and the run's terminal outcome.
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from common.agent import AgentRunResult, AgentTask
 from common.config import AgentConfig
@@ -49,6 +49,22 @@ class TaskRepository(Protocol):
     async def save_tool_call(self, run_id: str, record: ToolCallRecord) -> None:
         """Persist one resolved tool invocation."""
         ...
+
+    async def save_phase(self, run_id: str, payload: dict[str, Any]) -> str: ...
+
+    async def close_phase(self, run_id: str, payload: dict[str, Any]) -> None: ...
+
+    async def save_plan(self, run_id: str, payload: dict[str, Any]) -> str: ...
+
+    async def save_finding(self, run_id: str, payload: dict[str, Any]) -> str: ...
+
+    async def save_verification(self, run_id: str, payload: dict[str, Any]) -> str: ...
+
+    async def save_trace_ref(self, run_id: str, payload: dict[str, Any]) -> str: ...
+
+    async def save_approval(self, run_id: str, payload: dict[str, Any]) -> str: ...
+
+    async def resolve_approval(self, payload: dict[str, Any]) -> None: ...
 
     async def upsert_tool(
         self, server_name: str, base_url: str | None, tool_spec: dict

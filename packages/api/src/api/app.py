@@ -43,7 +43,10 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
 
         orchestrators = build_orchestrators(settings)
         broker = EventBroker()
-        approval_gateway = ApprovalGateway(threshold=settings.approval_threshold)
+        approval_gateway = ApprovalGateway(
+            threshold=settings.approval_threshold,
+            repository=repository,
+        )
         background: set[asyncio.Task] = set()
 
         app.state.repository = repository

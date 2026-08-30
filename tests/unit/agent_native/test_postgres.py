@@ -1,4 +1,4 @@
-"""The Postgres store, exercised without a Postgres.
+"""The canonical Postgres adapter, exercised without a Postgres.
 
 asyncpg isn't installed here and there's no server to talk to, so a tiny fake pool
 stands in for both. That's enough to pin the parts that are logic rather than SQL:
@@ -20,8 +20,8 @@ from agent_native.conversation import (
     Usage,
 )
 from agent_native.postgres import (
-    BASELINE_VERSION,
     PostgresDatabase,
+    REQUIRED_MIGRATION,
     _load_json,
     _part_from_json,
     _part_to_json,
@@ -63,10 +63,12 @@ class _FakeConn:
 
     async def fetchval(self, sql: str, *args):
         self._pool.calls.append(("fetchval", sql, args))
-        if "MAX(version)" in sql:
-            return max(self._pool.applied) if self._pool.applied else 0
+        if "SELECT EXISTS" in sql and "schema_migrations" in sql:
+            return self._pool.required_migration_present
         if self._pool.fetchvals:
             return self._pool.fetchvals.pop(0)
+        if "MAX(version)" in sql:
+            return max(self._pool.applied) if self._pool.applied else 0
         return None
 
     def transaction(self):
@@ -95,13 +97,20 @@ class _FakePool:
     by `fetchval` for the non-migration queries (the event counter, mostly).
     """
 
-    def __init__(self, fail_first: int = 0, fail_exc=ConnectionError, fetchvals=None) -> None:
+    def __init__(
+        self,
+        fail_first: int = 0,
+        fail_exc=ConnectionError,
+        fetchvals=None,
+        required_migration_present: bool = True,
+    ) -> None:
         self.calls: list = []
         self.applied: set = set()
         self.acquire_attempts = 0
         self.fail_first = fail_first
         self.fail_exc = fail_exc
         self.fetchvals = list(fetchvals or [])
+        self.required_migration_present = required_migration_present
 
     def acquire(self):
         return _Acquire(self)
@@ -121,35 +130,33 @@ def _executed(db: PostgresDatabase) -> str:
     return "\n".join(sql for op, sql, _ in db._pool.calls if op == "execute")
 
 
-def _baseline_runs(db: PostgresDatabase) -> int:
-    # 'IF NOT EXISTS sessions' is unique to schema.sql (the ledger DDL names
-    # schema_migrations), so counting it counts how often the baseline was applied.
-    return sum(sql.count("IF NOT EXISTS sessions") for op, sql, _ in db._pool.calls if op == "execute")
-
-
 # ---------------------------------------------------------------------------
-# Migrations
+# Infrastructure-owned schema verification
 # ---------------------------------------------------------------------------
-async def test_apply_schema_creates_the_ledger_and_the_baseline():
+async def test_apply_schema_verifies_the_required_migration_without_ddl():
     db = _db()
     await db.apply_schema()
-    assert "schema_migrations" in _executed(db)      # the bookkeeping table first
-    assert _baseline_runs(db) == 1                    # schema.sql ran once
-    assert BASELINE_VERSION in db._pool.applied       # and was recorded
+    assert _executed(db) == ""
+    assert any(
+        REQUIRED_MIGRATION in args
+        for op, _sql, args in db._pool.calls
+        if op == "fetchval"
+    )
 
 
-async def test_apply_schema_is_idempotent():
-    db = _db()
-    await db.apply_schema()
-    await db.apply_schema()                           # a second run on the same db
-    assert _baseline_runs(db) == 1                     # baseline is not applied twice
+async def test_apply_schema_fails_when_infrastructure_has_not_migrated():
+    db = _db(required_migration_present=False)
+    raised = False
+    try:
+        await db.apply_schema()
+    except RuntimeError as exc:
+        raised = REQUIRED_MIGRATION in str(exc)
+    assert raised
 
 
 async def test_schema_version_reads_the_highest_recorded():
-    db = _db()
-    assert await db.schema_version() == 0             # nothing applied yet
-    await db.apply_schema()
-    assert await db.schema_version() == BASELINE_VERSION
+    db = _db(fetchvals=[2])
+    assert await db.schema_version() == 2
 
 
 # ---------------------------------------------------------------------------
@@ -198,14 +205,11 @@ async def test_next_sequence_returns_the_updated_counter():
     assert await db.next_sequence("s") == 5
 
 
-async def test_next_sequence_inserts_a_missing_session_then_numbers_it():
-    # The first UPDATE finds no row (None), so a session is inserted and the UPDATE
-    # runs again, this time returning 1 - an event is never dropped for want of a
-    # session row.
-    db = _db(fetchvals=[None, 1])
+async def test_next_sequence_uses_the_canonical_thread_counter():
+    db = _db(fetchvals=[1])
     assert await db.next_sequence("s") == 1
     assert any(
-        "INSERT INTO sessions" in sql for op, sql, _ in db._pool.calls if op == "execute"
+        "native_event_sequences" in sql for op, sql, _ in db._pool.calls if op == "fetchval"
     )
 
 
@@ -247,7 +251,7 @@ def test_an_unknown_part_degrades_to_text_rather_than_being_dropped():
 def test_usage_json_round_trips_and_none_stays_none():
     assert _usage_to_json(None) is None
     data = _usage_to_json(Usage(input_tokens=7, output_tokens=3, cached_tokens=1))
-    assert data == {"input_tokens": 7, "output_tokens": 3, "cached_tokens": 1}
+    assert data == {"input_tokens": 7, "output_tokens": 3, "cached_tokens": 1, "reasoning_tokens": 0}
 
 
 def test_load_json_accepts_a_string_a_dict_or_garbage():

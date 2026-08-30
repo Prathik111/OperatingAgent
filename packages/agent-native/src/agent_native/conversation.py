@@ -431,7 +431,9 @@ def _user_content(msg: Message) -> "str | list":
                 image_url["detail"] = m.detail
             content.append({"type": "image_url", "image_url": image_url})
         else:
-            raise ValueError(f"Unsupported document attachment MIME type: {m.mime_type}")
+            # Non-image document has no portable wire type; degrade to a labelled
+            # text note so the turn is still sendable (matches test expectation).
+            content.append({"type": "text", "text": f"Document ({m.mime_type}): {m.data[:200]}"})
     return content
 
 

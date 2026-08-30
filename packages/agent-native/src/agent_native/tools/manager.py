@@ -150,7 +150,7 @@ class ToolManager:
                 preview=self._preview(tool, tool_call.arguments),
                 reason=decision.reason,
             )
-            allowed = await self._permissions.ask(request, context.session.id)
+            allowed = await self._permissions.ask(request, context.session.id, context.run_id)
             return allowed, ("allowed by user" if allowed else "denied by user")
 
         return True, decision.reason or "allowed by policy"

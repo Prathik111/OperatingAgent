@@ -121,8 +121,10 @@ class ContextManager:
         is a budget signal, not a bill - the run's real totals live on
         ``RunResult``, counted from provider usage alone.
         """
-        current = self.tokens.count(conversation.render())
-        used = max(current, observed_input_tokens or 0)
+        if observed_input_tokens not in (None, 0):
+            used = observed_input_tokens
+        else:
+            used = self.tokens.count(conversation.render())
         return used > model.context_size * self.threshold
 
     # -- where to cut -----------------------------------------------------

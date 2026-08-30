@@ -126,3 +126,69 @@ INSERT INTO tool_calls (
 )
 VALUES (%s, %s, %s, %s, %s, %s, %s::risk_level, %s, %s, %s, %s)
 """
+
+INSERT_PHASE = """
+INSERT INTO run_phases (id, run_id, sequence, phase, entry_reason, entered_at)
+VALUES (COALESCE(%s::uuid, gen_random_uuid()), %s, %s, %s::workflow_phase, %s, COALESCE(%s, now()))
+RETURNING id
+"""
+
+CLOSE_PHASE = """
+UPDATE run_phases SET exited_at = COALESCE(%s, now())
+WHERE run_id = %s AND id = %s
+"""
+
+INSERT_PLAN = """
+INSERT INTO plans (id, run_id, phase_id, revision, summary, reasoning, requires_remediation)
+VALUES (COALESCE(%s::uuid, gen_random_uuid()), %s, %s, %s, %s, %s, %s)
+RETURNING id
+"""
+
+INSERT_PLAN_STEP = """
+INSERT INTO plan_steps
+    (id, plan_id, run_id, step_number, description, tool_id, arguments, status, output)
+VALUES (COALESCE(%s::uuid, gen_random_uuid()), %s, %s, %s, %s, %s, %s,
+        COALESCE(%s, 'created')::run_status, %s)
+"""
+
+INSERT_FINDING = """
+INSERT INTO run_findings
+    (id, run_id, phase_id, plan_step_id, description, detail, source_tool_id)
+VALUES (COALESCE(%s::uuid, gen_random_uuid()), %s, %s, %s, %s, %s, %s)
+RETURNING id
+"""
+
+INSERT_VERIFICATION = """
+INSERT INTO verification_results
+    (id, run_id, plan_step_id, tool_call_id, attempt, result, reason, deterministic, evidence)
+VALUES (COALESCE(%s::uuid, gen_random_uuid()), %s, %s, %s, %s,
+        %s::verification_verdict, %s, %s, %s)
+RETURNING id
+"""
+
+INSERT_TRACE_REF = """
+INSERT INTO trace_refs (id, run_id, provider, trace_id, metadata)
+VALUES (COALESCE(%s::uuid, gen_random_uuid()), %s, %s, %s, %s)
+ON CONFLICT (provider, trace_id) DO UPDATE SET metadata = EXCLUDED.metadata
+RETURNING id
+"""
+
+INSERT_APPROVAL = """
+INSERT INTO approval_requests (id, run_id, plan_step_id, reason, expires_at)
+VALUES (COALESCE(%s::uuid, gen_random_uuid()), %s, %s, %s, %s)
+RETURNING id
+"""
+
+RESOLVE_APPROVAL_ACTOR = """
+INSERT INTO actors (kind, external_id, display_name)
+VALUES ('human', %s, %s)
+ON CONFLICT (external_id) DO UPDATE SET display_name = EXCLUDED.display_name
+RETURNING id
+"""
+
+RESOLVE_APPROVAL = """
+UPDATE approval_requests SET
+    status = %s, resolved_by_actor_id = %s, decision_note = %s,
+    resolved_at = COALESCE(%s, now()), tool_call_id = COALESCE(%s, tool_call_id)
+WHERE id = %s
+"""

@@ -156,13 +156,25 @@ class ContainerSandbox:
         if self._pool is not None:
             return self._pool
         try:
-            from sandbox import ContainerPool, DEFAULT_CPUS, DEFAULT_IMAGE, DEFAULT_MEMORY
+            import sandbox as sandbox_package
         except ImportError as exc:
             self._note(
                 f"the 'sandbox' package isn't installed ({exc}); "
                 "from the repo root run `uv sync --all-packages`"
             )
             return None
+        required = ("ContainerPool", "DEFAULT_CPUS", "DEFAULT_IMAGE", "DEFAULT_MEMORY")
+        missing = [name for name in required if not hasattr(sandbox_package, name)]
+        if missing:
+            self._note(
+                "the installed 'sandbox' package does not provide the container "
+                f"runtime ({', '.join(missing)} missing)"
+            )
+            return None
+        ContainerPool = sandbox_package.ContainerPool
+        DEFAULT_CPUS = sandbox_package.DEFAULT_CPUS
+        DEFAULT_IMAGE = sandbox_package.DEFAULT_IMAGE
+        DEFAULT_MEMORY = sandbox_package.DEFAULT_MEMORY
         self._pool = ContainerPool(
             image=self._image or DEFAULT_IMAGE,
             memory=self._memory or DEFAULT_MEMORY,

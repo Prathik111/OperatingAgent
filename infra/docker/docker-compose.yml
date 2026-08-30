@@ -7,10 +7,14 @@ services:
       POSTGRES_PASSWORD: agent_native
       POSTGRES_DB: agent_native
     ports:
-      - "5432:5432"
+      # 5432 is commonly occupied by a host PostgreSQL installation.
+      - "${POSTGRES_PORT:-5433}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./postgres/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+      - ./postgres/migrations/002_native_conversation.sql:/docker-entrypoint-initdb.d/02-native-conversation.sql:ro
+      - ./postgres/migrations/003_import_legacy_agent_native.sql:/docker-entrypoint-initdb.d/03-import-legacy.sql:ro
+      - ./postgres/migrations/004_schema_hardening.sql:/docker-entrypoint-initdb.d/04-schema-hardening.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U agent_native -d agent_native"]
       interval: 5s

@@ -33,9 +33,11 @@ class LLMCallRecord:
     node_name: str
     provider: str
     model: str
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
-    cost: float = 0.0
+    # None means the provider did not report the value. Zero is a real measured
+    # value and must not be used as a substitute for unknown evaluation data.
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    cost: float | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
     error: str | None = None

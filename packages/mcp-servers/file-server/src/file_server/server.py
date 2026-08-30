@@ -7,6 +7,7 @@ Business logic remains inside FileSystemService.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Final
 
 from fastmcp import FastMCP
@@ -28,37 +29,46 @@ from .tools.write_file import register_write_file
 
 VERSION: Final[str] = "0.1.0"
 
-mcp = FastMCP(
-    name="file-server",
-    version=VERSION,
-    mask_error_details=True,
-)
+def build_file_server(root: str | Path | None = None) -> FastMCP:
+    """Build a file server confined to ``root`` (or the configured default)."""
+    server = FastMCP(
+        name="file-server",
+        version=VERSION,
+        mask_error_details=True,
+    )
+    service = FileSystemService(root=Path(root).expanduser().resolve()) if root else FileSystemService()
 
-filesystem_service = FileSystemService()
+    register_read_file(server, service)
+    register_write_file(server, service)
+    register_delete_file(server, service)
+    register_copy_file(server, service)
+    register_move_file(server, service)
+    register_rename_file(server, service)
+    register_list_directory(server, service)
+    register_create_directory(server, service)
+    register_delete_directory(server, service)
+    register_exists(server, service)
+    register_metadata(server, service)
+    register_search_files(server, service)
+    register_watch_directory(server, service)
 
-register_read_file(mcp, filesystem_service)
-register_write_file(mcp, filesystem_service)
-register_delete_file(mcp, filesystem_service)
-register_copy_file(mcp, filesystem_service)
-register_move_file(mcp, filesystem_service)
-register_rename_file(mcp, filesystem_service)
-register_list_directory(mcp, filesystem_service)
-register_create_directory(mcp, filesystem_service)
-register_delete_directory(mcp, filesystem_service)
-register_exists(mcp, filesystem_service)
-register_metadata(mcp, filesystem_service)
-register_search_files(mcp, filesystem_service)
-register_watch_directory(mcp, filesystem_service)
+    @server.tool
+    def health() -> dict:
+        """Health endpoint."""
+        return {
+            "status": "healthy",
+            "server": "file-server",
+            "version": VERSION,
+        }
+
+    # Kept for diagnostics and focused tests without exposing service internals
+    # through the public tool surface.
+    server._operating_agent_filesystem_service = service
+    return server
 
 
-@mcp.tool
-def health() -> dict:
-    """Health endpoint."""
-    return {
-        "status": "healthy",
-        "server": "file-server",
-        "version": VERSION,
-    }
+mcp = build_file_server()
+filesystem_service = mcp._operating_agent_filesystem_service
 
 
 if __name__ == "__main__":

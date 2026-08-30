@@ -291,6 +291,15 @@ def test_build_gateway_uses_the_factory():
     assert provider._build_gateway() is sentinel
 
 
+def test_real_gateway_accepts_and_confines_the_workspace_root(tmp_path):
+    from gateway_server.server import build_gateway
+
+    gateway = build_gateway(root=str(tmp_path))
+    mounted = gateway._operating_agent_mounts["filesystem"]
+    service = mounted._operating_agent_filesystem_service
+    assert service.root == tmp_path.resolve()
+
+
 async def test_close_without_connect_is_safe():
     await MCPToolProvider().close()  # no connection open; must not raise
 

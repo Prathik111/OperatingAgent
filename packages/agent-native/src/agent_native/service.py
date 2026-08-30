@@ -51,7 +51,7 @@ from .tools.manager import ToolManager
 from .tools.memory_tools import format_memories, memory_tools
 from .tools.plan_tool import PlanTool
 from .tools.skill_tool import InvokeSkillTool
-from .tools.subagent import DelegateTool, FanOutTool
+from .tools.subagent import DelegateTool, FanOutTool, is_helper_run
 
 
 class AgentRuntime:
@@ -216,17 +216,22 @@ class AgentService:
             raise KeyError(f"No such session: {session_id!r}")
         config = self.runtime.config_for(session.agent)
 
+        # Mint the run before writing its first event.  The canonical Postgres
+        # schema anchors every event to an agent_run, including MESSAGE_ADDED.
+        run_id = "run_" + uuid.uuid4().hex[:8]
         user_msg = user_message(session_id, text)
         await self.runtime.database.save_message(user_msg)
         await self.runtime.events.emit(
-            session_id, EventType.MESSAGE_ADDED, {"id": user_msg.id, "role": "user"}
+            session_id,
+            EventType.MESSAGE_ADDED,
+            {"id": user_msg.id, "role": "user"},
+            run_id,
         )
 
         # The run id is minted here, before the loop, so the prompt-submitted hook
         # can name the run the prompt kicks off. This point is observe-only - a hook
         # here can log or annotate, but only a pre-tool hook may veto - so its return
         # is deliberately ignored. With nothing registered, this is skipped entirely.
-        run_id = "run_" + uuid.uuid4().hex[:8]
         if self.runtime.hooks.has(HookPoint.PROMPT_SUBMITTED):
             await self.runtime.hooks.dispatch(
                 HookContext(

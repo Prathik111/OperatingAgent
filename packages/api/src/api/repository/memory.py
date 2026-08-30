@@ -31,6 +31,12 @@ class _Run:
     events: list[tuple[int, str, dict]] = field(default_factory=list)
     llm_calls: list[LLMCallRecord] = field(default_factory=list)
     tool_calls: list[ToolCallRecord] = field(default_factory=list)
+    phases: list[dict] = field(default_factory=list)
+    plans: list[dict] = field(default_factory=list)
+    findings: list[dict] = field(default_factory=list)
+    verifications: list[dict] = field(default_factory=list)
+    trace_refs: list[dict] = field(default_factory=list)
+    approvals: list[dict] = field(default_factory=list)
 
 
 class InMemoryTaskRepository:
@@ -84,6 +90,50 @@ class InMemoryTaskRepository:
         )
         from dataclasses import replace
         self._runs[run_id].tool_calls.append(replace(record, tool_id=tool_id))
+
+    async def save_phase(self, run_id: str, payload: dict) -> str:
+        value = {**payload, "id": payload.get("id") or str(uuid4())}
+        self._runs[run_id].phases.append(value)
+        return value["id"]
+
+    async def close_phase(self, run_id: str, payload: dict) -> None:
+        for phase in self._runs[run_id].phases:
+            if phase["id"] == payload["phase_id"]:
+                phase.update(payload)
+                return
+
+    async def save_plan(self, run_id: str, payload: dict) -> str:
+        value = {**payload, "id": payload.get("id") or str(uuid4())}
+        self._runs[run_id].plans.append(value)
+        return value["id"]
+
+    async def save_finding(self, run_id: str, payload: dict) -> str:
+        value = {**payload, "id": payload.get("id") or str(uuid4())}
+        self._runs[run_id].findings.append(value)
+        return value["id"]
+
+    async def save_verification(self, run_id: str, payload: dict) -> str:
+        value = {**payload, "id": payload.get("id") or str(uuid4())}
+        self._runs[run_id].verifications.append(value)
+        return value["id"]
+
+    async def save_trace_ref(self, run_id: str, payload: dict) -> str:
+        value = {**payload, "id": payload.get("id") or str(uuid4())}
+        self._runs[run_id].trace_refs.append(value)
+        return value["id"]
+
+    async def save_approval(self, run_id: str, payload: dict) -> str:
+        value = {**payload, "id": payload.get("id") or str(uuid4()), "status": "pending"}
+        self._runs[run_id].approvals.append(value)
+        return value["id"]
+
+    async def resolve_approval(self, payload: dict) -> None:
+        for run in self._runs.values():
+            for approval in run.approvals:
+                if approval["id"] == payload["approval_id"]:
+                    approval.update(payload)
+                    approval["status"] = "approved" if payload["approved"] else "denied"
+                    return
 
     async def upsert_tool(
         self, server_name: str, base_url: str | None, tool_spec: dict
