@@ -37,12 +37,14 @@ import os
 import time
 import uuid
 from collections.abc import Iterator
-from contextlib import AbstractContextManager, contextmanager
+from contextlib import AbstractContextManager, ExitStack, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+_AUTO_LANGFUSE = object()
 
 #: Which run the code currently executing belongs to. A ContextVar rather than a
 #: plain attribute because two runs can be in flight in the same process, and
@@ -104,6 +106,7 @@ class Monitoring:
         otlp_headers: dict | None = None,
         service_name: str = "agent-native",
         redactor: Any | None = None,
+        langfuse_client: Any = _AUTO_LANGFUSE,
     ) -> None:
         self.enabled = enabled
         # No directory means "remember, don't write". Tests use that; so does any
@@ -121,6 +124,8 @@ class Monitoring:
         # collector, while `self.spans` stays exact for in-process inspection. None
         # means no redaction (the runtime installs one; a bare Monitoring stays literal).
         self.redactor = redactor
+        self.langfuse_client = self._resolve_langfuse_client(langfuse_client)
+        self.langfuse_trace_ids: dict[str, str] = {}
         self.spans: list = []
         self.written: list = []  # paths written by the most recent shutdown()
         # What the most recent shutdown did with the OTLP sink, so a CLI or a test
@@ -129,6 +134,84 @@ class Monitoring:
         self.otlp_attempted = False
         self.otlp_exported = False
         self.otlp_skipped_reason = ""
+
+    @staticmethod
+    def _resolve_langfuse_client(client: Any) -> Any | None:
+        if client is not _AUTO_LANGFUSE:
+            return client
+        try:
+            from observability import get_client
+
+            return get_client()
+        except Exception:
+            return None
+
+    @contextmanager
+    def _langfuse_observation(self, trace: Trace) -> Iterator[Any | None]:
+        client = self.langfuse_client
+        if client is None:
+            yield None
+            return
+
+        observation_type = {
+            "run": "agent",
+            "turn": "generation",
+            "tool": "tool",
+        }.get(trace.name, "span")
+        stack = ExitStack()
+        try:
+            observation = stack.enter_context(
+                client.start_as_current_observation(
+                    name=f"agent-native.{trace.name}",
+                    as_type=observation_type,
+                    metadata=self._redact_attrs(trace.attributes),
+                )
+            )
+        except Exception:
+            stack.close()
+            yield None
+            return
+        try:
+            if trace.name == "run":
+                trace_id = client.get_current_trace_id()
+                if trace_id:
+                    self.langfuse_trace_ids[trace.run_id] = trace_id
+            yield observation
+        finally:
+            stack.close()
+
+    def _update_langfuse(self, observation: Any | None, trace: Trace) -> None:
+        if observation is None:
+            return
+        attributes = self._redact_attrs(trace.attributes)
+        update: dict[str, Any] = {"metadata": attributes}
+        if trace.name == "run":
+            update["output"] = {
+                "status": attributes.get("status"),
+                "turns": attributes.get("turns"),
+            }
+        elif trace.name == "turn":
+            update["model"] = attributes.get("model")
+            update["usage_details"] = {
+                key: value
+                for key, value in {
+                    "input": attributes.get("input_tokens"),
+                    "output": attributes.get("output_tokens"),
+                    "total": attributes.get("total_tokens"),
+                }.items()
+                if value is not None
+            }
+            if attributes.get("cost") is not None:
+                update["cost_details"] = {"total": attributes["cost"]}
+        elif trace.name == "tool":
+            update["output"] = attributes.get("output")
+            if attributes.get("error"):
+                update["level"] = "ERROR"
+                update["status_message"] = str(attributes["error"])
+        try:
+            observation.update(**update)
+        except Exception:
+            return
 
     @contextmanager
     def _span(self, name: str, **attributes) -> Iterator[Trace]:
@@ -149,7 +232,9 @@ class Monitoring:
         # even when disabled: the id costs nothing and keeps the two paths identical.
         token = _CURRENT_SPAN.set(trace.span_id)
         try:
-            yield trace
+            with self._langfuse_observation(trace) as observation:
+                yield trace
+                self._update_langfuse(observation, trace)
         finally:
             trace.finish()
             _CURRENT_SPAN.reset(token)
@@ -182,6 +267,11 @@ class Monitoring:
         instance for anyone who wants it.
         """
         self.written = []
+        if self.langfuse_client is not None:
+            try:
+                self.langfuse_client.flush()
+            except Exception:
+                pass
         self.otlp_attempted = False
         self.otlp_exported = False
         self.otlp_skipped_reason = ""
@@ -326,7 +416,7 @@ class Monitoring:
 
             provider.force_flush()
             provider.shutdown()
-        except Exception as exc:  # noqa: BLE001 - a bad sink must not fail the run
+        except Exception as exc:
             return False, f"{type(exc).__name__}: {exc}"
         return True, ""
 

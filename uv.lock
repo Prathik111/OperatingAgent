@@ -52,6 +52,7 @@ source = { editable = "packages/agent-native" }
 dependencies = [
     { name = "asyncpg" },
     { name = "groq" },
+    { name = "observability" },
     { name = "python-dotenv" },
 ]
 
@@ -64,6 +65,7 @@ ollama = [
 requires-dist = [
     { name = "asyncpg", specifier = ">=0.30.0" },
     { name = "groq" },
+    { name = "observability", editable = "packages/observability" },
     { name = "ollama", marker = "extra == 'ollama'", specifier = ">=0.5.0" },
     { name = "python-dotenv" },
 ]
@@ -118,6 +120,7 @@ version = "0.1.0"
 source = { editable = "packages/api" }
 dependencies = [
     { name = "agent-langgraph" },
+    { name = "agent-native" },
     { name = "common" },
     { name = "fastapi" },
     { name = "httpx" },
@@ -132,6 +135,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "agent-langgraph", editable = "packages/agent-langgraph" },
+    { name = "agent-native", editable = "packages/agent-native" },
     { name = "common", editable = "packages/common" },
     { name = "fastapi", specifier = ">=0.141.1" },
     { name = "httpx", specifier = ">=0.27" },

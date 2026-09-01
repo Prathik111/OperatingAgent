@@ -86,3 +86,6 @@ desktop.ini
 *.tmp
 *.bak
 .cache/
+
+demo/
+backup/

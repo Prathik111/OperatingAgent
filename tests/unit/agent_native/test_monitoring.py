@@ -35,6 +35,66 @@ def _by_name(mon: Monitoring) -> dict:
     return {s.name: s for s in mon.spans}
 
 
+class _FakeObservation:
+    def __init__(self, record: dict) -> None:
+        self.record = record
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc) -> None:
+        return None
+
+    def update(self, **values) -> None:
+        self.record["update"] = values
+
+
+class _FakeLangfuse:
+    def __init__(self) -> None:
+        self.observations: list[dict] = []
+        self.flushes = 0
+
+    def start_as_current_observation(self, **values):
+        record = {"start": values}
+        self.observations.append(record)
+        return _FakeObservation(record)
+
+    def get_current_trace_id(self) -> str:
+        return "trace-native"
+
+    def flush(self) -> None:
+        self.flushes += 1
+
+
+def test_langfuse_receives_native_run_generation_and_tool_observations() -> None:
+    client = _FakeLangfuse()
+    mon = Monitoring(langfuse_client=client)
+
+    with mon.run_span("run_lf") as run, mon.turn_span(1) as turn:
+        turn.set(
+            model="qwen3.5",
+            provider="ollama",
+            input_tokens=10,
+            output_tokens=4,
+            total_tokens=14,
+            cost=0.0,
+        )
+        with mon.tool_span("read_file") as tool:
+            tool.set(success=True, output={"text": "port=8080"}, error=None)
+        run.set(status="finished", turns=1)
+
+    mon.shutdown()
+
+    starts = [item["start"] for item in client.observations]
+    assert [item["as_type"] for item in starts] == ["agent", "generation", "tool"]
+    generation = client.observations[1]["update"]
+    assert generation["model"] == "qwen3.5"
+    assert generation["usage_details"] == {"input": 10, "output": 4, "total": 14}
+    assert client.observations[2]["update"]["output"] == {"text": "port=8080"}
+    assert mon.langfuse_trace_ids == {"run_lf": "trace-native"}
+    assert client.flushes == 1
+
+
 async def test_spans_nest_run_turn_tool_including_parallel_tools() -> None:
     """A tool's parent is its turn; a turn's parent is its run; the run is a root.
 

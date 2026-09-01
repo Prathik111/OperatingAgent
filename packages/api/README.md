@@ -101,9 +101,9 @@ snapshot **and** from its content hash before anything is written.
   and findings are not written yet.
 - Postgres repository behaviour is covered by an opt-in live test tier gated on
   `DATABASE_URL`, not by the hermetic unit suite.
-# Windows note
+## Windows note
 
-The psycopg async pool requires a Selector event loop on Windows. API launchers
-must install `asyncio.WindowsSelectorEventLoopPolicy()` before creating the event
-loop (or use a server configuration that does so); the default Proactor loop is
-not supported by psycopg async connections.
+The psycopg async pool requires a Selector event loop on Windows. The `api`
+console launcher passes that loop factory directly to Uvicorn, so `uv run api`
+works with the PostgreSQL repository instead of selecting the incompatible
+Proactor loop.

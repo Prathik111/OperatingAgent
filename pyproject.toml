@@ -85,6 +85,7 @@ filterwarnings = [
 [tool.ruff.lint.per-file-ignores]
 "packages/agent-native/src/agent_native/context.py" = ["S110"]
 "packages/agent-native/src/agent_native/loop.py" = ["BLE001", "S110", "S112"]
+"packages/agent-native/src/agent_native/monitoring.py" = ["BLE001", "S110"]
 "packages/agent-native/src/agent_native/tools/manager.py" = ["BLE001"]
 "packages/agent-native/src/agent_native/tools/mcp_bridge.py" = ["BLE001", "S110"]
 "packages/api/src/api/orchestration/factory.py" = ["BLE001"]

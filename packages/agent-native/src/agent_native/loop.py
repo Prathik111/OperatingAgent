@@ -363,7 +363,7 @@ class AgentLoop:
 
                     turn += 1
                     context.turn = turn
-                    with self._monitoring.turn_span(turn):
+                    with self._monitoring.turn_span(turn) as turn_trace:
                         await self._bus.emit(
                             session.id, EventType.TURN_STARTED, {"turn": turn}, run_id
                         )
@@ -389,9 +389,22 @@ class AgentLoop:
                         # run that changed models is summed across both rather than
                         # priced at whichever one happened to be active at the end.
                         if assistant_msg.usage:
-                            total_cost += model.cost_of(
+                            turn_cost = model.cost_of(
                                 assistant_msg.usage.input_tokens,
                                 assistant_msg.usage.output_tokens,
+                            )
+                            total_cost += turn_cost
+                            turn_trace.set(
+                                model=model.model_id,
+                                provider=model.provider,
+                                input_tokens=assistant_msg.usage.input_tokens,
+                                output_tokens=assistant_msg.usage.output_tokens,
+                                total_tokens=(
+                                    assistant_msg.usage.input_tokens
+                                    + assistant_msg.usage.output_tokens
+                                ),
+                                cached_tokens=assistant_msg.usage.cached_tokens,
+                                cost=turn_cost,
                             )
                         # Remember this turn's real prompt size for the next
                         # compaction check; ignore a turn the provider didn't
@@ -993,12 +1006,18 @@ class AgentLoop:
         else:
             result = await self._pre_tool_veto(call, context, read_only)  # a hook may block it
             if result is None:
-                with self._monitoring.tool_span(call.name):
+                with self._monitoring.tool_span(call.name) as tool_trace:
                     if limit is None:
                         result = await self._tool_manager.run_authorized(call, context)
                     else:
                         async with limit:
                             result = await self._tool_manager.run_authorized(call, context)
+                    tool_trace.set(
+                        success=result.success,
+                        output=result.output,
+                        error=result.error,
+                        truncated=result.truncated,
+                    )
                 await self._post_tool(call, context, result, read_only)  # observe what it returned
 
         call.status = ToolCallStatus.SUCCESS if result.success else ToolCallStatus.ERROR

@@ -1,7 +1,0 @@
-# Sample config for trying the agent's file tools.
-# Run from packages/agent-native with:  --dir ./demo
-# The agent reads paths relative to --dir, so it looks for "config.txt" right here.
-
-host = 0.0.0.0
-port = 8080
-debug = false
