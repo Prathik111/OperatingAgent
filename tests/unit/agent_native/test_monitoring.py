@@ -45,15 +45,14 @@ async def test_spans_nest_run_turn_tool_including_parallel_tools() -> None:
     mon = Monitoring()  # enabled, no trace_dir, no endpoint
     tool_parents: list = []
 
-    with mon.run_span("run_x") as run:
-        with mon.turn_span(1) as turn:
+    with mon.run_span("run_x") as run, mon.turn_span(1) as turn:
 
-            async def one_tool(name: str) -> None:
-                with mon.tool_span(name) as tool:
-                    await asyncio.sleep(0)
-                    tool_parents.append((name, tool.parent_id))
+        async def one_tool(name: str) -> None:
+            with mon.tool_span(name) as tool:
+                await asyncio.sleep(0)
+                tool_parents.append((name, tool.parent_id))
 
-            await asyncio.gather(one_tool("read_a"), one_tool("read_b"))
+        await asyncio.gather(one_tool("read_a"), one_tool("read_b"))
 
     assert run.parent_id == ""                 # the run is the root of its tree
     assert turn.parent_id == run.span_id       # the turn hangs off the run
@@ -70,9 +69,8 @@ async def test_spans_nest_run_turn_tool_including_parallel_tools() -> None:
 async def test_each_span_has_wallclock_start_and_a_duration() -> None:
     mon = Monitoring()
     before = __import__("time").time()
-    with mon.run_span("run_t"):
-        with mon.turn_span(1):
-            pass
+    with mon.run_span("run_t"), mon.turn_span(1):
+        pass
     after = __import__("time").time()
 
     for span in mon.spans:
@@ -85,10 +83,12 @@ async def test_json_fallback_lands_with_no_endpoint() -> None:
     """No collector configured: OTLP isn't attempted, and the JSON file is written."""
     with tempfile.TemporaryDirectory() as tmp:
         mon = Monitoring(trace_dir=tmp)
-        with mon.run_span("run_json"):
-            with mon.turn_span(1):
-                with mon.tool_span("read_a"):
-                    pass
+        with (
+            mon.run_span("run_json"),
+            mon.turn_span(1),
+            mon.tool_span("read_a"),
+        ):
+            pass
         written = mon.shutdown()
 
         assert not mon.otlp_attempted           # nowhere to send, so it didn't try
@@ -108,9 +108,8 @@ async def test_endpoint_set_but_extra_missing_degrades_to_json() -> None:
     """
     with tempfile.TemporaryDirectory() as tmp:
         mon = Monitoring(trace_dir=tmp, otlp_endpoint="http://localhost:4318/v1/traces")
-        with mon.run_span("run_otlp"):
-            with mon.turn_span(1):
-                pass
+        with mon.run_span("run_otlp"), mon.turn_span(1):
+            pass
         written = mon.shutdown()
 
         assert mon.otlp_attempted is True       # an endpoint was configured

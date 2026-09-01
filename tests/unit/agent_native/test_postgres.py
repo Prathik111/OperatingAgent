@@ -20,8 +20,8 @@ from agent_native.conversation import (
     Usage,
 )
 from agent_native.postgres import (
-    PostgresDatabase,
     REQUIRED_MIGRATION,
+    PostgresDatabase,
     _load_json,
     _part_from_json,
     _part_to_json,
@@ -42,7 +42,7 @@ class _FakeTx:
 
 
 class _FakeConn:
-    def __init__(self, pool: "_FakePool") -> None:
+    def __init__(self, pool: _FakePool) -> None:
         self._pool = pool
 
     async def execute(self, sql: str, *args):
@@ -59,7 +59,6 @@ class _FakeConn:
 
     async def fetchrow(self, sql: str, *args):
         self._pool.calls.append(("fetchrow", sql, args))
-        return None
 
     async def fetchval(self, sql: str, *args):
         self._pool.calls.append(("fetchval", sql, args))
@@ -76,7 +75,7 @@ class _FakeConn:
 
 
 class _Acquire:
-    def __init__(self, pool: "_FakePool") -> None:
+    def __init__(self, pool: _FakePool) -> None:
         self._pool = pool
 
     async def __aenter__(self):

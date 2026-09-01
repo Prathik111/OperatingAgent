@@ -14,7 +14,6 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from agent_langgraph.runtime.prompt_manager import DEFAULT_PROMPT_DIR
 from common.config import (
     AgentConfig,
     BehaviourConfig,
@@ -38,6 +37,7 @@ DEFAULT_CORS_ORIGINS = (
     "http://127.0.0.1:1420",
 )
 DEFAULT_ALLOWED_HOSTS = ("127.0.0.1", "localhost", "testserver")
+DEFAULT_PROMPT_DIR = Path(__file__).resolve().parents[3] / "agent-langgraph" / "prompts"
 
 
 def _split_csv(raw: str, default: tuple[str, ...]) -> tuple[str, ...]:

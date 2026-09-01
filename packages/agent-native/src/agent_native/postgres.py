@@ -39,18 +39,18 @@ and the numbered migrations; the application requires both `001_base` and
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
-import hashlib
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from .conversation import (
     Compaction,
     Conversation,
-    Message,
     Media,
+    Message,
     Reasoning,
     Role,
     Session,
@@ -100,11 +100,11 @@ class PostgresDatabase(Database):
         self._retry_first_delay = max(0.0, retry_first_delay)
         #: Built once by ``_transient_errors`` then cached - see there for why it
         #: can't just be a module constant.
-        self._transient: "tuple[type[BaseException], ...] | None" = None
+        self._transient: tuple[type[BaseException], ...] | None = None
 
     # -- lifecycle ---------------------------------------------------------
     @classmethod
-    async def open(cls, dsn: str, apply_schema: bool = True) -> "PostgresDatabase":
+    async def open(cls, dsn: str, apply_schema: bool = True) -> PostgresDatabase:
         """Connect and verify the infrastructure-owned canonical schema."""
         db = cls(dsn)
         await db.connect()
@@ -162,7 +162,7 @@ class PostgresDatabase(Database):
             raise RuntimeError("Not connected. Call `await database.connect()` first.")
         return self._pool.acquire()
 
-    def _transient_errors(self) -> "tuple[type[BaseException], ...]":
+    def _transient_errors(self) -> tuple[type[BaseException], ...]:
         """Exception types worth retrying: a lost or unreachable connection.
 
         Built once and cached. The builtin socket errors always apply; asyncpg's
@@ -175,7 +175,7 @@ class PostgresDatabase(Database):
         """
         if self._transient is not None:
             return self._transient
-        errors: "list[type[BaseException]]" = [
+        errors: list[type[BaseException]] = [
             ConnectionError,
             OSError,
             TimeoutError,
@@ -209,7 +209,7 @@ class PostgresDatabase(Database):
         ordinary asyncpg results and ordinary asyncpg errors.
         """
         delay = self._retry_first_delay
-        last: "BaseException | None" = None
+        last: BaseException | None = None
         for attempt in range(self._max_retries + 1):
             try:
                 async with self._acquire() as conn:
@@ -269,7 +269,7 @@ class PostgresDatabase(Database):
 
         await self._run(operation)
 
-    async def get_session(self, session_id: str) -> "Session | None":
+    async def get_session(self, session_id: str) -> Session | None:
         row = await self._fetchrow(
             "SELECT id, title, metadata FROM agent_threads WHERE id = $1",
             session_id,
@@ -653,7 +653,7 @@ def _part_from_json(data: dict) -> Any:
     return Text(data.get("text", ""))
 
 
-def _usage_to_json(usage: "Usage | None") -> "dict | None":
+def _usage_to_json(usage: Usage | None) -> dict | None:
     if usage is None:
         return None
     return {
@@ -673,7 +673,7 @@ def _row_to_message(row: Any) -> Message:
         parts=[_part_from_json(p) for p in _load_json(row["parts"], [])],
         model=row["model"],
         usage=Usage(**usage_data) if usage_data else None,
-        created_at=row["created_at"] or datetime.now(timezone.utc),
+        created_at=row["created_at"] or datetime.now(UTC),
     )
 
 

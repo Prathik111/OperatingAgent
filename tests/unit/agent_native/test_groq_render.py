@@ -110,7 +110,7 @@ async def test_groq_stream_converts_chunks():
     assert events[-1].type == StreamType.DONE
     assert events[-1].data["finish_reason"] == "tool_calls"
 
-    usage = [e for e in events if e.type == StreamType.USAGE][0]
+    usage = next(e for e in events if e.type == StreamType.USAGE)
     assert usage.data["input_tokens"] == 10
     assert usage.data["output_tokens"] == 5
 

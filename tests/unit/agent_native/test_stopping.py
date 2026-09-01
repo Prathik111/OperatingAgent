@@ -34,6 +34,7 @@ from agent_native.database import MemoryDatabase
 from agent_native.events import EventBus
 from agent_native.loop import AgentLoop, Cancellation, Limits, RunContext, RunStatus
 from agent_native.tools.base import ToolRegistry, ToolResult
+
 from tests._scripted import ScriptedProvider, call_event, scripted_registry, text_event
 
 

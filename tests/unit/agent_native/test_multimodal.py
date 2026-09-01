@@ -38,11 +38,11 @@ from typing import Any
 from agent_native.config import AgentConfig
 from agent_native.context import ContextManager
 from agent_native.conversation import (
+    _MEDIA_TOKEN_ESTIMATE,
     Conversation,
     PartType,
     Role,
     Session,
-    _MEDIA_TOKEN_ESTIMATE,
     media_part,
     system_message,
     user_message,

@@ -18,7 +18,12 @@ import os
 import tempfile
 from types import SimpleNamespace
 
-from agent_native.config import AgentConfig, PromptBuilder, read_branch, read_folder_listing
+from agent_native.config import (
+    AgentConfig,
+    PromptBuilder,
+    read_branch,
+    read_folder_listing,
+)
 from agent_native.models.base import mark_cacheable_prefix, stable_prefix_fingerprint
 
 

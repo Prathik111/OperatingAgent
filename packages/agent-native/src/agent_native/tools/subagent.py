@@ -90,7 +90,7 @@ class DelegateTool(Tool):
     @property
     def definition(self) -> ToolDefinition:
         helpers = self._helper_names()
-        schema = {
+        schema: dict[str, Any] = {
             "type": "object",
             "properties": {
                 "helper": {
@@ -110,7 +110,7 @@ class DelegateTool(Tool):
             "required": ["helper", "job"],
         }
         if helpers:
-            schema["properties"]["helper"]["enum"] = helpers
+            schema["properties"]["helper"]["enum"] = list(helpers)
         return ToolDefinition(
             name=TOOL_NAME,
             description=(
@@ -244,7 +244,7 @@ class DelegateTool(Tool):
         override = getattr(getattr(context, "limits", None), "helper_max_turns", 0) or 0
         return override or self._max_turns
 
-    def _config_for_helper(self, name: str, context: Any) -> "AgentConfig | None":
+    def _config_for_helper(self, name: str, context: Any) -> AgentConfig | None:
         """Find the named helper, and narrow its tools so it can't delegate again.
 
         Two places to look: the `subagents` the calling agent declares, and the
@@ -334,7 +334,7 @@ class FanOutTool(DelegateTool):
     @property
     def definition(self) -> ToolDefinition:
         helpers = self._helper_names()
-        schema = {
+        schema: dict[str, Any] = {
             "type": "object",
             "properties": {
                 "helper": {
@@ -356,7 +356,7 @@ class FanOutTool(DelegateTool):
             "required": ["helper", "jobs"],
         }
         if helpers:
-            schema["properties"]["helper"]["enum"] = helpers
+            schema["properties"]["helper"]["enum"] = list(helpers)
         return ToolDefinition(
             name=FANOUT_TOOL_NAME,
             description=(

@@ -72,8 +72,8 @@ except ImportError:
     _stub.FastMCP = _StubFastMCP
     sys.modules["fastmcp"] = _stub
 
-from file_server.services.filesystem_service import FileSystemService  # noqa: E402
-from file_server.tools.edit_file import register_edit_file  # noqa: E402
+from file_server.services.filesystem_service import FileSystemService
+from file_server.tools.edit_file import register_edit_file
 
 
 # ---------------------------------------------------------------------------
@@ -131,7 +131,7 @@ def _wrapper_fn():
     return mcp.tools["edit_file"]
 
 
-def _raises(fn, exc) -> "Exception | None":
+def _raises(fn, exc) -> Exception | None:
     try:
         fn()
     except exc as caught:
@@ -280,8 +280,8 @@ def test_return_payload_reports_replacements_and_byte_sizes() -> None:
         result = _service(root).edit_file(path, "BBB", "BBBB")
         assert result["path"] == str(Path(path).resolve())
         assert result["replacements"] == 1
-        assert result["bytes_before"] == len("aaa BBB ccc".encode("utf-8"))
-        assert result["bytes_after"] == len("aaa BBBB ccc".encode("utf-8"))
+        assert result["bytes_before"] == len(b"aaa BBB ccc")
+        assert result["bytes_after"] == len(b"aaa BBBB ccc")
         assert result["encoding"] == "utf-8"
 
 

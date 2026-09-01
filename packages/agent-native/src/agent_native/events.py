@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -48,7 +48,7 @@ class Event:
     session_id: str
     run_id: str = ""
     data: dict = field(default_factory=dict)
-    time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    time: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 _STOP = object()  # pushed to a subscriber's queue to end its stream
@@ -57,7 +57,7 @@ _STOP = object()  # pushed to a subscriber's queue to end its stream
 class EventBus:
     """Hands out numbers, stores every event, and streams them to live listeners."""
 
-    def __init__(self, database: "Database", redactor: "Redactor | None" = None) -> None:
+    def __init__(self, database: Database, redactor: Redactor | None = None) -> None:
         self._db = database
         self._subscribers: dict = {}  # session_id -> list[asyncio.Queue]
         self._locks: dict[str, asyncio.Lock] = {}

@@ -27,8 +27,9 @@ working, and stay predictable enough to test against.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 from .conversation import (
     Compaction,
@@ -71,7 +72,7 @@ class TokenCounter:
     stored - two places keeping the same running total is how they drift apart.
     """
 
-    def __init__(self, count_fn: "Callable | None" = None) -> None:
+    def __init__(self, count_fn: Callable | None = None) -> None:
         self._count_fn = count_fn
 
     def count(self, wire_messages: list) -> int:
@@ -95,7 +96,7 @@ class ContextManager:
 
     def __init__(
         self,
-        token_counter: "TokenCounter | None" = None,
+        token_counter: TokenCounter | None = None,
         recent_window: int = 6,
         threshold: float = 0.8,
     ) -> None:
@@ -108,7 +109,7 @@ class ContextManager:
         self,
         conversation: Conversation,
         model: Any,
-        observed_input_tokens: "int | None" = None,
+        observed_input_tokens: int | None = None,
     ) -> bool:
         """True when the conversation is close enough to the window to fold it.
 
@@ -161,7 +162,7 @@ class ContextManager:
         recent_conv = Conversation(recent)
         return older_conv.is_valid() and recent_conv.is_valid()
 
-    def compact(self, conversation: Conversation, model: Any) -> "CompactionResult | None":
+    def compact(self, conversation: Conversation, model: Any) -> CompactionResult | None:
         """Fold older messages into a template summary. None if there's nothing to fold.
 
         No model call, so this is safe to call from anywhere and gives the same
@@ -178,7 +179,7 @@ class ContextManager:
         conversation: Conversation,
         model: Any,
         provider: Any = None,
-    ) -> "CompactionResult | None":
+    ) -> CompactionResult | None:
         """Same fold, but with the model writing the summary where it can.
 
         Every way the model call can go wrong ends in the template: no provider, a

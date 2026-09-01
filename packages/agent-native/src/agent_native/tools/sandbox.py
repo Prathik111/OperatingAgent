@@ -74,7 +74,7 @@ class ContainerSandbox:
         arguments: dict,
         context: Any,
         timeout: float,
-    ) -> "ToolResult | None":
+    ) -> ToolResult | None:
         """Run this tool in the session's container. None means "couldn't"."""
         command = tool.sandbox_command(dict(arguments or {}))
         if not command:
@@ -171,10 +171,11 @@ class ContainerSandbox:
                 f"runtime ({', '.join(missing)} missing)"
             )
             return None
-        ContainerPool = sandbox_package.ContainerPool
-        DEFAULT_CPUS = sandbox_package.DEFAULT_CPUS
-        DEFAULT_IMAGE = sandbox_package.DEFAULT_IMAGE
-        DEFAULT_MEMORY = sandbox_package.DEFAULT_MEMORY
+        exports = vars(sandbox_package)
+        ContainerPool = exports["ContainerPool"]
+        DEFAULT_CPUS = exports["DEFAULT_CPUS"]
+        DEFAULT_IMAGE = exports["DEFAULT_IMAGE"]
+        DEFAULT_MEMORY = exports["DEFAULT_MEMORY"]
         self._pool = ContainerPool(
             image=self._image or DEFAULT_IMAGE,
             memory=self._memory or DEFAULT_MEMORY,

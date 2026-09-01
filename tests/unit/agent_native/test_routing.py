@@ -31,7 +31,6 @@ pytest, or straight on a box without it:
 from __future__ import annotations
 
 import asyncio
-import json
 import sys
 from typing import Any
 
@@ -204,7 +203,7 @@ def _model(name: str, provider: str, in_price: float = 0.0, out_price: float = 0
     )
 
 
-def _loop(reg: ModelRegistry, tools: "ToolRegistry | None" = None):
+def _loop(reg: ModelRegistry, tools: ToolRegistry | None = None):
     """A loop wired to `reg`, an allow-all gate, and a must-not-ask prompter."""
     db = MemoryDatabase()
     tools = tools if tools is not None else ToolRegistry()

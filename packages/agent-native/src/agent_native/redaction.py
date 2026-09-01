@@ -59,7 +59,7 @@ class EnvSecretSource(SecretSource):
     `GROQ_API_KEY` doesn't turn `""` into something we try to mask everywhere.
     """
 
-    def __init__(self, var_names: "tuple[str, ...]" = ("GROQ_API_KEY",)) -> None:
+    def __init__(self, var_names: tuple[str, ...] = ("GROQ_API_KEY",)) -> None:
         self._var_names = tuple(var_names)
 
     def values(self) -> list[str]:
@@ -75,7 +75,7 @@ class StaticSecretSource(SecretSource):
     """A fixed set of secret strings. Handy for tests and for callers that hold a
     secret in hand rather than in the environment."""
 
-    def __init__(self, values: "list[str] | tuple[str, ...]") -> None:
+    def __init__(self, values: list[str] | tuple[str, ...]) -> None:
         self._values = [v for v in values if v and len(v) >= _MIN_VALUE_LEN]
 
     def values(self) -> list[str]:
@@ -114,7 +114,7 @@ class Redactor:
     keep their exact values.
     """
 
-    def __init__(self, source: "SecretSource | None" = None, mask: str = MASK) -> None:
+    def __init__(self, source: SecretSource | None = None, mask: str = MASK) -> None:
         self._source = source if source is not None else EnvSecretSource()
         self._mask = mask
 

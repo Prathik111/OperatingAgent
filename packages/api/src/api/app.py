@@ -44,7 +44,10 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         if pool is not None:
             await pool.open()
 
-        approval_gateway = ApprovalGateway(threshold=settings.approval_threshold)
+        approval_gateway = ApprovalGateway(
+            threshold=settings.approval_threshold,
+            repository=repository,
+        )
         orchestrators = build_orchestrators(
             settings, approval_handler=approval_gateway
         )
@@ -59,6 +62,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             orchestrators=orchestrators,
             repository=repository,
             broker=broker,
+            approvals=approval_gateway,
             settings=settings,
             background=background,
         )

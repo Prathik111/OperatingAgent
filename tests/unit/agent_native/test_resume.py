@@ -50,6 +50,7 @@ from agent_native.events import Event, EventBus, EventType
 from agent_native.loop import AgentLoop, Cancellation, Limits, RunContext, RunStatus
 from agent_native.service import AgentRuntime, AgentService
 from agent_native.tools.base import ToolRegistry, ToolResult
+
 from tests._scripted import ScriptedProvider, scripted_registry, text_event
 
 

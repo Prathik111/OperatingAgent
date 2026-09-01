@@ -69,7 +69,7 @@ def _args(session: str = "", directory: str = "", limit: int = 0) -> argparse.Na
 
 
 async def test_list_sessions_filters_by_folder_and_is_newest_first() -> None:
-    db, dir_a, dir_b = await _seed()
+    db, dir_a, _dir_b = await _seed()
 
     every = await db.list_sessions()
     assert [s.id for s in every] == ["sb", "sa"]        # sb created last -> first

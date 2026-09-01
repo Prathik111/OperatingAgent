@@ -22,6 +22,7 @@ from agent_native.models.base import Model
 from agent_native.models.groq_model import GROQ_MODELS, Groq
 from agent_native.permissions import PermissionDuration
 from agent_native.service import AgentRuntime, AgentService
+
 from tests._fake_tools import default_tools as fake_default_tools
 
 
@@ -29,7 +30,7 @@ class Skip(Exception):
     """Raised by a test that can't run here (no key, no groq, no network)."""
 
 
-def live_groq_available() -> "str | None":
+def live_groq_available() -> str | None:
     """Return None if a live Groq run is possible, else a reason string."""
     if os.getenv("OPERATING_AGENT_ENABLE_LIVE_TESTS") != "1":
         return "set OPERATING_AGENT_ENABLE_LIVE_TESTS=1 to enable paid live tests"
@@ -88,7 +89,7 @@ async def run_with_auto_permissions(
     text: str,
     answer: bool = True,
     duration: Any = PermissionDuration.SESSION,
-    limits: "Limits | None" = None,
+    limits: Limits | None = None,
 ):
     """Run send_message while a background task answers any permission prompt.
 

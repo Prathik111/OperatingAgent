@@ -36,6 +36,7 @@ from agent_native.database import MemoryDatabase
 from agent_native.main import _dispatch_sessions, _render_sessions_table
 from agent_native.permissions import PermissionDuration, PermissionGrant
 from agent_native.service import AgentRuntime, AgentService
+
 from tests._scripted import ScriptedProvider, scripted_registry, text_event
 
 

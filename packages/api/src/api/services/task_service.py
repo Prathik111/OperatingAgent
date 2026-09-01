@@ -20,10 +20,10 @@ from common.enums import AgentTrack, RunStatus, TaskStatus
 from common.events import AgentEvent, LLMCallRecord, ToolCallRecord
 from common.interfaces import IAgentOrchestrator
 
-from api.repository.base import TaskRepository, ThreadRecord
-
 from ..config import ApiSettings
 from ..errors import UnknownTrack
+from ..repository.base import TaskRepository, ThreadRecord
+from .approval_gateway import ApprovalGateway
 from .event_broker import EventBroker
 
 log = logging.getLogger(__name__)
@@ -47,12 +47,14 @@ class TaskService:
         orchestrators: dict[AgentTrack, IAgentOrchestrator],
         repository: TaskRepository,
         broker: EventBroker,
+        approvals: ApprovalGateway,
         settings: ApiSettings,
         background: set[asyncio.Task],
     ) -> None:
         self._orchestrators = orchestrators
         self._repo = repository
         self._broker = broker
+        self._approvals = approvals
         self._settings = settings
         # Held so the event loop keeps a strong ref — asyncio only weak-refs
         # tasks, so a fire-and-forget run could otherwise be GC'd mid-flight.

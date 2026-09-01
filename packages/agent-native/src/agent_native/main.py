@@ -68,6 +68,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from .checkpoint import CheckpointStore, default_base_for, install_auto_checkpoint
 from .config import AgentConfig
 from .events import EventType
 from .loop import Limits
@@ -81,11 +82,9 @@ from .permissions import (
     PermissionRequest,
     PermissionResponder,
 )
-from .checkpoint import CheckpointStore, default_base_for, install_auto_checkpoint
 from .service import AgentRuntime, AgentService
 from .tools.mcp_bridge import MCPToolProvider
 from .tools.subagent import is_helper_run
-
 
 # A sensible default model for each backend, used when --model is omitted.
 DEFAULT_MODELS = {
@@ -333,6 +332,7 @@ async def _run(args: argparse.Namespace) -> int:
     # If the safety net caught a pre-edit snapshot, say so and how to undo it.
     if checkpoint_store is not None and checkpoint_store.list():
         cp = checkpoint_store.latest()
+        assert cp is not None
         print(
             f"[checkpoint] snapshot of the folder taken before edits "
             f"({cp.file_count} files). Undo them with: "
@@ -654,7 +654,7 @@ def _render_runs_table(runs: list) -> str:
 
 
 def _format_table(
-    headers: list, rows: list, aligns: list, footer: "list | None" = None
+    headers: list, rows: list, aligns: list, footer: list | None = None
 ) -> str:
     """A minimal fixed-width table: header, a rule, the rows, and an optional footer.
 
@@ -744,7 +744,9 @@ def _render_checkpoints_table(snapshots: list) -> str:
     rows = [("ID", "TAKEN", "FILES", "LABEL")]
     for cp in snapshots:
         when = (
-            _dt.datetime.fromtimestamp(cp.created_at).strftime("%Y-%m-%d %H:%M:%S")
+            _dt.datetime.fromtimestamp(cp.created_at, _dt.UTC).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
             if cp.created_at
             else "-"
         )

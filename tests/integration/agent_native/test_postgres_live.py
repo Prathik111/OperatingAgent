@@ -4,14 +4,12 @@ import os
 import uuid
 
 import pytest
-
 from agent_native.conversation import Role, Session, media_part, user_message
 from agent_native.events import Event
 from agent_native.loop import RunRecord
 from agent_native.memory import Memory
 from agent_native.permissions import PermissionDuration, PermissionGrant
 from agent_native.postgres import PostgresDatabase
-
 
 DSN = os.getenv("OPERATING_AGENT_POSTGRES_DSN", "")
 pytestmark = pytest.mark.skipif(not DSN, reason="set OPERATING_AGENT_POSTGRES_DSN for live Postgres")

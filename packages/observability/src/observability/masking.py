@@ -69,7 +69,7 @@ def mask(*, data: Any, **kwargs: Any) -> Any:
     """
     try:
         return _mask_value(data)
-    except Exception:  # noqa: BLE001 - masking must fail closed for any payload
+    except Exception:
         return _REDACTED
 
 

@@ -1,18 +1,16 @@
 from __future__ import annotations
 
-import os
 import asyncio
+import os
 import sys
 from uuid import uuid4
 
 import pytest
-from psycopg_pool import AsyncConnectionPool
-
+from api.config import ApiSettings
+from api.repository.postgres import PostgresTaskRepository
 from common.agent import AgentTask
 from common.enums import AgentTrack
-from packages.api.src.api.config import ApiSettings
-from packages.api.src.api.repository.postgres import PostgresTaskRepository
-
+from psycopg_pool import AsyncConnectionPool
 
 DSN = os.getenv("DATABASE_URL", "")
 pytestmark = pytest.mark.skipif(not DSN, reason="set DATABASE_URL for live Postgres")

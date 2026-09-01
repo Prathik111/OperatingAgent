@@ -39,7 +39,12 @@ from typing import Any
 
 from agent_native.config import AgentConfig
 from agent_native.context import ContextManager
-from agent_native.conversation import Conversation, Session, system_message, user_message
+from agent_native.conversation import (
+    Conversation,
+    Session,
+    system_message,
+    user_message,
+)
 from agent_native.database import MemoryDatabase
 from agent_native.events import EventBus
 from agent_native.hooks import HookContext, HookManager, HookOutcome, HookPoint

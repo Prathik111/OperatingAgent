@@ -1,25 +1,24 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
-
+from api.config import ApiSettings
+from api.repository.base import TaskRepository
+from api.repository.memory import InMemoryTaskRepository
+from api.services.approval_gateway import ApprovalGateway, ApprovalRequest
+from api.services.event_broker import EventBroker
+from api.services.task_service import TaskService
 from common.agent import AgentRunResult, AgentTask
 from common.enums import AgentTrack, RiskLevel, RunStatus
 from common.events import AgentEvent, LLMCallRecord, ToolCallRecord
-from packages.api.src.api.config import ApiSettings
-from packages.api.src.api.repository.base import TaskRepository
-from packages.api.src.api.repository.memory import InMemoryTaskRepository
-from packages.api.src.api.services.approval_gateway import ApprovalGateway, ApprovalRequest
-from packages.api.src.api.services.event_broker import EventBroker
-from packages.api.src.api.services.task_service import TaskService
 
 
 class MetricsOrchestrator:
     async def run(self, task, on_event=None):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         await on_event(
             AgentEvent(
                 type="llm_call",

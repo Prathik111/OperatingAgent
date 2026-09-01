@@ -16,6 +16,8 @@ class ApprovalRequest:
     arguments: dict[str, Any]
     risk_level: RiskLevel | None = None
     description: str | None = None
+    run_id: str | None = None
+    plan_step_id: str | None = None
 
 
 class ApprovalHandler(Protocol):

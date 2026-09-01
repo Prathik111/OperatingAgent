@@ -30,9 +30,10 @@ Two properties the rest of the system leans on:
 from __future__ import annotations
 
 import inspect
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable
+from typing import Any
 
 
 class HookPoint(str, Enum):
@@ -104,7 +105,7 @@ class HookManager:
         """Add a hook at a point. Registering the same callable twice runs it twice."""
         self._hooks.setdefault(point, []).append(hook)
 
-    def clear(self, point: "HookPoint | None" = None) -> None:
+    def clear(self, point: HookPoint | None = None) -> None:
         """Remove hooks - at one point, or all of them. Restores hook-free behaviour."""
         if point is None:
             self._hooks.clear()
@@ -116,7 +117,7 @@ class HookManager:
         so that, with no hooks, dispatch is never even entered."""
         return bool(self._hooks.get(point))
 
-    async def dispatch(self, context: HookContext) -> "HookOutcome | None":
+    async def dispatch(self, context: HookContext) -> HookOutcome | None:
         """Run every hook at `context.point`, in order, and report a veto if one asks.
 
         Returns the first `HookOutcome(block=True, ...)` a hook produced - which only
@@ -127,7 +128,7 @@ class HookManager:
         hooks = self._hooks.get(context.point)
         if not hooks:
             return None
-        blocking: "HookOutcome | None" = None
+        blocking: HookOutcome | None = None
         for hook in hooks:
             try:
                 outcome = hook(context)

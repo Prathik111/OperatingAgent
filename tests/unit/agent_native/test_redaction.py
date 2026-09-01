@@ -136,9 +136,10 @@ async def test_a_bare_event_bus_stays_literal() -> None:
 def test_trace_json_is_redacted_but_live_spans_stay_exact() -> None:
     tmp = Path(tempfile.mkdtemp(prefix="an_trace_"))
     mon = Monitoring(trace_dir=tmp, redactor=Redactor(StaticSecretSource([SECRET])))
-    with mon.run_span("run_x"):
-        with mon.tool_span("shell", output=f"KEY={SECRET}") as tr:
-            pass
+    with mon.run_span("run_x"), mon.tool_span(
+        "shell", output=f"KEY={SECRET}"
+    ) as tr:
+        pass
     # Live span keeps the real value - it's in-process state, not a sink.
     assert tr.attributes["output"] == f"KEY={SECRET}"
 

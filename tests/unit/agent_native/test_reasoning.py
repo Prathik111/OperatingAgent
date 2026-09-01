@@ -29,17 +29,30 @@ from __future__ import annotations
 
 import asyncio
 import sys
-from typing import Any
+from typing import Any, ClassVar
 
 from agent_native.config import AgentConfig
 from agent_native.context import ContextManager
-from agent_native.conversation import Conversation, Session, system_message, user_message
+from agent_native.conversation import (
+    Conversation,
+    Session,
+    system_message,
+    user_message,
+)
 from agent_native.database import MemoryDatabase
 from agent_native.events import EventBus, EventType
-from agent_native.loop import AgentLoop, Cancellation, Limits, RunContext, RunRecord, RunStatus
+from agent_native.loop import (
+    AgentLoop,
+    Cancellation,
+    Limits,
+    RunContext,
+    RunRecord,
+    RunStatus,
+)
 from agent_native.main import _receipt, _render_runs_table, _runs_totals
 from agent_native.models.base import Model, ModelRegistry, StreamEvent, StreamType
 from agent_native.tools.base import ToolRegistry
+
 from tests._scripted import ScriptedProvider, text_event
 
 
@@ -52,7 +65,12 @@ class ReasoningProvider:
     reasoning model bills it. No network, no key.
     """
 
-    _SCALE = {"": 0, "low": 10, "medium": 50, "high": 200}
+    _SCALE: ClassVar[dict[str, int]] = {
+        "": 0,
+        "low": 10,
+        "medium": 50,
+        "high": 200,
+    }
 
     def __init__(self) -> None:
         self.efforts: list = []

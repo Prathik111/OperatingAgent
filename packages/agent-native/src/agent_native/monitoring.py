@@ -36,12 +36,13 @@ import json
 import os
 import time
 import uuid
-from contextlib import contextmanager
+from collections.abc import Iterator
+from contextlib import AbstractContextManager, contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 #: Which run the code currently executing belongs to. A ContextVar rather than a
 #: plain attribute because two runs can be in flight in the same process, and
@@ -72,7 +73,7 @@ class Trace:
     name: str
     attributes: dict = field(default_factory=dict)
     start: float = field(default_factory=time.monotonic)
-    end: "float | None" = None
+    end: float | None = None
     run_id: str = ""
     span_id: str = field(default_factory=lambda: uuid.uuid4().hex[:16])
     parent_id: str = ""
@@ -96,13 +97,13 @@ class Monitoring:
     def __init__(
         self,
         enabled: bool = True,
-        trace_dir: "Path | str | None" = None,
+        trace_dir: Path | str | None = None,
         max_spans: int = 10_000,
         *,
         otlp_endpoint: str = "",
-        otlp_headers: "dict | None" = None,
+        otlp_headers: dict | None = None,
         service_name: str = "agent-native",
-        redactor: "Any | None" = None,
+        redactor: Any | None = None,
     ) -> None:
         self.enabled = enabled
         # No directory means "remember, don't write". Tests use that; so does any
@@ -163,10 +164,10 @@ class Monitoring:
         finally:
             _CURRENT_RUN.reset(token)
 
-    def turn_span(self, turn: int, **attributes) -> "Iterator[Trace]":
+    def turn_span(self, turn: int, **attributes) -> AbstractContextManager[Trace]:
         return self._span("turn", turn=turn, **attributes)
 
-    def tool_span(self, tool: str, **attributes) -> "Iterator[Trace]":
+    def tool_span(self, tool: str, **attributes) -> AbstractContextManager[Trace]:
         return self._span("tool", tool=tool, **attributes)
 
     def shutdown(self) -> list:
@@ -224,7 +225,7 @@ class Monitoring:
             origin = min(trace.start for trace in traces)
             payload = {
                 "run_id": run_id,
-                "written_at": datetime.now(timezone.utc).isoformat(),
+                "written_at": datetime.now(UTC).isoformat(),
                 "span_count": len(traces),
                 "spans": [
                     {
@@ -236,7 +237,10 @@ class Monitoring:
                     for trace in traces
                 ],
             }
-            path = self.trace_dir / f"{run_id or 'no-run'}.json"  # type: ignore[union-attr]
+            trace_dir = self.trace_dir
+            if trace_dir is None:
+                return
+            path = trace_dir / f"{run_id or 'no-run'}.json"
             try:
                 path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
             except OSError:
@@ -252,7 +256,7 @@ class Monitoring:
             or os.environ.get("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
         )
 
-    def _export_otlp(self, spans: list) -> "tuple[bool, str]":
+    def _export_otlp(self, spans: list) -> tuple[bool, str]:
         """Replay the recorded spans as OTel spans and push them to the collector.
 
         Returns `(exported, reason)`. `exported` is True only if the spans were
@@ -299,7 +303,7 @@ class Monitoring:
             # before any child runs inside it, so creation order already satisfies
             # this; a child whose parent is somehow missing is created as a root
             # rather than dropped.
-            made: dict = {}
+            made: dict[str, Any] = {}
             for tr in spans:
                 parent = made.get(tr.parent_id)
                 ctx = ot_trace.set_span_in_context(parent) if parent is not None else None
@@ -314,9 +318,11 @@ class Monitoring:
             # End children before parents, so a parent's duration still encloses
             # them in the exported trace.
             for tr in reversed(spans):
-                span = made.get(tr.span_id)
-                if span is not None:
-                    span.end(end_time=int((tr.start_wall + tr.duration_s) * 1_000_000_000))
+                exported_span = made.get(tr.span_id)
+                if exported_span is not None:
+                    exported_span.end(
+                        end_time=int((tr.start_wall + tr.duration_s) * 1_000_000_000)
+                    )
 
             provider.force_flush()
             provider.shutdown()

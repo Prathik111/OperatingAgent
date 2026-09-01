@@ -254,8 +254,8 @@ class AgentLoop:
         event_bus: Any,
         database: Any,
         monitoring: Any = None,
-        retry_coordinator: "RetryCoordinator | None" = None,
-        hooks: "HookManager | None" = None,
+        retry_coordinator: RetryCoordinator | None = None,
+        hooks: HookManager | None = None,
     ) -> None:
         self._models = models
         self._tools = tools
@@ -480,7 +480,9 @@ class AgentLoop:
         """
         if not (self._hooks.has(HookPoint.RUN_STOP) or self._hooks.has(HookPoint.SUBAGENT_STOP)):
             return
-        from .tools.subagent import is_helper_run  # lazy: loop <-> subagent import cycle
+        from .tools.subagent import (
+            is_helper_run,  # lazy: loop <-> subagent import cycle
+        )
 
         point = HookPoint.SUBAGENT_STOP if is_helper_run(run_id) else HookPoint.RUN_STOP
         await self._hooks.dispatch(
@@ -566,7 +568,7 @@ class AgentLoop:
             try:
                 model = self._models.get(name)
                 provider = self._models.get_provider(model)
-            except Exception:  # noqa: BLE001 - a broken fallback is skipped, never fatal
+            except Exception:
                 continue
             candidates.append((model, provider))
         return candidates
@@ -698,7 +700,7 @@ class AgentLoop:
         model: Any,
         provider: Any,
         context: RunContext,
-        progress: "dict | None" = None,
+        progress: dict | None = None,
     ):
         """One attempt at a turn: stream the reply and build it into a Message.
 
@@ -967,7 +969,7 @@ class AgentLoop:
         call: Any,
         refusal: Any,
         context: RunContext,
-        limit: "asyncio.Semaphore | None",
+        limit: asyncio.Semaphore | None,
     ) -> Any:
         """One tool call, from its start event to its finish event."""
         session = context.session
@@ -1021,7 +1023,7 @@ class AgentLoop:
     # -- lifecycle hooks around a tool call ---------------------------------
     async def _pre_tool_veto(
         self, call: Any, context: RunContext, read_only: bool
-    ) -> "ToolResult | None":
+    ) -> ToolResult | None:
         """Run the PRE_TOOL hooks; return a refusal result if one vetoed, else None.
 
         With no PRE_TOOL hook registered this returns None without building a
@@ -1188,7 +1190,7 @@ async def _close_stream(stream: Any) -> None:
         return
     try:
         await close()
-    except Exception:  # noqa: BLE001 - see the docstring
+    except Exception:
         pass
 
 
@@ -1219,7 +1221,7 @@ def _parse_args(raw: str) -> dict:
         return {}
 
 
-def _add_usage(total: Usage, usage: "Usage | None") -> None:
+def _add_usage(total: Usage, usage: Usage | None) -> None:
     if usage is None:
         return
     total.input_tokens += usage.input_tokens

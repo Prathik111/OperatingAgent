@@ -103,6 +103,6 @@ class EventBroker:
                 yield item
         finally:
             async with self._lock:
-                topic = self._topics.get(task_id)
-                if topic is not None:
-                    topic.subscribers.discard(queue)
+                current_topic = self._topics.get(task_id)
+                if current_topic is not None:
+                    current_topic.subscribers.discard(queue)

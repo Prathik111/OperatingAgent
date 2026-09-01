@@ -119,7 +119,7 @@ class MCPTool(Tool):
             )
         return _to_tool_result(raw)
 
-    def sandbox_command(self, arguments: dict) -> "str | None":
+    def sandbox_command(self, arguments: dict) -> str | None:
         """The shell command this call would run, so it can run in a container.
 
         Only the terminal tool has one. Everything else here answers None and keeps

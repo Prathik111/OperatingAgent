@@ -40,7 +40,7 @@ from typing import Any
 from agent_native.config import AgentConfig, Subagent
 from agent_native.conversation import Session
 from agent_native.database import MemoryDatabase
-from agent_native.loop import Cancellation, Limits, RunContext, RunStatus
+from agent_native.loop import Cancellation, Limits, RunContext
 from agent_native.models.base import Model, ModelRegistry, StreamEvent, StreamType
 from agent_native.service import AgentRuntime
 from agent_native.tools.base import (
@@ -205,7 +205,7 @@ def _runtime_with_worker(provider: Any, register_noop: bool = False) -> tuple:
 def _context(
     runtime: AgentRuntime,
     session: Session,
-    cancellation: "Cancellation | None" = None,
+    cancellation: Cancellation | None = None,
     helper_max_turns: int = 0,
 ) -> RunContext:
     # max_parallel_tools=8 so a width-5 fan-out isn't throttled below its width -

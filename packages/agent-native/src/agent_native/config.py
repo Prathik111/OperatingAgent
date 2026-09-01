@@ -23,7 +23,7 @@ tool, when it has a reason.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -95,7 +95,7 @@ class PromptBuilder:
         self,
         config: AgentConfig,
         session: Any,
-        tool_names: "list | None" = None,
+        tool_names: list | None = None,
         project_instructions: str = "",
         remembered: str = "",
         skills: str = "",
@@ -114,7 +114,7 @@ class PromptBuilder:
         listing = read_folder_listing(workdir)
         if listing:
             lines.append("At the top level of it: " + listing)
-        lines.append(f"Today's date: {datetime.now(timezone.utc):%Y-%m-%d}")
+        lines.append(f"Today's date: {datetime.now(UTC):%Y-%m-%d}")
         if tool_names:
             lines.append("Tools you can use: " + ", ".join(tool_names) + ".")
         lines.append(
@@ -136,8 +136,10 @@ class PromptBuilder:
             lines.extend(
                 [
                     "",
-                    "The user left standing instructions for this project. Follow "
-                    "them over your own defaults:",
+                    (
+                        "The user left standing instructions for this project. Follow "
+                        "them over your own defaults:"
+                    ),
                     project_instructions.strip(),
                 ]
             )
@@ -147,8 +149,10 @@ class PromptBuilder:
                     "",
                     "From earlier conversations:",
                     remembered.strip(),
-                    "If one of these is now wrong, say so and keep the corrected "
-                    "version with the remember tool.",
+                    (
+                        "If one of these is now wrong, say so and keep the corrected "
+                        "version with the remember tool."
+                    ),
                 ]
             )
         return "\n".join(lines)
@@ -274,7 +278,7 @@ class Skill:
         return body.strip() or text.strip()
 
 
-def discover_skills(working_directory: str) -> "list[Skill]":
+def discover_skills(working_directory: str) -> list[Skill]:
     """Find every skill under the working folder's skill roots. Never raises.
 
     A skill is a named subfolder holding a ``SKILL.md``. Only the top level of
@@ -311,7 +315,7 @@ def discover_skills(working_directory: str) -> "list[Skill]":
     return sorted(found.values(), key=lambda skill: skill.name.lower())[:MAX_SKILLS]
 
 
-def skill_listing(skills: "list[Skill]") -> str:
+def skill_listing(skills: list[Skill]) -> str:
     """The cheap, always-in-the-prompt catalogue: one line per skill, bodies left out.
 
     This is the economy of the feature - the model learns a skill *exists* and what
@@ -321,9 +325,11 @@ def skill_listing(skills: "list[Skill]") -> str:
     if not skills:
         return ""
     lines = [
-        "Skills available for this project. Each is a set of instructions you load "
-        "only when a task calls for it; when one matches, call the invoke_skill tool "
-        "with its name to read its full instructions before you start:"
+        (
+            "Skills available for this project. Each is a set of instructions you load "
+            "only when a task calls for it; when one matches, call the invoke_skill tool "
+            "with its name to read its full instructions before you start:"
+        )
     ]
     lines.extend(
         f"- {skill.name}: {skill.description}" if skill.description else f"- {skill.name}"
@@ -332,7 +338,7 @@ def skill_listing(skills: "list[Skill]") -> str:
     return "\n".join(lines)
 
 
-def _split_frontmatter(text: str) -> "tuple[dict, str]":
+def _split_frontmatter(text: str) -> tuple[dict, str]:
     """Parse a leading ``---`` frontmatter block into a dict, plus the body after it.
 
     Only the handful of ``key: value`` lines a skill needs (name, description) are

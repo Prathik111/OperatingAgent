@@ -25,7 +25,8 @@ class IMCPClient(Protocol):
 
 class IAgentOrchestrator(Protocol):
 
-    async def run( self, task: AgentTask, on_event: EventCallback | None = None,
+    async def run(
+        self, task: AgentTask, on_event: EventCallback | None = None
     ) -> AgentRunResult: ...
 
     async def aclose(self) -> None: ...

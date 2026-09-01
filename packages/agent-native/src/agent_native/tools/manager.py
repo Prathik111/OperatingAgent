@@ -46,7 +46,7 @@ class ToolManager:
         registry: ToolRegistry,
         policy: Any,
         permissions: Any,
-        argument_checker: "ArgumentChecker | None" = None,
+        argument_checker: ArgumentChecker | None = None,
         max_output_chars: int = 12_000,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         sandbox: Any = None,
@@ -68,7 +68,7 @@ class ToolManager:
             return refusal
         return await self.run_authorized(tool_call, context)
 
-    async def authorize(self, tool_call: Any, context: Any) -> "ToolResult | None":
+    async def authorize(self, tool_call: Any, context: Any) -> ToolResult | None:
         """Everything that happens before a tool runs.
 
         Returns None when the call may go ahead, or the result explaining why it
@@ -99,7 +99,7 @@ class ToolManager:
             result = await asyncio.wait_for(
                 self._invoke(tool, tool_call, context, seconds), timeout=seconds
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             # A timeout is a result like any other: the model reads it and can try
             # something narrower instead of the run dying here.
             return ToolResult(False, error=f"Timed out after {seconds:g}s")
@@ -130,7 +130,7 @@ class ToolManager:
         return float(own) if own > 0 else self._timeout
 
     # -- the pieces, named so the flow reads top to bottom ------------------
-    def _find_tool(self, name: str) -> "Tool | None":
+    def _find_tool(self, name: str) -> Tool | None:
         return self._registry.find(name)
 
     async def _check_permission(self, context: Any, tool: Tool, tool_call: Any) -> tuple:

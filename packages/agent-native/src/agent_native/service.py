@@ -34,7 +34,6 @@ from .loop import (
 from .memory import MemoryStore, read_project_instructions
 from .models.base import ModelRegistry
 from .monitoring import Monitoring
-from .redaction import Redactor
 from .permissions import (
     PermissionDuration,
     PermissionManager,
@@ -45,6 +44,7 @@ from .permissions import (
     SessionPolicy,
     WorkspacePolicy,
 )
+from .redaction import Redactor
 from .tools.base import ToolRegistry
 from .tools.builtins import default_tools
 from .tools.manager import ToolManager
@@ -59,12 +59,12 @@ class AgentRuntime:
 
     def __init__(
         self,
-        database: "Database | None" = None,
-        model_registry: "ModelRegistry | None" = None,
-        tool_registry: "ToolRegistry | None" = None,
+        database: Database | None = None,
+        model_registry: ModelRegistry | None = None,
+        tool_registry: ToolRegistry | None = None,
         policy: Any = None,
-        agents: "list | None" = None,
-        monitoring: "Monitoring | None" = None,
+        agents: list | None = None,
+        monitoring: Monitoring | None = None,
         sandbox: Any = None,
     ) -> None:
         self.database = database or MemoryDatabase()
@@ -207,8 +207,8 @@ class AgentService:
         self,
         session_id: str,
         text: str,
-        limits: "Limits | None" = None,
-        cancellation: "Cancellation | None" = None,
+        limits: Limits | None = None,
+        cancellation: Cancellation | None = None,
     ):
         """Add the user's message and run the agent until it stops."""
         session = await self.runtime.database.get_session(session_id)
@@ -255,8 +255,8 @@ class AgentService:
     async def resume_run(
         self,
         session_id: str,
-        limits: "Limits | None" = None,
-        cancellation: "Cancellation | None" = None,
+        limits: Limits | None = None,
+        cancellation: Cancellation | None = None,
     ):
         """Reattach to a session and carry its last run to completion.
 

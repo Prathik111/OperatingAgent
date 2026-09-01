@@ -14,6 +14,7 @@ from agent_native.conversation import (
     user_message,
 )
 from agent_native.models.base import Model
+
 from tests._scripted import ScriptedProvider, text_event
 
 

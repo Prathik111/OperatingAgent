@@ -28,10 +28,10 @@ class Database(ABC):
     """The one interface the agent stores things through."""
 
     @abstractmethod
-    async def create_session(self, session: "Session") -> None: ...
+    async def create_session(self, session: Session) -> None: ...
 
     @abstractmethod
-    async def get_session(self, session_id: str) -> "Session | None": ...
+    async def get_session(self, session_id: str) -> Session | None: ...
 
     @abstractmethod
     async def delete_session(self, session_id: str) -> bool:
@@ -57,13 +57,13 @@ class Database(ABC):
         """
 
     @abstractmethod
-    async def save_message(self, message: "Message") -> None: ...
+    async def save_message(self, message: Message) -> None: ...
 
     @abstractmethod
-    async def load_conversation(self, session_id: str) -> "Conversation": ...
+    async def load_conversation(self, session_id: str) -> Conversation: ...
 
     @abstractmethod
-    async def save_event(self, event: "Event") -> None: ...
+    async def save_event(self, event: Event) -> None: ...
 
     @abstractmethod
     async def load_events(self, session_id: str, after_sequence: int = 0) -> list: ...
@@ -96,7 +96,7 @@ class Database(ABC):
     async def load_permissions(self, session_id: str) -> list: ...
 
     @abstractmethod
-    async def save_memory(self, memory: "Memory") -> None:
+    async def save_memory(self, memory: Memory) -> None:
         """Keep a note that should outlive the run that wrote it."""
 
     @abstractmethod
@@ -113,7 +113,7 @@ class Database(ABC):
 
     async def close(self) -> None:
         """Let go of any resources. No-op for memory; closes the pool for Postgres."""
-        return None
+        return
 
 
 class MemoryDatabase(Database):
@@ -128,13 +128,13 @@ class MemoryDatabase(Database):
         self._grants: list = []        # list of permission grants
         self._memories: dict = {}      # memory id -> Memory
 
-    async def create_session(self, session: "Session") -> None:
+    async def create_session(self, session: Session) -> None:
         self._sessions[session.id] = session
         self._messages.setdefault(session.id, [])
         self._events.setdefault(session.id, [])
         self._sequence.setdefault(session.id, 0)
 
-    async def get_session(self, session_id: str) -> "Session | None":
+    async def get_session(self, session_id: str) -> Session | None:
         return self._sessions.get(session_id)
 
     async def delete_session(self, session_id: str) -> bool:
@@ -168,15 +168,15 @@ class MemoryDatabase(Database):
             sessions = sessions[:limit]
         return sessions
 
-    async def save_message(self, message: "Message") -> None:
+    async def save_message(self, message: Message) -> None:
         self._messages.setdefault(message.session_id, []).append(message)
 
-    async def load_conversation(self, session_id: str) -> "Conversation":
+    async def load_conversation(self, session_id: str) -> Conversation:
         from .conversation import Conversation
 
         return Conversation(list(self._messages.get(session_id, [])))
 
-    async def save_event(self, event: "Event") -> None:
+    async def save_event(self, event: Event) -> None:
         self._events.setdefault(event.session_id, []).append(event)
 
     async def load_events(self, session_id: str, after_sequence: int = 0) -> list:
@@ -219,7 +219,7 @@ class MemoryDatabase(Database):
                 out.append(g)
         return out
 
-    async def save_memory(self, memory: "Memory") -> None:
+    async def save_memory(self, memory: Memory) -> None:
         self._memories[memory.id] = memory
 
     async def load_memories(self, session_id: str = "") -> list:

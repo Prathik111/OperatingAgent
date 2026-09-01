@@ -31,7 +31,7 @@ async def emit_event(on_event: EventCallback, event: AgentEvent) -> None:
         outcome = on_event(event)
         if outcome is not None and hasattr(outcome, "__await__"):
             await outcome
-    except Exception as exc:  # noqa: BLE001 - callback isolation boundary
+    except Exception as exc:
         log.warning("event callback raised: %s", exc)
 
 

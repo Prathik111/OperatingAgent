@@ -26,7 +26,7 @@ from __future__ import annotations
 import re
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -38,9 +38,7 @@ MAX_INSTRUCTIONS_CHARS = 8_000
 
 #: Words too common to tell two memories apart.
 _STOP_WORDS = frozenset(
-    """a an and are as at be but by for from has have how i if in is it its of on or
-    that the their them then there they this to was were what when where which who
-    why will with you your me my""".split()
+    ["a", "an", "and", "are", "as", "at", "be", "but", "by", "for", "from", "has", "have", "how", "i", "if", "in", "is", "it", "its", "of", "on", "or", "that", "the", "their", "them", "then", "there", "they", "this", "to", "was", "were", "what", "when", "where", "which", "who", "why", "will", "with", "you", "your", "me", "my"]
 )
 
 
@@ -63,8 +61,8 @@ class Memory:
     kind: str = MemoryKind.FACT
     session_id: str = ""
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
-    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    last_used_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    last_used_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     def score_for(self, words: set) -> int:
         """How many of `words` this note mentions. Zero means it isn't a match."""
@@ -113,7 +111,7 @@ class MemoryStore:
         scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
         found = [memory for _score, _used, memory in scored[:limit]]
         for memory in found:
-            memory.last_used_at = datetime.now(timezone.utc)
+            memory.last_used_at = datetime.now(UTC)
             await self._db.touch_memory(memory.id, memory.last_used_at)
         return found
 

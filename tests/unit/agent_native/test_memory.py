@@ -10,7 +10,7 @@ is never returned.
 from __future__ import annotations
 
 import tempfile
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from agent_native.database import MemoryDatabase
@@ -82,7 +82,7 @@ async def test_recent_returns_most_recently_used_first():
     store = _store()
     first = await store.remember("first note")
     await store.remember("second note")
-    later = datetime.now(timezone.utc) + timedelta(hours=1)
+    later = datetime.now(UTC) + timedelta(hours=1)
     await store._db.touch_memory(first.id, later)   # first becomes most-recent
 
     recent = await store.recent()

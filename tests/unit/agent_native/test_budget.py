@@ -50,6 +50,7 @@ from agent_native.loop import (
 )
 from agent_native.models.base import Model, ModelRegistry, StreamEvent, StreamType
 from agent_native.tools.base import ToolRegistry, ToolResult
+
 from tests._scripted import ScriptedProvider, call_event, text_event
 
 

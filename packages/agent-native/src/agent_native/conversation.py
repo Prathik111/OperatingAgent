@@ -14,8 +14,12 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import Enum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .models.base import ToolFormat
 
 
 def _new_id() -> str:
@@ -23,7 +27,7 @@ def _new_id() -> str:
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +202,7 @@ class Message:
 
 # -- message factories (so nobody hand-builds the fields) ----------------
 def user_message(
-    session_id: str, text: str = "", media: "list | None" = None
+    session_id: str, text: str = "", media: list | None = None
 ) -> Message:
     """A user turn: some text, some images/documents, or both.
 
@@ -213,7 +217,7 @@ def user_message(
 
 
 def media_part(
-    data: "bytes | bytearray | str", mime_type: str = "image/png", detail: str = ""
+    data: bytes | bytearray | str, mime_type: str = "image/png", detail: str = ""
 ) -> Media:
     """A `Media` part from raw bytes (encoded here) or an already-base64 string.
 
@@ -332,7 +336,7 @@ class Conversation:
         return True
 
     # -- the ONLY wire-format author -------------------------------------
-    def render(self, tool_format: "ToolFormat | None" = None) -> list:
+    def render(self, tool_format: ToolFormat | None = None) -> list:
         """Turn the conversation into the list of messages a model expects.
 
         Only NATIVE (the OpenAI / Groq shape: an assistant message carries a
@@ -406,7 +410,7 @@ def _rough_tokens(text: str) -> int:
 _MEDIA_TOKEN_ESTIMATE = 256
 
 
-def _user_content(msg: Message) -> "str | list":
+def _user_content(msg: Message) -> str | list:
     """The `content` field for a user message: a plain string, or a parts list.
 
     No media -> the joined text, exactly as before, so a text-only turn renders

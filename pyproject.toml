@@ -32,11 +32,11 @@ dev = [
     "gateway-server",
     "pytest-cov>=7.1.0",
     "ruff>=0.16.5",
+    "mypy>=2.3.1",
 ]
 
 [tool.uv.sources]
 common = { workspace = true }
-api = { workspace = true }
 agent-native = { workspace = true }
 observability = { workspace = true }
 agent-langgraph = { workspace = true }
@@ -81,6 +81,35 @@ filterwarnings = [
     # until the default moves to `datetime.now(timezone.utc)`.
     "ignore:datetime.datetime.utcnow:DeprecationWarning",
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"packages/agent-native/src/agent_native/context.py" = ["S110"]
+"packages/agent-native/src/agent_native/loop.py" = ["BLE001", "S110", "S112"]
+"packages/agent-native/src/agent_native/tools/manager.py" = ["BLE001"]
+"packages/agent-native/src/agent_native/tools/mcp_bridge.py" = ["BLE001", "S110"]
+"packages/api/src/api/orchestration/factory.py" = ["BLE001"]
+"packages/api/src/api/orchestration/native_stub.py" = ["BLE001"]
+"packages/api/src/api/repository/postgres.py" = ["SIM117"]
+"packages/api/src/api/routers/*.py" = ["B008"]
+"packages/observability/src/observability/client.py" = ["BLE001"]
+"packages/observability/src/observability/masking.py" = ["BLE001"]
+"tests/**/*.py" = ["ASYNC230"]
+"tests/unit/agent_native/test_multimodal.py" = ["S110"]
+
+[tool.ruff]
+exclude = ["packages/agent-native/backup"]
+
+[[tool.mypy.overrides]]
+module = [
+    "agent_langgraph.*",
+    "asyncpg",
+    "asyncpg.*",
+    "ollama",
+    "ollama.*",
+    "sandbox",
+    "sandbox.*",
+]
+ignore_missing_imports = true
 
 [tool.pyright]
 include = ["packages"]

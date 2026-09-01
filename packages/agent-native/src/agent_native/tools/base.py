@@ -101,7 +101,7 @@ class Tool(ABC):
         """
         return f"{self.definition.full_name}({arguments})"
 
-    def sandbox_command(self, arguments: dict) -> "str | list | None":
+    def sandbox_command(self, arguments: dict) -> str | list | None:
         """The shell command that does this call's work, if it is one.
 
         A tool marked `ExecutionMode.SANDBOX` is asked this before it is run: if it
@@ -124,7 +124,7 @@ class ToolRegistry:
     def register(self, tool: Tool) -> None:
         self._tools[tool.definition.full_name] = tool
 
-    def find(self, name: str) -> "Tool | None":
+    def find(self, name: str) -> Tool | None:
         return self._tools.get(name)
 
     def all(self) -> list:

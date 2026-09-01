@@ -39,7 +39,7 @@ from .hooks import HookContext, HookPoint
 # ---------------------------------------------------------------------------
 # The snapshot / mirror primitives
 # ---------------------------------------------------------------------------
-def _iter_files(root: str, skip: "str | None" = None):
+def _iter_files(root: str, skip: str | None = None):
     """Yield the path (relative to root) of every regular file under root.
 
     Symlinks are skipped, so a snapshot is a deterministic set of real bytes and a
@@ -60,7 +60,7 @@ def _iter_files(root: str, skip: "str | None" = None):
             yield os.path.relpath(full, root)
 
 
-def _snapshot_tree(root: str, dest: str, skip: "str | None" = None) -> int:
+def _snapshot_tree(root: str, dest: str, skip: str | None = None) -> int:
     """Copy every regular file under root into dest, keeping the same layout.
 
     `copy2` carries the file mode and timestamps across, so a restored file looks
@@ -146,7 +146,7 @@ class CheckpointStore:
     earlier snapshots, and a restore would delete them. `create` enforces that.
     """
 
-    def __init__(self, base_dir: "str | None" = None) -> None:
+    def __init__(self, base_dir: str | None = None) -> None:
         self._base = os.path.realpath(base_dir) if base_dir else tempfile.mkdtemp(prefix="agent_ckpt_")
         os.makedirs(self._base, exist_ok=True)
         self._checkpoints: dict = {}  # id -> Checkpoint, in creation order
@@ -172,7 +172,7 @@ class CheckpointStore:
         self._save_index()  # so a later process can find and restore this one
         return checkpoint
 
-    def restore(self, checkpoint: "Checkpoint | str") -> Checkpoint:
+    def restore(self, checkpoint: Checkpoint | str) -> Checkpoint:
         """Rewind the working folder to a checkpoint. Returns the checkpoint restored."""
         cp = checkpoint if isinstance(checkpoint, Checkpoint) else self.get(checkpoint)
         if cp is None:
@@ -180,14 +180,14 @@ class CheckpointStore:
         _mirror(cp.path, cp.root)
         return cp
 
-    def get(self, checkpoint_id: str) -> "Checkpoint | None":
+    def get(self, checkpoint_id: str) -> Checkpoint | None:
         return self._checkpoints.get(checkpoint_id)
 
     def list(self) -> list:
         """Every checkpoint, newest first."""
         return list(self._checkpoints.values())[::-1]
 
-    def latest(self) -> "Checkpoint | None":
+    def latest(self) -> Checkpoint | None:
         """The most recent checkpoint, or None if there are none."""
         newest = self.list()
         return newest[0] if newest else None
@@ -224,7 +224,7 @@ class CheckpointStore:
             raise
 
     @classmethod
-    def load(cls, base_dir: str) -> "CheckpointStore":
+    def load(cls, base_dir: str) -> CheckpointStore:
         """Reopen a store from a base directory a previous run wrote.
 
         Reads the manifest if present (an empty or missing one just means no
@@ -284,15 +284,15 @@ class AutoCheckpointer:
         # Only mutations matter, and only once per run. `working_directory` is empty
         # for a run with no folder (nothing to snapshot), so skip that too.
         if context.read_only or not context.working_directory:
-            return None
+            return
         if context.run_id in self._checkpointed:
-            return None
+            return
         self._checkpointed.add(context.run_id)
         self._store.create(context.working_directory, label=f"before edits in {context.run_id}")
-        return None
+        return
 
 
-def install_auto_checkpoint(runtime: object, base_dir: "str | None" = None) -> CheckpointStore:
+def install_auto_checkpoint(runtime: object, base_dir: str | None = None) -> CheckpointStore:
     """Turn on automatic pre-edit checkpoints for a runtime, and hand back the store.
 
     Opt-in on purpose: a runtime with this not installed keeps the exact behaviour

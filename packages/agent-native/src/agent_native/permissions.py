@@ -80,9 +80,7 @@ class PermissionRule:
     def matches(self, tool_name: str, arguments: dict) -> bool:
         if not fnmatch.fnmatch(tool_name, self.tool_pattern):
             return False
-        if self.argument_pattern and self.argument_pattern not in str(arguments):
-            return False
-        return True
+        return not self.argument_pattern or self.argument_pattern in str(arguments)
 
 
 class RulePolicy(Policy):
@@ -162,7 +160,7 @@ class WorkspacePolicy(Policy):
     default when nobody has said where the workspace is must be the cautious one.
     """
 
-    def __init__(self, root: "str | None" = None) -> None:
+    def __init__(self, root: str | None = None) -> None:
         self._pinned_root = root
 
     def check(self, context: Any, definition: Any, arguments: dict) -> Decision:
@@ -185,7 +183,7 @@ class WorkspacePolicy(Policy):
                 )
         return Decision(PermissionDecision.ALLOW, reason="inside the workspace folder")
 
-    def _root_for(self, context: Any) -> "Path | None":
+    def _root_for(self, context: Any) -> Path | None:
         """The fence for this call: the pinned root, else the session's folder."""
         raw = self._pinned_root
         if raw is None:
@@ -199,7 +197,7 @@ class WorkspacePolicy(Policy):
             return None
 
 
-def _outside_root(value: str, root: Path) -> "str | None":
+def _outside_root(value: str, root: Path) -> str | None:
     """The path, if it escapes the root; None if it stays inside or is relative."""
     try:
         candidate = Path(value).expanduser()
@@ -336,7 +334,7 @@ class PermissionGrant:
     session_id: str = ""  # empty means it applies everywhere (ALWAYS)
     argument_pattern: str = ""  # empty means "any arguments"
 
-    def covers(self, tool_name: str, session_id: str, arguments: "dict | None" = None) -> bool:
+    def covers(self, tool_name: str, session_id: str, arguments: dict | None = None) -> bool:
         if not fnmatch.fnmatch(tool_name, self.tool_pattern):
             return False
         if self.session_id and self.session_id != session_id:
@@ -399,7 +397,7 @@ class PermissionStore:
         self,
         tool_name: str,
         session_id: str,
-        arguments: "dict | None" = None,
+        arguments: dict | None = None,
     ) -> bool:
         for grant in await self._db.load_permissions(session_id):
             if grant.covers(tool_name, session_id, arguments):
@@ -517,7 +515,7 @@ class PermissionManager:
         self,
         store: PermissionStore,
         event_bus: Any,
-        responder: "PermissionResponder | None" = None,
+        responder: PermissionResponder | None = None,
     ) -> None:
         self._store = store
         self._bus = event_bus

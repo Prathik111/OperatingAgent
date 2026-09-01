@@ -20,6 +20,7 @@ import tempfile
 from agent_native.events import EventType
 from agent_native.loop import Limits, RunStatus
 from agent_native.models.base import StreamType
+
 from tests._helpers import make_runtime, require_live_groq, run_with_auto_permissions
 
 
@@ -93,7 +94,7 @@ async def test_a_failing_tool_is_an_observation_not_a_crash():
     """Reading a missing file fails; the model reads the failure and still answers."""
     require_live_groq()
     workdir = tempfile.mkdtemp()  # deliberately empty
-    runtime, service = make_runtime(workdir, max_turns=6)
+    _runtime, service = make_runtime(workdir, max_turns=6)
     session = await service.create_session(agent="build", working_directory=workdir)
 
     result = await run_with_auto_permissions(
@@ -118,7 +119,7 @@ async def test_the_turn_limit_stops_the_run():
     """With one turn allowed and a task needing a tool, the run stops at the limit."""
     require_live_groq()
     workdir = _workdir_with("config.txt", "port=8080\n")
-    runtime, service = make_runtime(workdir, max_turns=1)
+    _runtime, service = make_runtime(workdir, max_turns=1)
     session = await service.create_session(agent="build", working_directory=workdir)
 
     result = await run_with_auto_permissions(
