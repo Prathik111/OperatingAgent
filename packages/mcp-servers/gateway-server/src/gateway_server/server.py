@@ -21,8 +21,7 @@ from contextlib import asynccontextmanager
 from typing import Final
 
 from fastmcp import FastMCP
-
-from file_server.server import build_file_server, mcp as file_mcp
+from file_server.server import mcp as file_mcp
 from git_server.server import mcp as git_mcp
 from search_server.server import mcp as search_mcp
 from terminal_server.server import mcp as terminal_mcp
@@ -56,7 +55,7 @@ async def lifespan(app: FastMCP):
         LOGGER.info("gateway-server shutting down")
 
 
-def build_gateway(root: str | None = None) -> FastMCP:
+def build_gateway() -> FastMCP:
     """Create the gateway and mount every sub-server under its namespace.
 
     Returns:
@@ -79,12 +78,8 @@ def build_gateway(root: str | None = None) -> FastMCP:
         strict_input_validation=True,
     )
 
-    mounts = dict(MOUNTS)
-    if root is not None:
-        mounts["filesystem"] = build_file_server(root)
-    for namespace, sub_server in mounts.items():
+    for namespace, sub_server in MOUNTS.items():
         gateway.mount(sub_server, namespace=namespace)
-    gateway._operating_agent_mounts = mounts
 
     @gateway.tool
     def gateway_health() -> dict:
@@ -103,4 +98,4 @@ mcp = build_gateway()
 
 
 if __name__ == "__main__":
-    mcp.run()
+    mcp.run(transport="stdio", show_banner=False)

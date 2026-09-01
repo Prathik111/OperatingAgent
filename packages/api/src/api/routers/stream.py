@@ -19,7 +19,10 @@ router = APIRouter(tags=["stream"])
 
 
 @router.get("/tasks/{task_id}/events")
-async def stream_events(task_id: str, request: Request) -> EventSourceResponse:
+async def stream_events(
+    task_id: str,
+    request: Request,
+) -> EventSourceResponse:
     """Server-Sent Events stream of a task's run events."""
     service = request.app.state.task_service
     await service.get_task(task_id)  # raises TaskNotFound -> 404 before we stream

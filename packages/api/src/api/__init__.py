@@ -17,7 +17,9 @@ def main() -> None:
     import uvicorn
 
     from .config import ApiSettings
+    from .environment import load_environment
 
+    load_environment()
     settings = ApiSettings.from_env()
     uvicorn.run(
         "api.app:create_app",

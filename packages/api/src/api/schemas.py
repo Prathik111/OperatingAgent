@@ -10,10 +10,11 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
-
 from common.agent import AgentTask
 from common.enums import AgentTrack, RiskLevel
+from pydantic import BaseModel, Field
+
+from .repository.base import ThreadRecord
 
 
 class CreateTaskRequest(BaseModel):
@@ -41,7 +42,7 @@ class TaskResponse(BaseModel):
     created_at: datetime
 
     @classmethod
-    def from_task(cls, task: AgentTask, *, status: str | None) -> "TaskResponse":
+    def from_task(cls, task: AgentTask, *, status: str | None) -> TaskResponse:
         return cls(
             id=task.id,
             goal=task.goal,
@@ -50,6 +51,26 @@ class TaskResponse(BaseModel):
             status=status,
             metadata=task.metadata,
             created_at=task.created_at,
+        )
+
+
+class ThreadResponse(BaseModel):
+    """One conversation thread and its aggregate task count."""
+
+    id: str
+    title: str | None = None
+    task_count: int = Field(ge=0)
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_record(cls, thread: ThreadRecord) -> ThreadResponse:
+        return cls(
+            id=thread.id,
+            title=thread.title,
+            task_count=thread.task_count,
+            created_at=thread.created_at,
+            updated_at=thread.updated_at,
         )
 
 
@@ -68,7 +89,7 @@ class ApprovalResponse(BaseModel):
     risk_level: RiskLevel
 
     @classmethod
-    def from_request(cls, request: Any) -> "ApprovalResponse":
+    def from_request(cls, request: Any) -> ApprovalResponse:
         return cls(
             id=request.id,
             task_id=request.task_id,

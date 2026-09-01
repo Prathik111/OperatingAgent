@@ -3,7 +3,8 @@ tracks be swapped behind TaskService without it knowing which one it holds.
 """
 from __future__ import annotations
 
-from typing import Awaitable, Callable, Protocol
+from collections.abc import Awaitable, Callable
+from typing import Protocol
 
 from .agent import AgentRunResult, AgentTask
 from .events import AgentEvent
@@ -26,3 +27,5 @@ class IAgentOrchestrator(Protocol):
 
     async def run( self, task: AgentTask, on_event: EventCallback | None = None,
     ) -> AgentRunResult: ...
+
+    async def aclose(self) -> None: ...

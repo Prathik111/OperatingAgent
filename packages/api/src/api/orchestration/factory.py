@@ -16,6 +16,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from common.agent import AgentRunResult, AgentTask
+from common.approvals import ApprovalHandler
 from common.enums import AgentTrack, RunStatus
 from common.events import AgentEvent
 from common.interfaces import IAgentOrchestrator
@@ -57,20 +58,34 @@ class UnavailableOrchestrator:
             metadata={"error": message},
         )
 
+    async def aclose(self) -> None:
+        """The degraded orchestrator owns no external resources."""
+
 
 def build_orchestrators(
-    settings: "ApiSettings",
+    settings: ApiSettings,
+    *,
+    approval_handler: ApprovalHandler | None = None,
 ) -> dict[AgentTrack, IAgentOrchestrator]:
     orchestrators: dict[AgentTrack, IAgentOrchestrator] = {
         AgentTrack.NATIVE: NativeStubOrchestrator(),
     }
 
+    # Configuration is application state, not an optional integration. Validate
+    # it before entering the degradation boundary so invalid settings fail at
+    # startup instead of being hidden behind an unavailable track.
+    config = settings.build_agent_config(AgentTrack.LANGGRAPH)
+
     try:
         from agent_langgraph.orchestrator.langgraph_agent import LangGraphAgent
 
-        config = settings.build_agent_config(AgentTrack.LANGGRAPH)
-        orchestrators[AgentTrack.LANGGRAPH] = LangGraphAgent(config)
-    except Exception as exc:  # eager ModelProvider / missing integration / etc.
+        orchestrators[AgentTrack.LANGGRAPH] = LangGraphAgent(
+            config,
+            approval_handler=approval_handler,
+            mcp_gateway_command=settings.mcp_gateway_command,
+            mcp_gateway_args=list(settings.mcp_gateway_args),
+        )
+    except Exception as exc:  # noqa: BLE001 - optional track degradation boundary
         log.warning(
             "LangGraph orchestrator unavailable, registering degraded stub: %s", exc
         )

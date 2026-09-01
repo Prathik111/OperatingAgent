@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import re
 from typing import Any
+
 from langfuse.types import (
-    MaskFunction,
     MaskOtelSpansParams,
     MaskOtelSpansResult,
     OtelSpanPatch,
@@ -69,7 +69,7 @@ def mask(*, data: Any, **kwargs: Any) -> Any:
     """
     try:
         return _mask_value(data)
-    except Exception:
+    except Exception:  # noqa: BLE001 - masking must fail closed for any payload
         return _REDACTED
 
 

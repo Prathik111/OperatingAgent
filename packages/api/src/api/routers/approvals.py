@@ -1,12 +1,12 @@
 """Approval endpoints — list, read, and resolve pending human gates.
 
-These drive the in-process ``ApprovalGateway``. Because the gate is not yet
-wired into the orchestrators (see the package README), in normal operation the
-pending list is empty; the endpoints exist so the surface is complete and the
-gate is exercisable end to end.
+These drive the same in-process ``ApprovalGateway`` awaited by the LangGraph
+executor. Resolving a pending request therefore lets the graph continue.
 """
 
 from __future__ import annotations
+
+from typing import Annotated
 
 from fastapi import APIRouter, Depends
 
@@ -16,10 +16,12 @@ from ..services.approval_gateway import ApprovalGateway
 
 router = APIRouter(prefix="/approvals", tags=["approvals"])
 
+ApprovalGatewayDep = Annotated[ApprovalGateway, Depends(get_approval_gateway)]
+
 
 @router.get("", response_model=list[ApprovalResponse])
 async def list_approvals(
-    gateway: ApprovalGateway = Depends(get_approval_gateway),
+    gateway: ApprovalGatewayDep,
 ) -> list[ApprovalResponse]:
     return [ApprovalResponse.from_request(r) for r in gateway.list_pending()]
 
@@ -27,7 +29,7 @@ async def list_approvals(
 @router.get("/{request_id}", response_model=ApprovalResponse)
 async def get_approval(
     request_id: str,
-    gateway: ApprovalGateway = Depends(get_approval_gateway),
+    gateway: ApprovalGatewayDep,
 ) -> ApprovalResponse:
     return ApprovalResponse.from_request(gateway.get(request_id))  # 404 if unknown
 
@@ -36,7 +38,7 @@ async def get_approval(
 async def resolve_approval(
     request_id: str,
     body: ResolveApprovalRequest,
-    gateway: ApprovalGateway = Depends(get_approval_gateway),
+    gateway: ApprovalGatewayDep,
 ) -> dict:
     # Raises ApprovalNotFound (404) / ApprovalAlreadyResolved (409).
     await gateway.resolve_approval(request_id, body.approved, body.note)

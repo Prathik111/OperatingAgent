@@ -6,18 +6,15 @@ human. A call below the configured threshold is auto-approved; a ``BLOCKED``
 call is auto-denied; anything in between parks on an ``asyncio.Event`` until
 someone calls :meth:`resolve_approval`.
 
-Scope note: this gate is in-process and is **not yet wired into the
-orchestrators**, nor persisted (the ``approval_requests`` table hangs off
-``plan_steps``, which is outside this change's spine). It is exercised directly
-by the approval endpoints and unit tests.
+Scope note: this gate is in-process and shared with the LangGraph executor, but
+is not yet persisted. Pending approvals are therefore lost on process restart.
 """
 
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
-from typing import Any
 
+from common.approvals import ApprovalRequest
 from common.enums import RiskLevel
 from common.risk import RiskClassifier
 from common.tools import ToolCallRequest
@@ -28,28 +25,10 @@ from ..errors import ApprovalAlreadyResolved, ApprovalNotFound
 _ORDER = {RiskLevel.SAFE: 0, RiskLevel.REVIEW: 1, RiskLevel.BLOCKED: 2}
 
 
-@dataclass(slots=True)
-class ApprovalRequest:
-    """A pending decision about one tool call.
-
-    Defined here rather than in ``common`` (the class diagram places it there,
-    but ``common`` is not modified by this change). ``risk_level`` is filled in
-    by the gateway if the caller leaves it ``None``.
-    """
-
-    id: str
-    task_id: str
-    tool_name: str
-    arguments: dict[str, Any]
-    risk_level: RiskLevel | None = None
-    run_id: str | None = None
-    plan_step_id: str | None = None
-
-
 class _Pending:
     """Bookkeeping for a parked request: the waiter event and its outcome."""
 
-    __slots__ = ("request", "event", "approved", "note", "resolved")
+    __slots__ = ("approved", "event", "note", "request", "resolved")
 
     def __init__(self, request: ApprovalRequest) -> None:
         self.request = request
@@ -65,11 +44,9 @@ class ApprovalGateway:
         classifier: RiskClassifier | None = None,
         *,
         threshold: RiskLevel = RiskLevel.REVIEW,
-        repository: Any = None,
     ) -> None:
         self._classifier = classifier or RiskClassifier()
         self._threshold = threshold
-        self._repository = repository
         self._pending: dict[str, _Pending] = {}
         self._lock = asyncio.Lock()
 
@@ -90,15 +67,6 @@ class ApprovalGateway:
             return False
 
         pending = _Pending(request)
-        if self._repository is not None and request.run_id and request.plan_step_id:
-            await self._repository.save_approval(
-                request.run_id,
-                {
-                    "id": request.id,
-                    "plan_step_id": request.plan_step_id,
-                    "reason": f"risk level {level.value}",
-                },
-            )
         async with self._lock:
             self._pending[request.id] = pending
         await pending.event.wait()
@@ -122,15 +90,6 @@ class ApprovalGateway:
             pending.note = note
             pending.resolved = True
         pending.event.set()
-        request = pending.request
-        if self._repository is not None and request.run_id and request.plan_step_id:
-            await self._repository.resolve_approval(
-                {
-                    "approval_id": request.id,
-                    "approved": approved,
-                    "note": note,
-                }
-            )
 
     def list_pending(self) -> list[ApprovalRequest]:
         return [p.request for p in self._pending.values() if not p.resolved]

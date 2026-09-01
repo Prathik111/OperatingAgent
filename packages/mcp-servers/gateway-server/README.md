@@ -46,7 +46,7 @@ To serve over HTTP instead, run a tiny launcher:
 ```python
 from gateway_server import mcp
 
-mcp.run(transport="http", host="127.0.0.1", port=8000)
+mcp.run(transport="http", host="127.0.0.1", port=8080)
 ```
 
 ## Use from the native agent
@@ -55,47 +55,22 @@ The native agent's `FastMCPToolProvider` builds this gateway and talks to it
 over FastMCP's in-memory transport - no subprocess, no network. Nothing extra
 to configure; it is the default provider.
 
-## Use from a LangGraph agent
+## Use from the LangGraph agent
 
-Point a LangGraph MCP client at the gateway command (stdio) or URL (HTTP) and
-you get every namespaced tool at once. This uses
-[`langchain-mcp-adapters`](https://github.com/langchain-ai/langchain-mcp-adapters),
-which is **not** bundled with this workspace - install it in your agent's
-environment first:
+The workspace's `MCPAdapter` uses FastMCP `StdioTransport` and launches the
+gateway as `python -m gateway_server`. No network port or separately managed
+gateway process is required. The command can be overridden with
+`MCP_GATEWAY_COMMAND` and `MCP_GATEWAY_ARGS` when deployment requires it.
 
-```bash
-pip install langchain-mcp-adapters langgraph
-```
-
-```python
-# stdio: LangGraph launches the gateway as a subprocess
-from langchain_mcp_adapters.client import MultiServerMCPClient
-from langgraph.prebuilt import create_react_agent
-
-client = MultiServerMCPClient(
-    {
-        "operating-agent": {
-            "command": "gateway-server",   # or: python -m gateway_server
-            "args": [],
-            "transport": "stdio",
-        }
-    }
-)
-
-tools = await client.get_tools()          # all namespaced tools, one fleet
-agent = create_react_agent("openai:gpt-4o", tools)
-result = await agent.ainvoke(
-    {"messages": [{"role": "user", "content": "list files in the current directory"}]}
-)
-```
-
-For HTTP, run the gateway with `transport="http"` and swap the client entry:
+HTTP is also supported for clients that explicitly need a network transport,
+but it is not used by this workspace's LangGraph track. For HTTP, run the
+gateway with `transport="http"` and swap the client entry:
 
 ```python
 client = MultiServerMCPClient(
     {
         "operating-agent": {
-            "url": "http://127.0.0.1:8000/mcp",
+            "url": "http://127.0.0.1:8080/mcp",
             "transport": "streamable_http",
         }
     }

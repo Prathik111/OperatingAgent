@@ -10,12 +10,25 @@ on the run, and the run's terminal outcome.
 
 from __future__ import annotations
 
-from typing import Any, Protocol, runtime_checkable
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Protocol, runtime_checkable
 
 from common.agent import AgentRunResult, AgentTask
 from common.config import AgentConfig
 from common.enums import RunStatus, TaskStatus
-from common.events import AgentEvent, LLMCallRecord, ToolCallRecord
+from common.events import AgentEvent
+
+
+@dataclass(slots=True, frozen=True)
+class ThreadRecord:
+    """Repository-neutral summary of one conversation thread."""
+
+    id: str
+    title: str | None
+    task_count: int
+    created_at: datetime
+    updated_at: datetime
 
 
 @runtime_checkable
@@ -26,6 +39,16 @@ class TaskRepository(Protocol):
 
     async def get_task(self, task_id: str) -> AgentTask:
         """Return a task or raise ``TaskNotFound``."""
+        ...
+
+    async def list_threads(self, *, limit: int, offset: int) -> list[ThreadRecord]:
+        """Return API-owned threads ordered by most recent activity."""
+        ...
+
+    async def list_tasks_by_thread(
+        self, thread_id: str, *, limit: int, offset: int
+    ) -> list[tuple[AgentTask, RunStatus | None]]:
+        """Return a thread's tasks and latest run statuses or raise ThreadNotFound."""
         ...
 
     async def create_run(self, task_id: str, config: AgentConfig) -> str:
@@ -40,36 +63,6 @@ class TaskRepository(Protocol):
         self, run_id: str, event: AgentEvent, sequence_number: int
     ) -> None:
         """Append one ordered event to a run."""
-        ...
-
-    async def save_llm_call(self, run_id: str, record: LLMCallRecord) -> None:
-        """Persist one model invocation for run metrics and reconciliation."""
-        ...
-
-    async def save_tool_call(self, run_id: str, record: ToolCallRecord) -> None:
-        """Persist one resolved tool invocation."""
-        ...
-
-    async def save_phase(self, run_id: str, payload: dict[str, Any]) -> str: ...
-
-    async def close_phase(self, run_id: str, payload: dict[str, Any]) -> None: ...
-
-    async def save_plan(self, run_id: str, payload: dict[str, Any]) -> str: ...
-
-    async def save_finding(self, run_id: str, payload: dict[str, Any]) -> str: ...
-
-    async def save_verification(self, run_id: str, payload: dict[str, Any]) -> str: ...
-
-    async def save_trace_ref(self, run_id: str, payload: dict[str, Any]) -> str: ...
-
-    async def save_approval(self, run_id: str, payload: dict[str, Any]) -> str: ...
-
-    async def resolve_approval(self, payload: dict[str, Any]) -> None: ...
-
-    async def upsert_tool(
-        self, server_name: str, base_url: str | None, tool_spec: dict
-    ) -> str:
-        """Register a discovered tool and return its canonical id."""
         ...
 
     async def finalize_run(self, run_id: str, result: AgentRunResult) -> None:

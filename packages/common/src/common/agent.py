@@ -4,6 +4,7 @@ from typing import Any
 
 from .enums import AgentTrack, RunStatus
 
+
 @dataclass(slots=True)
 class AgentTask:
     id: str

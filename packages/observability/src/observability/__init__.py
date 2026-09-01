@@ -20,13 +20,13 @@ from .masking import mask
 from .settings import LangfuseSettings
 
 __all__ = [
-    "init_tracing",
-    "get_client",
-    "get_callback_handler",
-    "flush",
-    "shutdown",
     "LangfuseSettings",
+    "flush",
+    "get_callback_handler",
+    "get_client",
+    "init_tracing",
     "mask",
+    "shutdown",
 ]
 
 
