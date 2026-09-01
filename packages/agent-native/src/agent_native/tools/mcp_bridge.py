@@ -165,8 +165,22 @@ class MCPToolProvider:
         gateway = self._build_gateway(resolved)
         self._client = Client(gateway)
         # Hold the async connection open for the whole run; close() ends it.
-        await self._client.__aenter__()
-        specs = await self._client.list_tools()
+        try:
+            await self._client.__aenter__()
+            specs = await self._client.list_tools()
+        except Exception:
+            try:
+                await self._client.__aexit__(None, None, None)
+            except Exception:
+                pass
+            try:
+                closer = getattr(self._client, "close", None)
+                if callable(closer):
+                    await closer()  # type: ignore[operator]
+            except Exception:
+                pass
+            self._client = None
+            raise
         return [MCPTool(self._client, spec) for spec in specs]
 
     async def close(self) -> None:

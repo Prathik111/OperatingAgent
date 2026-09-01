@@ -91,8 +91,25 @@ class ApprovalGateway:
 
         Raises ``ApprovalNotFound`` for an unknown id and
         ``ApprovalAlreadyResolved`` if it was already decided.
+        Persists the decision before signaling so a failure leaves the request pending.
         """
         async with self._lock:
+            pending = self._pending.get(request_id)
+            if pending is None:
+                raise ApprovalNotFound(request_id)
+            if pending.resolved:
+                raise ApprovalAlreadyResolved(request_id)
+            request = pending.request
+        if self._repository is not None and request.run_id and request.plan_step_id:
+            await self._repository.resolve_approval(
+                {
+                    "approval_id": request.id,
+                    "approved": approved,
+                    "note": note,
+                }
+            )
+        async with self._lock:
+            # Re-validate under lock after persist
             pending = self._pending.get(request_id)
             if pending is None:
                 raise ApprovalNotFound(request_id)
@@ -102,15 +119,6 @@ class ApprovalGateway:
             pending.note = note
             pending.resolved = True
         pending.event.set()
-        request = pending.request
-        if self._repository is not None and request.run_id and request.plan_step_id:
-            await self._repository.resolve_approval(
-                {
-                    "approval_id": request.id,
-                    "approved": approved,
-                    "note": note,
-                }
-            )
 
     def list_pending(self) -> list[ApprovalRequest]:
         return [p.request for p in self._pending.values() if not p.resolved]

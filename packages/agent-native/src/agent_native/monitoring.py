@@ -148,6 +148,9 @@ class Monitoring:
 
     @contextmanager
     def _langfuse_observation(self, trace: Trace) -> Iterator[Any | None]:
+        if not self.enabled:
+            yield None
+            return
         client = self.langfuse_client
         if client is None:
             yield None
@@ -232,9 +235,12 @@ class Monitoring:
         # even when disabled: the id costs nothing and keeps the two paths identical.
         token = _CURRENT_SPAN.set(trace.span_id)
         try:
-            with self._langfuse_observation(trace) as observation:
+            if not self.enabled:
                 yield trace
-                self._update_langfuse(observation, trace)
+            else:
+                with self._langfuse_observation(trace) as observation:
+                    yield trace
+                    self._update_langfuse(observation, trace)
         finally:
             trace.finish()
             _CURRENT_SPAN.reset(token)

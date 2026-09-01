@@ -103,10 +103,16 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                     try:
                         await native_pool.connect()
                     except Exception as exc:
-                        log.warning("Native Postgres connect failed, using memory: %s", exc)
-                        from agent_native.database import MemoryDatabase
+                        # Only fall back to memory in explicit dev mode; otherwise mark unavailable
+                        backend = (getattr(settings, "repository_backend", "") or "").lower()
+                        if backend in ("memory", "inmemory", "in_memory"):
+                            log.warning("Native Postgres connect failed, falling back to memory (dev): %s", exc)
+                            from agent_native.database import MemoryDatabase
 
-                        native_db, native_pool = MemoryDatabase(), None
+                            native_db, native_pool = MemoryDatabase(), None
+                        else:
+                            log.warning("Native Postgres connect failed, marking native runtime unavailable: %s", exc)
+                            raise
                 # Enforce schema only if the DB reports missing migrations
                 if native_pool is not None:
                     apply_schema = getattr(native_db, "apply_schema", None)

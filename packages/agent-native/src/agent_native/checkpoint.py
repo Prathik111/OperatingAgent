@@ -24,6 +24,7 @@ before (the hook layer's standing promise).
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
@@ -33,6 +34,7 @@ import time
 import uuid
 from dataclasses import asdict, dataclass
 
+from .config import SKIPPED_NAMES
 from .hooks import HookContext, HookPoint
 
 
@@ -53,6 +55,8 @@ def _iter_files(root: str, skip: str | None = None):
         if skip and (real == skip or real.startswith(skip + os.sep)):
             dirnames[:] = []
             continue
+        # Exclude virtualenvs, caches and other non-project directories
+        dirnames[:] = [d for d in dirnames if d not in SKIPPED_NAMES]
         for name in filenames:
             full = os.path.join(dirpath, name)
             if os.path.islink(full):
@@ -106,10 +110,16 @@ def _mirror(src: str, dst: str) -> None:
         for name in filenames:
             rel = os.path.join(rel_dir, name) if rel_dir else name
             full = os.path.join(dst, rel)
+            if rel not in src_files:
+                # Remove regular files and symlinks (os.remove on a symlink removes the link itself)
+                if os.path.islink(full) or os.path.lexists(full):
+                    try:
+                        os.remove(full)
+                    except FileNotFoundError:
+                        pass
+                continue
             if os.path.islink(full):
                 continue
-            if rel not in src_files:
-                os.remove(full)
 
     # 3. any directory the target has that the snapshot doesn't - deepest first, so
     #    a parent is only removed after its (now-empty) children.
@@ -288,7 +298,9 @@ class AutoCheckpointer:
         if context.run_id in self._checkpointed:
             return
         self._checkpointed.add(context.run_id)
-        self._store.create(context.working_directory, label=f"before edits in {context.run_id}")
+        await asyncio.to_thread(
+            self._store.create, context.working_directory, f"before edits in {context.run_id}"
+        )
         return
 
 

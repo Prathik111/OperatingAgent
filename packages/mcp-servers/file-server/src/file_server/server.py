@@ -23,6 +23,7 @@ from .tools.metadata import register_metadata
 from .tools.move_file import register_move_file
 from .tools.read_file import register_read_file
 from .tools.rename_file import register_rename_file
+from .tools.edit_file import register_edit_file
 from .tools.search_files import register_search_files
 from .tools.watch_directory import register_watch_directory
 from .tools.write_file import register_write_file
@@ -50,6 +51,7 @@ def build_file_server(root: str | Path | None = None) -> FastMCP:
     register_exists(server, service)
     register_metadata(server, service)
     register_search_files(server, service)
+    register_edit_file(server, service)
     register_watch_directory(server, service)
 
     @server.tool

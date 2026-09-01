@@ -99,21 +99,27 @@ async def test_path_escape_is_blocked():
 
 async def test_write_asks_then_writes():
     import asyncio
+    import contextlib
 
     workdir = tempfile.mkdtemp()
     manager, permissions = _manager()
     call = ToolCall(id="c", name="write_file", arguments={"path": "o.txt", "content": "hi"})
 
     async def approve() -> None:
-        while True:
+        for _ in range(200):
             if permissions.pending():
                 await permissions.resolve("c", True)
                 return
             await asyncio.sleep(0.005)
+        raise AssertionError("approval polling timed out: no pending permission appeared")
 
     task = asyncio.create_task(approve())
-    result = await manager.execute(call, _context(workdir))
-    await task
+    try:
+        result = await manager.execute(call, _context(workdir))
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
 
     assert result.success
     with open(os.path.join(workdir, "o.txt")) as fh:

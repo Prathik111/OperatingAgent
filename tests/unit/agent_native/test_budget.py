@@ -19,7 +19,7 @@ concurrent backoffs.
 
 Offline by construction: the model is `_scripted.ScriptedProvider`, no network, no
 key. Run under pytest, or straight on a box without it:
-    PYTHONPATH=packages/agent-native/src python3 packages/agent-native/tests/test_budget.py
+    PYTHONPATH=packages/agent-native/src python3 tests/unit/agent_native/test_budget.py
 """
 
 from __future__ import annotations

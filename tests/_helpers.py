@@ -80,6 +80,19 @@ def make_runtime(
     runtime.models.register_model(model_name, model)
 
     service = AgentService(runtime)
+    # Ensure every session defaults to the requested workdir so relative tools
+    # resolve inside it even when callers omit working_directory.
+    _orig_create = service.create_session
+
+    async def _create_with_workdir(*args, **kwargs):  # type: ignore[no-untyped-def]
+        # args: (agent, title, working_directory) positionally
+        if args or "working_directory" in kwargs:
+            # If caller already supplied a directory, keep it (explicit wins)
+            return await _orig_create(*args, **kwargs)  # type: ignore[call-arg]
+        kwargs["working_directory"] = workdir
+        return await _orig_create(*args, **kwargs)  # type: ignore[call-arg]
+
+    service.create_session = _create_with_workdir  # type: ignore[method-assign]
     return runtime, service
 
 

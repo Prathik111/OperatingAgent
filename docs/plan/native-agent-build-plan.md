@@ -4,7 +4,7 @@ Everything from `docs/review/frontier-agent-gap-analysis.md`, in the order I'd b
 four pieces admin named directly: a sandbox, memory in Postgres, subagents, and parallel tool
 calls. Written 2026-08-23 against v0.5.0.
 
-Twelve steps in five stages. Each step says what changes, which files, how you know it worked, and
+Twelve steps in six stages. Each step says what changes, which files, how you know it worked, and
 roughly how big it is (S = a few hours, M = a day or two, L = several days). Steps are in dependency
 order — nothing here needs anything from a later step.
 

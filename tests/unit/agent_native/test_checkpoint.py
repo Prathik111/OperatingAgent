@@ -15,7 +15,7 @@ one snapshot before the first mutating tool of a run and leaves a read alone.
 
 Offline by construction: real files in a temp folder, a scripted stand-in model for
 the hook path, no network and no key. Run under pytest, or straight without it:
-    PYTHONPATH=packages/agent-native/src python3 packages/agent-native/tests/test_checkpoint.py
+    PYTHONPATH=packages/agent-native/src python3 tests/unit/agent_native/test_checkpoint.py
 """
 
 from __future__ import annotations

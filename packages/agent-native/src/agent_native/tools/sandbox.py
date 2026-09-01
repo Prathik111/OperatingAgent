@@ -123,9 +123,13 @@ class ContainerSandbox:
         pool = self._get_pool()
         if pool is None:
             return False
-        if await pool.available():
-            return True
-        self._note(pool.reason or "no container available")
+        try:
+            if await pool.available():
+                return True
+        except Exception as exc:
+            self._note(f"{exc}" or getattr(pool, "reason", "") or "no container available")
+            return False
+        self._note(getattr(pool, "reason", "") or "no container available")
         return False
 
     def status_line(self) -> str:

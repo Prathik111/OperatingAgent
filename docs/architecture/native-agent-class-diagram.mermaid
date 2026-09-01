@@ -329,9 +329,11 @@ classDiagram
     ReadFileTool ..> ToolHelpers : resolves in workspace
     WriteFileTool ..> ToolHelpers : resolves in workspace
 
-    %% NOTE only two DIRECT built-ins ship: read_file (read_only -> ALLOW)
-    %%      and write_file (destructive -> ASK). Both are confined to the
-    %%      session working_directory; an escaping path is a plain error.
+    %% NOTE DIRECT and MCP-backed tools ship as present: plan (read_only),
+    %%      invoke_skill/skill (read_only), remember/recall memory (read_only/write),
+    %%      delegate/fan_out subagent (present, dispatched via tools/subagent.py),
+    %%      sandbox-wrapped terminal (SANDBOX), and the full MCP fleet via
+    %%      MCPTool/MCPToolProvider; all are confined to session working_directory.
     %% NOTE ToolManager is the ONLY thing that runs a tool. Find, validate,
     %%      gate, run - a failure at any of the first three still returns a
     %%      ToolResult, and a crashing tool is caught, not propagated.
@@ -502,7 +504,7 @@ classDiagram
         +build(config, session, tool_names) str
     }
     class Subagent {
-        <<declared, not dispatched>>
+        <<present, dispatched via DelegateTool/FanOutTool>>
         +name : str
         +description : str
         +model : str
@@ -516,7 +518,8 @@ classDiagram
     %% NOTE AgentConfig.model is a registry NAME (str), not a Model object as
     %%      the target diagram shows. ModelRegistry.get resolves it at run time.
     %% NOTE system_prompt is a single str, not a list. max_depth is absent.
-    %% NOTE Subagent is vocabulary only - nothing dispatches to one yet.
+    %% NOTE Subagent dispatch is present via DelegateTool/FanOutTool (tools/subagent.py)
+    %%      with per-helper turn caps and shared cancellation.
     %% NOTE empty allowed_tools means "every registered tool".
 
     %% =========================================================
@@ -796,8 +799,8 @@ classDiagram
     Tool <|.. VerifyTool : planned
     MCPTool ..> MCPClient
     Database <|.. PostgresDatabase
-    SubtaskTool ..> Subagent : planned
-    SubtaskTool ..> AgentLoop : planned recursive run
+    SubtaskTool ..> Subagent : dispatched
+    SubtaskTool ..> AgentLoop : recursive run via DelegateTool
 
     %% =========================================================
     %% 11. REFERRAL - mapping onto class-diagram.mermaid (master)
@@ -867,7 +870,7 @@ classDiagram
     RiskClassifier <|.. PolicyChain : replaced by the policy stack
     CommonAgentConfig <|.. AgentConfig : flat local equivalent
     CommonRunStatus ..> RunStatus : same name - different values
-    IMCPClient ..> Tool : no MCP client exists - built-in tools only
+    IMCPClient ..> Tool : MCP-backed via MCPTool/MCPToolProvider (see §10 history)
 
     %% NOTE NativePlan and NativePlanStep have no equivalent at all. There is no
     %%      plan object in v0.5.0: the model decides what to do next by reading
@@ -891,3 +894,5 @@ classDiagram
     %% NOTE ACTION - update the master class-diagram.mermaid agent-native
     %%      section to match this file, and decide whether v0.5.0 should adopt
     %%      the packages/common contracts or stay deliberately standalone.
+    %% NOTE History 2026-08-27: prior “built-in tools only / no MCP client” claim relocated here;
+    %%      as-built now includes MCPTool/MCPToolProvider, delegate/fan_out, plan/skill/memory/sandbox as present.

@@ -265,19 +265,17 @@ duplicate side effects.
 
 ## Stage C — Interface: make it usable by someone else
 
-The CLI is the only way in; `packages/api` is a 2-LOC stub.
+The CLI is no longer the only entry point; `packages/api` now ships a FastAPI application, orchestration, repositories and services integrating the native `AgentRuntime` and Postgres/Memory persistence — Stage C is delivered as described below (remaining gaps are narrow).
 
-### 12. REST + SSE API server (L)
+### 12. REST + SSE API server (L) — **delivered**
 
-Build out `packages/api`: create a session, post a message and stream the run's events over SSE, get
-a run, list sessions, replay events from a cursor, answer a pending permission, and read/write
-memories. The event stream is already a one-way numbered sequence, so SSE fits and replay-from-cursor
-(step 11) gives reconnection for free.
+Shipped as `packages/api/src/api/{app.py,config.py,repository/{memory,postgres,factory},orchestration/factory.py,services/{task_service,event_broker,approval_gateway}}` plus `native/{runtime.py,routers/sessions,messages,events,permissions,runs,health}` integrating `AgentRuntime`/`AgentService` and native Postgres/Memory persistence. Create a session, post a message and stream events over SSE, replay from cursor, list/get runs, manage permissions, and expose native health.
 
-**Files.** New under `packages/api/src/api/`; consumes `AgentService` and the event bus unchanged.
+Remaining narrow gaps (not a stub): native WebSocket parity (`/native/ws/*`), API auth/rate-limiting, and production Postgres migration enablement.
 
-**Verify.** Drive a full task over HTTP — create, stream to completion, replay by cursor, read the
-receipt.
+**Files.** Delivered under `packages/api/src/api/`; consumes `AgentService` and the event bus.
+
+**Verify.** Drive a full task over HTTP — create, stream to completion, replay by cursor, read the receipt — covered on both Task and native tracks.
 
 ### 13. Async permission channel (`PermissionResponder`) (M)
 

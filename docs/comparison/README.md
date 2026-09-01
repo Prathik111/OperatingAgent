@@ -56,13 +56,13 @@ For a cold-start walkthrough (clone → install → key → run → compare), se
 ```bash
 # Produce a run record per track (native today; langgraph is a separate,
 # not-yet-built contributor track):
-evaluation run --track native
+uv run --package evaluation evaluation run --track native
 
 # Render the newest run of each track into comparison.md:
-evaluation compare
+uv run --package evaluation evaluation compare
 
 # Or compare specific tracks, in a fixed left-to-right order:
-evaluation compare --tracks native,langgraph --out docs/comparison/comparison.md
+uv run --package evaluation evaluation compare --tracks native,langgraph --out docs/comparison/comparison.md
 ```
 
 ## Illustrative excerpt (made-up numbers)

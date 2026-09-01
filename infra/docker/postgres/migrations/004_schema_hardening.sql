@@ -1,12 +1,17 @@
 BEGIN;
 
 -- Repair the historical representation where id='001_base' and version=1
--- could be stored as two unrelated rows.
+-- could be stored as two unrelated rows. Normalize orphaned NULL-id row
+-- to 001_base when absent, avoiding version=1 unique conflict.
+UPDATE schema_migrations SET id = '001_base'
+WHERE id IS NULL AND version = 1
+  AND NOT EXISTS (SELECT 1 FROM schema_migrations WHERE id = '001_base');
 DELETE FROM schema_migrations
 WHERE id IS NULL AND version = 1
   AND EXISTS (SELECT 1 FROM schema_migrations WHERE id = '001_base');
 UPDATE schema_migrations SET version = 1
-WHERE id = '001_base' AND version IS NULL;
+WHERE id = '001_base' AND version IS NULL
+  AND NOT EXISTS (SELECT 1 FROM schema_migrations WHERE version = 1 AND id IS DISTINCT FROM '001_base');
 DELETE FROM schema_migrations
 WHERE id = '002_import_legacy_agent_native'
   AND EXISTS (
@@ -17,8 +22,10 @@ ALTER TABLE schema_migrations ALTER COLUMN id SET NOT NULL;
 DO $$
 BEGIN
     IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint
-        WHERE conrelid = 'schema_migrations'::regclass AND contype = 'p'
+        SELECT 1 FROM pg_index
+        WHERE indrelid = 'schema_migrations'::regclass
+          AND indisunique
+          AND indkey[0] = (SELECT attnum FROM pg_attribute WHERE attrelid = 'schema_migrations'::regclass AND attname = 'id')
     ) THEN
         ALTER TABLE schema_migrations ADD PRIMARY KEY (id);
     END IF;

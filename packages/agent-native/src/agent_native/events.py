@@ -67,6 +67,12 @@ class EventBus:
         # the runtime always installs one; a bare EventBus in a test stays literal.
         self._redactor = redactor
 
+    async def _publish_unlocked(self, event: Event) -> None:
+        """Save event and fan out without acquiring the session lock. Caller must hold lock."""
+        await self._db.save_event(event)
+        for queue in self._subscribers.get(event.session_id, []):
+            queue.put_nowait(event)
+
     async def emit(
         self,
         session_id: str,
@@ -82,19 +88,14 @@ class EventBus:
             if self._redactor is not None:
                 clean = self._redactor.redact(clean)
             event = Event(sequence, type, session_id, run_id, clean)
-            await self.publish(event)
+            await self._publish_unlocked(event)
             return event
 
     async def publish(self, event: Event) -> None:
         """Store an already-numbered event and push it to any live listeners."""
         lock = self._locks.setdefault(event.session_id, asyncio.Lock())
-        if lock.locked():
-            await self._db.save_event(event)
-            for queue in self._subscribers.get(event.session_id, []): queue.put_nowait(event)
-            return
         async with lock:
-            await self._db.save_event(event)
-            for queue in self._subscribers.get(event.session_id, []): queue.put_nowait(event)
+            await self._publish_unlocked(event)
 
     async def subscribe(self, session_id: str, from_sequence: int = 0):
         """Yield events for a session: first the stored ones after `from_sequence`,

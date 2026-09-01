@@ -4,17 +4,18 @@ services:
     container_name: agent-native-postgres
     environment:
       POSTGRES_USER: agent_native
-      POSTGRES_PASSWORD: agent_native
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required - set it in .env}
       POSTGRES_DB: agent_native
     ports:
-      # 5432 is commonly occupied by a host PostgreSQL installation.
-      - "${POSTGRES_PORT:-5433}:5432"
+      # Bind to localhost by default; set POSTGRES_HOST=0.0.0.0 to expose more broadly.
+      - "${POSTGRES_HOST:-127.0.0.1}:${POSTGRES_PORT:-5433}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./postgres/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
       - ./postgres/migrations/002_native_conversation.sql:/docker-entrypoint-initdb.d/02-native-conversation.sql:ro
       - ./postgres/migrations/003_import_legacy_agent_native.sql:/docker-entrypoint-initdb.d/03-import-legacy.sql:ro
       - ./postgres/migrations/004_schema_hardening.sql:/docker-entrypoint-initdb.d/04-schema-hardening.sql:ro
+      - ./postgres/migrations/005_native_message_id.sql:/docker-entrypoint-initdb.d/05-native-message-id.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U agent_native -d agent_native"]
       interval: 5s

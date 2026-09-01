@@ -64,6 +64,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import sys
 from pathlib import Path
 from typing import Any
@@ -208,7 +209,7 @@ async def _run(args: argparse.Namespace) -> int:
 
     try:
         database = await _open_database(args.database)
-    except (RuntimeError, OSError) as exc:
+    except (RuntimeError, OSError, ImportError) as exc:
         print(
             f"[error] couldn't open the database: {exc}\n"
             "        Drop --database to run against memory instead.",
@@ -311,6 +312,10 @@ async def _run(args: argparse.Namespace) -> int:
         )
         await printer
     finally:
+        if not printer.done():
+            printer.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await printer
         await mcp.close()
         # The container goes before the event bus and the database: it's the only
         # thing here that outlives the process if we don't clean it up.
@@ -493,7 +498,7 @@ async def _runs_view(argv: list) -> int:
 
     try:
         database = await _open_database(args.database)
-    except (RuntimeError, OSError) as exc:
+    except (RuntimeError, OSError, ImportError) as exc:
         print(f"[error] couldn't open the database: {exc}", file=sys.stderr, flush=True)
         return 1
 
@@ -806,7 +811,7 @@ async def _sessions_view(argv: list) -> int:
 
     try:
         database = await _open_database(args.database)
-    except (RuntimeError, OSError) as exc:
+    except (RuntimeError, OSError, ImportError) as exc:
         print(f"[error] couldn't open the database: {exc}", file=sys.stderr, flush=True)
         return 1
 

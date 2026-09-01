@@ -309,8 +309,8 @@ class PostgresDatabase(Database):
     async def save_message(self, message: Message) -> None:
         await self._execute(
             """
-            INSERT INTO conversation_messages (id, thread_id, role, parts, model, usage, created_at)
-            VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb, $7)
+            INSERT INTO conversation_messages (id, thread_id, role, parts, model, usage, created_at, native_message_id)
+            VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb, $7, $8)
             ON CONFLICT (id) DO NOTHING
             """,
             _uuid_for("message", message.id),
@@ -320,11 +320,12 @@ class PostgresDatabase(Database):
             message.model,
             json.dumps(_usage_to_json(message.usage)) if message.usage else None,
             message.created_at,
+            message.id,
         )
 
     async def load_conversation(self, session_id: str) -> Conversation:
         rows = await self._fetch(
-            "SELECT id, thread_id AS session_id, role, parts, model, usage, created_at "
+            "SELECT COALESCE(native_message_id, id::text) AS id, thread_id AS session_id, role, parts, model, usage, created_at "
             "FROM conversation_messages WHERE thread_id = $1 ORDER BY ordinal",
             session_id,
         )
@@ -371,7 +372,7 @@ class PostgresDatabase(Database):
         rows = await self._fetch(
             """
             SELECT at.thread_id AS session_id, ae.sequence_number AS sequence,
-                   ae.event_type AS type, ar.metadata->>'native_run_id' AS run_id,
+                   ae.event_type AS type, COALESCE(ae.payload->>'native_run_id', '') AS run_id,
                    ae.payload AS data, ae.created_at AS time
             FROM agent_events ae
             JOIN agent_runs ar ON ar.id = ae.run_id

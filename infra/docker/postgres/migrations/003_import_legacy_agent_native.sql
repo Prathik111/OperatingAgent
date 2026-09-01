@@ -113,6 +113,7 @@ BEGIN
                 SELECT id INTO phase_uuid FROM run_phases WHERE run_id = run_uuid ORDER BY sequence LIMIT 1;
             END IF;
 
+            legacy_plan := NULL;
             IF to_regclass('public.agent_native_plans') IS NOT NULL THEN
                 SELECT * INTO legacy_plan FROM agent_native_plans WHERE task_id = legacy_task.id LIMIT 1;
             END IF;
@@ -149,7 +150,7 @@ BEGIN
             END IF;
 
             IF NOT EXISTS (SELECT 1 FROM llm_calls WHERE run_id = run_uuid) THEN
-                FOR call_index IN 1..legacy_run.llm_calls LOOP
+                FOR call_index IN 1..COALESCE(legacy_run.llm_calls, 0) LOOP
                     prompt_count := CASE WHEN call_index = legacy_run.llm_calls
                         THEN legacy_run.total_tokens
                              - (legacy_run.total_tokens / GREATEST(legacy_run.llm_calls, 1))
@@ -170,7 +171,7 @@ BEGIN
                 RETURNING id INTO tool_uuid;
             END IF;
             IF NOT EXISTS (SELECT 1 FROM tool_calls WHERE run_id = run_uuid) THEN
-                FOR call_index IN 1..legacy_run.tool_calls LOOP
+                FOR call_index IN 1..COALESCE(legacy_run.tool_calls, 0) LOOP
                     INSERT INTO tool_calls (run_id, tool_id, attempt, success, output, started_at, finished_at)
                     VALUES (run_uuid, tool_uuid, call_index, true,
                             jsonb_build_object('legacy_import', true),
