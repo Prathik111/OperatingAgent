@@ -71,10 +71,14 @@ def build_orchestrators(
         AgentTrack.NATIVE: NativeStubOrchestrator(),
     }
 
+    # Configuration is application state, not an optional integration. Validate
+    # it before entering the degradation boundary so invalid settings fail at
+    # startup instead of being hidden behind an unavailable track.
+    config = settings.build_agent_config(AgentTrack.LANGGRAPH)
+
     try:
         from agent_langgraph.orchestrator.langgraph_agent import LangGraphAgent
 
-        config = settings.build_agent_config(AgentTrack.LANGGRAPH)
         orchestrators[AgentTrack.LANGGRAPH] = LangGraphAgent(
             config,
             approval_handler=approval_handler,
