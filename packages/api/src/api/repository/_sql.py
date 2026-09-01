@@ -87,6 +87,51 @@ FROM agent_tasks
 WHERE id = %s
 """
 
+SELECT_THREADS = """
+SELECT
+    thread.id,
+    thread.title,
+    COUNT(task.id),
+    thread.created_at,
+    thread.updated_at
+FROM agent_threads AS thread
+JOIN actors AS owner ON owner.id = thread.owner_actor_id
+LEFT JOIN agent_tasks AS task ON task.thread_id = thread.id
+WHERE owner.external_id = %s
+GROUP BY thread.id
+ORDER BY thread.updated_at DESC, thread.id DESC
+LIMIT %s OFFSET %s
+"""
+
+SELECT_THREAD_EXISTS = """
+SELECT 1
+FROM agent_threads AS thread
+JOIN actors AS owner ON owner.id = thread.owner_actor_id
+WHERE thread.id = %s AND owner.external_id = %s
+"""
+
+SELECT_TASKS_BY_THREAD = """
+SELECT
+    task.id,
+    task.thread_id,
+    task.goal,
+    task.track,
+    task.metadata,
+    task.created_at,
+    latest_run.status
+FROM agent_tasks AS task
+LEFT JOIN LATERAL (
+    SELECT run.status
+    FROM agent_runs AS run
+    WHERE run.task_id = task.id
+    ORDER BY run.attempt DESC
+    LIMIT 1
+) AS latest_run ON true
+WHERE task.thread_id = %s
+ORDER BY task.created_at DESC, task.id DESC
+LIMIT %s OFFSET %s
+"""
+
 SELECT_LATEST_RUN_STATUS = """
 SELECT status FROM agent_runs
 WHERE task_id = %s

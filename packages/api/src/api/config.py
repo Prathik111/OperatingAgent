@@ -9,9 +9,12 @@ built and no network is touched — so it is safe to call from unit tests.
 from __future__ import annotations
 
 import os
+import shlex
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from agent_langgraph.runtime.prompt_manager import DEFAULT_PROMPT_DIR
 from common.config import (
     AgentConfig,
     BehaviourConfig,
@@ -27,10 +30,46 @@ from common.config import (
 from common.enums import AgentTrack, RiskLevel
 from observability import LangfuseSettings
 
+DEFAULT_CORS_ORIGINS = (
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+    "http://localhost:1420",
+    "http://127.0.0.1:1420",
+)
+DEFAULT_ALLOWED_HOSTS = ("127.0.0.1", "localhost", "testserver")
 
-def _split_origins(raw: str) -> tuple[str, ...]:
-    origins = tuple(o.strip() for o in raw.split(",") if o.strip())
-    return origins or ("*",)
+
+def _split_csv(raw: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    values = tuple(value.strip() for value in raw.split(",") if value.strip())
+    return values or default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean value")
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    return default if raw is None else int(raw)
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    return default if raw is None else float(raw)
+
+
+def _env_optional_int(name: str) -> int | None:
+    raw = os.getenv(name)
+    return None if raw in (None, "") else int(raw)
 
 
 @dataclass(slots=True, frozen=True)
@@ -38,13 +77,14 @@ class ApiSettings:
     """Resolved API configuration for one process."""
 
     host: str = "127.0.0.1"
-    port: int = 8080
+    port: int = 8000
     log_level: str = "info"
 
     database_url: str | None = field(default=None, repr=False)
     repository_backend: str = "memory"
 
-    cors_origins: tuple[str, ...] = ("*",)
+    cors_origins: tuple[str, ...] = DEFAULT_CORS_ORIGINS
+    allowed_hosts: tuple[str, ...] = DEFAULT_ALLOWED_HOSTS
 
     default_track: AgentTrack = AgentTrack.LANGGRAPH
     approval_threshold: RiskLevel = RiskLevel.REVIEW
@@ -52,29 +92,114 @@ class ApiSettings:
     llm_provider: str = "ollama"
     llm_model: str = "llama3.1"
     llm_base_url: str | None = None
+    llm_timeout_seconds: int = 60
+    llm_temperature: float = 0.0
+    llm_max_tokens: int | None = None
+    llm_top_p: float = 1.0
 
-    prompt_dir: str = "prompts"
+    execution_max_iterations: int = 20
+    execution_timeout_seconds: int = 300
+    execution_retry_attempts: int = 2
+    execution_stream: bool = True
+    execution_enable_checkpoints: bool = True
+    execution_enable_interrupts: bool = True
+
+    sandbox_enabled: bool = True
+    sandbox_workspace: str = "./workspace"
+
+    permission_file_system: bool = True
+    permission_terminal: bool = True
+    permission_git: bool = True
+    permission_search: bool = True
+    permission_knowledge: bool = True
+    permission_memory: bool = True
+
+    checkpoint_backend: str = "auto"
+    checkpoint_namespace: str = "default"
+
+    require_verification: bool = False
+    require_human_approval: bool = True
+
+    prompt_dir: str = str(DEFAULT_PROMPT_DIR)
+    planner_prompt: str | None = None
+    verifier_prompt: str | None = None
+    responder_prompt: str | None = None
+
+    mcp_gateway_command: str = sys.executable
+    mcp_gateway_args: tuple[str, ...] = ("-m", "gateway_server")
     tracing_enabled: bool = False
 
     @classmethod
-    def from_env(cls) -> "ApiSettings":
+    def from_env(cls) -> ApiSettings:
         database_url = os.getenv("DATABASE_URL") or None
+        provider = os.getenv("LLM_PROVIDER", "ollama").strip().lower()
+        provider_prefix = provider.upper()
+        model = (
+            os.getenv("LLM_MODEL")
+            or os.getenv(f"{provider_prefix}_MODEL")
+            or "llama3.1"
+        )
+        base_url = (
+            os.getenv("LLM_BASE_URL")
+            or os.getenv(f"{provider_prefix}_BASE_URL")
+            or None
+        )
         backend = os.getenv(
             "API_REPOSITORY_BACKEND", "postgres" if database_url else "memory"
         ).lower()
         return cls(
             host=os.getenv("API_HOST", "127.0.0.1"),
-            port=int(os.getenv("API_PORT", "8080")),
+            port=int(os.getenv("API_PORT", "8000")),
             log_level=os.getenv("API_LOG_LEVEL", "info"),
             database_url=database_url,
             repository_backend=backend,
-            cors_origins=_split_origins(os.getenv("API_CORS_ORIGINS", "*")),
+            cors_origins=_split_csv(
+                os.getenv("API_CORS_ORIGINS", ",".join(DEFAULT_CORS_ORIGINS)),
+                DEFAULT_CORS_ORIGINS,
+            ),
+            allowed_hosts=_split_csv(
+                os.getenv("API_ALLOWED_HOSTS", ",".join(DEFAULT_ALLOWED_HOSTS)),
+                DEFAULT_ALLOWED_HOSTS,
+            ),
             default_track=AgentTrack(os.getenv("API_DEFAULT_TRACK", "langgraph")),
             approval_threshold=RiskLevel(os.getenv("API_APPROVAL_THRESHOLD", "review")),
-            llm_provider=os.getenv("LLM_PROVIDER", "ollama"),
-            llm_model=os.getenv("LLM_MODEL", "llama3.1"),
-            llm_base_url=os.getenv("LLM_BASE_URL") or None,
-            prompt_dir=os.getenv("AGENT_PROMPT_DIR", "prompts"),
+            llm_provider=provider,
+            llm_model=model,
+            llm_base_url=base_url,
+            llm_timeout_seconds=_env_int("LLM_TIMEOUT_SECONDS", 60),
+            llm_temperature=_env_float("LLM_TEMPERATURE", 0.0),
+            llm_max_tokens=_env_optional_int("LLM_MAX_TOKENS"),
+            llm_top_p=_env_float("LLM_TOP_P", 1.0),
+            execution_max_iterations=_env_int("AGENT_MAX_ITERATIONS", 20),
+            execution_timeout_seconds=_env_int(
+                "AGENT_EXECUTION_TIMEOUT_SECONDS", 300
+            ),
+            execution_retry_attempts=_env_int("AGENT_RETRY_ATTEMPTS", 2),
+            execution_stream=_env_bool("AGENT_STREAM", True),
+            execution_enable_checkpoints=_env_bool(
+                "AGENT_ENABLE_CHECKPOINTS", True
+            ),
+            execution_enable_interrupts=_env_bool("AGENT_ENABLE_INTERRUPTS", True),
+            sandbox_enabled=_env_bool("AGENT_SANDBOX_ENABLED", True),
+            sandbox_workspace=os.getenv("AGENT_WORKSPACE", "./workspace"),
+            permission_file_system=_env_bool("AGENT_PERMISSION_FILE_SYSTEM", True),
+            permission_terminal=_env_bool("AGENT_PERMISSION_TERMINAL", True),
+            permission_git=_env_bool("AGENT_PERMISSION_GIT", True),
+            permission_search=_env_bool("AGENT_PERMISSION_SEARCH", True),
+            permission_knowledge=_env_bool("AGENT_PERMISSION_KNOWLEDGE", True),
+            permission_memory=_env_bool("AGENT_PERMISSION_MEMORY", True),
+            checkpoint_backend=os.getenv("AGENT_CHECKPOINT_BACKEND", "auto").lower(),
+            checkpoint_namespace=os.getenv("AGENT_CHECKPOINT_NAMESPACE", "default"),
+            require_verification=_env_bool("AGENT_REQUIRE_VERIFICATION", False),
+            require_human_approval=_env_bool("AGENT_REQUIRE_HUMAN_APPROVAL", True),
+            prompt_dir=os.getenv("AGENT_PROMPT_DIR") or str(DEFAULT_PROMPT_DIR),
+            planner_prompt=os.getenv("AGENT_PLANNER_PROMPT") or None,
+            verifier_prompt=os.getenv("AGENT_VERIFIER_PROMPT") or None,
+            responder_prompt=os.getenv("AGENT_RESPONDER_PROMPT") or None,
+            mcp_gateway_command=os.getenv("MCP_GATEWAY_COMMAND") or sys.executable,
+            mcp_gateway_args=tuple(
+                shlex.split(os.getenv("MCP_GATEWAY_ARGS", "-m gateway_server"))
+            ),
             tracing_enabled=LangfuseSettings.from_env().enabled,
         )
 
@@ -82,33 +207,75 @@ class ApiSettings:
         """Assemble an ``AgentConfig`` for ``track``.
 
         The api key is read from ``{PROVIDER}_API_KEY`` at call time and defaults
-        to an empty string (hermetic). Checkpointing uses Postgres iff a
-        ``DATABASE_URL`` is configured, else in-memory. Tracing follows the
-        shared Langfuse enablement rule (both keys present).
+        to an empty string (hermetic). The ``auto`` checkpoint backend selects
+        Postgres iff a ``DATABASE_URL`` is configured, else in-memory. Tracing
+        follows the shared Langfuse enablement rule (both keys present).
         """
         provider = self.llm_provider
         api_key = os.getenv(f"{provider.upper()}_API_KEY", "")
         prompts = Path(self.prompt_dir)
-        checkpoint_backend = "postgres" if self.database_url else "memory"
+        checkpoint_backend = self.checkpoint_backend
+        if checkpoint_backend == "auto":
+            checkpoint_backend = "postgres" if self.database_url else "memory"
+        resolved_track = track or self.default_track
         return AgentConfig(
             llm=LLMConfig(
                 provider=provider,
                 model=self.llm_model,
                 api_key=api_key,
+                timeout_seconds=self.llm_timeout_seconds,
+                temperature=self.llm_temperature,
+                max_tokens=self.llm_max_tokens,
+                top_p=self.llm_top_p,
                 base_url=self.llm_base_url,
             ),
-            execution=ExecutionConfig(),
-            sandbox=SandboxConfig(),
-            permissions=ToolPermissionConfig(),
+            execution=ExecutionConfig(
+                max_iterations=self.execution_max_iterations,
+                timeout_seconds=self.execution_timeout_seconds,
+                retry_attempts=self.execution_retry_attempts,
+                stream=self.execution_stream,
+                enable_checkpoints=self.execution_enable_checkpoints,
+                enable_interrupts=self.execution_enable_interrupts,
+            ),
+            sandbox=SandboxConfig(
+                enabled=self.sandbox_enabled,
+                workspace=Path(self.sandbox_workspace),
+            ),
+            permissions=ToolPermissionConfig(
+                file_system=self.permission_file_system,
+                terminal=self.permission_terminal,
+                git=self.permission_git,
+                search=self.permission_search,
+                knowledge=self.permission_knowledge,
+                memory=self.permission_memory,
+            ),
             checkpoint=CheckpointConfig(
-                backend=checkpoint_backend, connection_string=self.database_url
+                backend=checkpoint_backend,
+                connection_string=self.database_url,
+                namespace=self.checkpoint_namespace,
             ),
             tracing=TracingConfig(enabled=self.tracing_enabled),
-            behaviour=BehaviourConfig(risk_threshold=self.approval_threshold.value),
-            prompts=PromptConfig(
-                planner_prompt=prompts / "planner.txt",
-                verifier_prompt=prompts / "verifier.txt",
-                responder_prompt=prompts / "responder.txt",
+            behaviour=BehaviourConfig(
+                require_verification=self.require_verification,
+                require_human_approval=self.require_human_approval,
+                risk_threshold=self.approval_threshold.value,
             ),
-            metadata=MetadataConfig(),
+            prompts=PromptConfig(
+                planner_prompt=(
+                    Path(self.planner_prompt)
+                    if self.planner_prompt
+                    else prompts / "planner.txt"
+                ),
+                verifier_prompt=(
+                    Path(self.verifier_prompt)
+                    if self.verifier_prompt
+                    else prompts / "verifier.txt"
+                ),
+                responder_prompt=(
+                    Path(self.responder_prompt)
+                    if self.responder_prompt
+                    else prompts / "responder.txt"
+                ),
+            ),
+            metadata=MetadataConfig(tags={"track": resolved_track.value}),
         )

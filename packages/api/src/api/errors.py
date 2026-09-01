@@ -33,6 +33,13 @@ class TaskNotFound(ApiError):
         super().__init__(f"task '{task_id}' not found")
 
 
+class ThreadNotFound(ApiError):
+    status_code = 404
+
+    def __init__(self, thread_id: str) -> None:
+        super().__init__(f"thread '{thread_id}' not found")
+
+
 class UnknownTrack(ApiError):
     status_code = 400
 

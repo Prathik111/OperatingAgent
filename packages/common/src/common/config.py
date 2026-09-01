@@ -25,6 +25,20 @@ class LLMConfig:
 
     base_url: str | None = None
 
+    def __post_init__(self) -> None:
+        if not self.provider.strip():
+            raise ValueError("llm.provider must not be empty")
+        if not self.model.strip():
+            raise ValueError("llm.model must not be empty")
+        if self.timeout_seconds <= 0:
+            raise ValueError("llm.timeout_seconds must be positive")
+        if self.max_tokens is not None and self.max_tokens <= 0:
+            raise ValueError("llm.max_tokens must be positive when set")
+        if not 0 <= self.temperature <= 2:
+            raise ValueError("llm.temperature must be between 0 and 2")
+        if not 0 < self.top_p <= 1:
+            raise ValueError("llm.top_p must be greater than 0 and at most 1")
+
 
 # ============================================================
 # Execution
@@ -45,6 +59,14 @@ class ExecutionConfig:
 
     enable_interrupts: bool = True
 
+    def __post_init__(self) -> None:
+        if self.max_iterations <= 0:
+            raise ValueError("execution.max_iterations must be positive")
+        if self.timeout_seconds <= 0:
+            raise ValueError("execution.timeout_seconds must be positive")
+        if self.retry_attempts < 0:
+            raise ValueError("execution.retry_attempts must not be negative")
+
 
 # ============================================================
 # Sandbox
@@ -56,14 +78,6 @@ class SandboxConfig:
     enabled: bool = True
 
     workspace: Path = Path("./workspace")
-
-    docker_image: str = "python:3.12"
-
-    network_enabled: bool = False
-
-    memory_limit_mb: int = 2048
-
-    cpu_limit: float = 2.0
 
 
 # ============================================================
@@ -100,6 +114,12 @@ class CheckpointConfig:
 
     namespace: str = "default"
 
+    def __post_init__(self) -> None:
+        if not self.backend.strip():
+            raise ValueError("checkpoint.backend must not be empty")
+        if not self.namespace.strip():
+            raise ValueError("checkpoint.namespace must not be empty")
+
 
 # ============================================================
 # Tracing
@@ -110,12 +130,6 @@ class TracingConfig:
 
     enabled: bool = True
 
-    provider: str = "langfuse"
-
-    project_name: str = "OperatingAgent"
-
-    endpoint: str | None = None
-
 
 # ============================================================
 # Agent Behaviour
@@ -124,15 +138,21 @@ class TracingConfig:
 @dataclass(slots=True, frozen=True)
 class BehaviourConfig:
 
-    require_verification: bool = True
+    # Off by default: the verifier then only checks the tool result for an
+    # error (a failed or empty step) and routes a tool error to the planner to
+    # modify the plan. Set True to also run the LLM semantic check that judges
+    # whether a step's output achieved its intent.
+    require_verification: bool = False
 
     require_human_approval: bool = True
 
-    enable_reflection: bool = True
-
-    max_reflections: int = 2
-
     risk_threshold: str = "review"
+
+    def __post_init__(self) -> None:
+        if self.risk_threshold not in {"safe", "review", "blocked"}:
+            raise ValueError(
+                "behaviour.risk_threshold must be 'safe', 'review', or 'blocked'"
+            )
 
 
 # ============================================================

@@ -31,7 +31,7 @@ class LangfuseSettings:
         return bool(self.public_key and self.secret_key)
 
     @classmethod
-    def from_env(cls) -> "LangfuseSettings":
+    def from_env(cls) -> LangfuseSettings:
         # Support both LANGFUSE_HOST (SDK-native) and LANGFUSE_BASE_URL (CLI).
         host = (
             os.getenv("LANGFUSE_HOST")

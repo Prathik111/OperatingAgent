@@ -10,12 +10,25 @@ on the run, and the run's terminal outcome.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 from common.agent import AgentRunResult, AgentTask
 from common.config import AgentConfig
 from common.enums import RunStatus, TaskStatus
 from common.events import AgentEvent
+
+
+@dataclass(slots=True, frozen=True)
+class ThreadRecord:
+    """Repository-neutral summary of one conversation thread."""
+
+    id: str
+    title: str | None
+    task_count: int
+    created_at: datetime
+    updated_at: datetime
 
 
 @runtime_checkable
@@ -26,6 +39,16 @@ class TaskRepository(Protocol):
 
     async def get_task(self, task_id: str) -> AgentTask:
         """Return a task or raise ``TaskNotFound``."""
+        ...
+
+    async def list_threads(self, *, limit: int, offset: int) -> list[ThreadRecord]:
+        """Return API-owned threads ordered by most recent activity."""
+        ...
+
+    async def list_tasks_by_thread(
+        self, thread_id: str, *, limit: int, offset: int
+    ) -> list[tuple[AgentTask, RunStatus | None]]:
+        """Return a thread's tasks and latest run statuses or raise ThreadNotFound."""
         ...
 
     async def create_run(self, task_id: str, config: AgentConfig) -> str:

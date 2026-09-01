@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Annotated
+
 from fastapi import APIRouter, Depends, status
 
 from ..dependencies import get_task_service
@@ -10,11 +12,13 @@ from ..services.task_service import TaskService
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
+TaskServiceDep = Annotated[TaskService, Depends(get_task_service)]
+
 
 @router.post("", status_code=status.HTTP_202_ACCEPTED, response_model=TaskResponse)
 async def create_task(
     body: CreateTaskRequest,
-    service: TaskService = Depends(get_task_service),
+    service: TaskServiceDep,
 ) -> TaskResponse:
     """Accept a goal and start a run in the background (returns 202).
 
@@ -33,7 +37,7 @@ async def create_task(
 @router.get("/{task_id}", response_model=TaskResponse)
 async def get_task(
     task_id: str,
-    service: TaskService = Depends(get_task_service),
+    service: TaskServiceDep,
 ) -> TaskResponse:
     task, run_status = await service.get_task(task_id)  # raises TaskNotFound -> 404
     return TaskResponse.from_task(

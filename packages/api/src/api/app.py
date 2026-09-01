@@ -15,23 +15,26 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
 from observability import flush, init_tracing, shutdown
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .config import ApiSettings
+from .environment import load_environment
 from .errors import register_exception_handlers
 from .orchestration.factory import build_orchestrators
 from .repository.factory import build_repository
-from .routers import approvals, health, stream, tasks
+from .routers import approvals, health, stream, tasks, threads
+from .security import SecurityHeadersMiddleware
 from .services.approval_gateway import ApprovalGateway
 from .services.event_broker import EventBroker
 from .services.task_service import TaskService
 
 log = logging.getLogger(__name__)
 
-
 def create_app(settings: ApiSettings | None = None) -> FastAPI:
-    settings = settings or ApiSettings.from_env()
+    if settings is None:
+        load_environment()
+        settings = ApiSettings.from_env()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -41,9 +44,11 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         if pool is not None:
             await pool.open()
 
-        orchestrators = build_orchestrators(settings)
-        broker = EventBroker()
         approval_gateway = ApprovalGateway(threshold=settings.approval_threshold)
+        orchestrators = build_orchestrators(
+            settings, approval_handler=approval_gateway
+        )
+        broker = EventBroker()
         background: set[asyncio.Task] = set()
 
         app.state.repository = repository
@@ -54,7 +59,6 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             orchestrators=orchestrators,
             repository=repository,
             broker=broker,
-            approvals=approval_gateway,
             settings=settings,
             background=background,
         )
@@ -67,6 +71,10 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             if background:
                 await asyncio.gather(*background, return_exceptions=True)
             await broker.aclose_all()
+            await asyncio.gather(
+                *(orchestrator.aclose() for orchestrator in orchestrators.values()),
+                return_exceptions=True,
+            )
             flush()
             shutdown()
             if pool is not None:
@@ -86,10 +94,16 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(
+        TrustedHostMiddleware,
+        allowed_hosts=list(settings.allowed_hosts),
+    )
+    app.add_middleware(SecurityHeadersMiddleware)
 
     register_exception_handlers(app)
     app.include_router(health.router)
     app.include_router(tasks.router)
+    app.include_router(threads.router)
     app.include_router(stream.router)
     app.include_router(approvals.router)
     return app

@@ -20,11 +20,10 @@ from common.enums import AgentTrack, RunStatus, TaskStatus
 from common.events import AgentEvent
 from common.interfaces import IAgentOrchestrator
 
-from packages.api.src.api.repository.base import TaskRepository
+from api.repository.base import TaskRepository, ThreadRecord
 
 from ..config import ApiSettings
 from ..errors import UnknownTrack
-from .approval_gateway import ApprovalGateway
 from .event_broker import EventBroker
 
 log = logging.getLogger(__name__)
@@ -48,14 +47,12 @@ class TaskService:
         orchestrators: dict[AgentTrack, IAgentOrchestrator],
         repository: TaskRepository,
         broker: EventBroker,
-        approvals: ApprovalGateway,
         settings: ApiSettings,
         background: set[asyncio.Task],
     ) -> None:
         self._orchestrators = orchestrators
         self._repo = repository
         self._broker = broker
-        self._approvals = approvals
         self._settings = settings
         # Held so the event loop keeps a strong ref — asyncio only weak-refs
         # tasks, so a fire-and-forget run could otherwise be GC'd mid-flight.
@@ -96,6 +93,18 @@ class TaskService:
         task = await self._repo.get_task(task_id)  # raises TaskNotFound
         status = await self._repo.get_latest_run_status(task_id)
         return task, status
+
+    async def list_threads(self, *, limit: int, offset: int) -> list[ThreadRecord]:
+        return await self._repo.list_threads(limit=limit, offset=offset)
+
+    async def list_thread_tasks(
+        self, thread_id: str, *, limit: int, offset: int
+    ) -> list[tuple[AgentTask, RunStatus | None]]:
+        return await self._repo.list_tasks_by_thread(
+            thread_id,
+            limit=limit,
+            offset=offset,
+        )
 
     def stream_task(self, task_id: str):
         """Return an async iterator of the task's events (buffered + live)."""

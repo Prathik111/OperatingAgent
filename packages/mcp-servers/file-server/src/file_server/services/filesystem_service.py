@@ -10,9 +10,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from collections.abc import Iterable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -224,7 +223,7 @@ class FileSystemService:
             "size": stat.st_size,
             "is_dir": resolved.is_dir(),
             "is_file": resolved.is_file(),
-            "modified_at": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(),
+            "modified_at": datetime.fromtimestamp(stat.st_mtime, UTC).isoformat(),
         }
         if context is not None:
             context.logger.info("path_metadata", path=str(resolved))
@@ -256,7 +255,7 @@ class FileSystemService:
             raise NotADirectoryError(f"Directory not found: {resolved}")
         snapshots: list[dict[str, Any]] = []
         for _ in range(limit):
-            snapshots.append({"timestamp": datetime.now(timezone.utc).isoformat(), "entries": self.list_directory(str(resolved), recursive=False)["entries"]})
+            snapshots.append({"timestamp": datetime.now(UTC).isoformat(), "entries": self.list_directory(str(resolved), recursive=False)["entries"]})
             await asyncio.sleep(interval_seconds)
         if context is not None:
             context.logger.info("directory_watched", path=str(resolved), snapshots=len(snapshots))

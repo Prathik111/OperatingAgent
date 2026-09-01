@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Annotated
+
 from fastapi import APIRouter, Depends
 
 from ..config import ApiSettings
@@ -11,11 +13,14 @@ from ..services.task_service import TaskService
 
 router = APIRouter(tags=["health"])
 
+SettingsDep = Annotated[ApiSettings, Depends(get_settings)]
+TaskServiceDep = Annotated[TaskService, Depends(get_task_service)]
+
 
 @router.get("/health", response_model=HealthResponse)
 async def health(
-    settings: ApiSettings = Depends(get_settings),
-    service: TaskService = Depends(get_task_service),
+    settings: SettingsDep,
+    service: TaskServiceDep,
 ) -> HealthResponse:
     return HealthResponse(
         status="ok",

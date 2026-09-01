@@ -21,7 +21,6 @@ from contextlib import asynccontextmanager
 from typing import Final
 
 from fastmcp import FastMCP
-
 from file_server.server import mcp as file_mcp
 from git_server.server import mcp as git_mcp
 from search_server.server import mcp as search_mcp
@@ -99,4 +98,4 @@ mcp = build_gateway()
 
 
 if __name__ == "__main__":
-    mcp.run()
+    mcp.run(transport="stdio", show_banner=False)

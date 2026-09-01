@@ -28,14 +28,14 @@ if TYPE_CHECKING:  # avoid importing heavy SDK at type-check time
 
 log = logging.getLogger(__name__)
 
-_client: "Langfuse | None" = None
+_client: Langfuse | None = None
 _initialised = False
 # Guards the one-time init so a concurrent caller can never observe
 # ``_initialised is True`` while ``_client`` is still unset (see init_tracing).
 _init_lock = threading.Lock()
 
 
-def init_tracing(settings: LangfuseSettings | None = None) -> "Langfuse | None":
+def init_tracing(settings: LangfuseSettings | None = None) -> Langfuse | None:
     """Initialise (once) and return the Langfuse singleton, or None if disabled.
 
     Idempotent and thread-safe: safe to call from multiple entry points/threads.
@@ -63,7 +63,7 @@ def init_tracing(settings: LangfuseSettings | None = None) -> "Langfuse | None":
             _initialised = True
             return None
 
-        client: "Langfuse | None"
+        client: Langfuse | None
         try:
             from langfuse import Langfuse
 
@@ -77,7 +77,7 @@ def init_tracing(settings: LangfuseSettings | None = None) -> "Langfuse | None":
                 mask_otel_spans=mask_otel_spans,
             )
             log.info("Langfuse tracing enabled (env=%s, host=%s).", resolved.environment, resolved.host)
-        except Exception as exc:  # never let tracing setup break the app
+        except Exception as exc:  # noqa: BLE001 - tracing must not break startup
             log.warning("Langfuse initialisation failed; continuing without tracing: %s", exc)
             client = None
 
@@ -87,7 +87,7 @@ def init_tracing(settings: LangfuseSettings | None = None) -> "Langfuse | None":
         return _client
 
 
-def get_client() -> "Langfuse | None":
+def get_client() -> Langfuse | None:
     """Return the initialised client, initialising from env on first use."""
     if not _initialised:
         return init_tracing()
@@ -107,7 +107,7 @@ def get_callback_handler() -> Any | None:
         from langfuse.langchain import CallbackHandler
 
         return CallbackHandler()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - optional SDK integration
         log.warning("Could not create Langfuse CallbackHandler: %s", exc)
         return None
 
@@ -118,7 +118,7 @@ def flush() -> None:
     if client is not None:
         try:
             client.flush()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - tracing is best effort
             log.debug("Langfuse flush failed: %s", exc)
 
 
@@ -128,5 +128,5 @@ def shutdown() -> None:
     if client is not None:
         try:
             client.shutdown()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - tracing is best effort
             log.debug("Langfuse shutdown failed: %s", exc)

@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from ..config import ApiSettings
 
 
-def build_repository(settings: "ApiSettings") -> tuple[TaskRepository, Any | None]:
+def build_repository(settings: ApiSettings) -> tuple[TaskRepository, Any | None]:
     backend = (settings.repository_backend or "memory").lower()
 
     if backend in ("memory", "inmemory", "in_memory"):
@@ -39,7 +39,7 @@ def build_repository(settings: "ApiSettings") -> tuple[TaskRepository, Any | Non
 
         # open=False: the lifespan awaits pool.open() so a failed connection
         # surfaces at startup, not lazily on the first request.
-        pool = AsyncConnectionPool(
+        pool: AsyncConnectionPool[Any] = AsyncConnectionPool(
             settings.database_url, open=False, kwargs={"autocommit": True}
         )
         return PostgresTaskRepository(pool), pool

@@ -10,7 +10,7 @@ credentials — useful as a smoke path and as the hermetic orchestrator in tests
 from __future__ import annotations
 
 import logging
-from typing import Awaitable, Callable
+from collections.abc import Awaitable, Callable
 
 from common.agent import AgentRunResult, AgentTask
 from common.enums import RunStatus
@@ -31,7 +31,7 @@ async def emit_event(on_event: EventCallback, event: AgentEvent) -> None:
         outcome = on_event(event)
         if outcome is not None and hasattr(outcome, "__await__"):
             await outcome
-    except Exception as exc:  # a bad listener must not fail the run
+    except Exception as exc:  # noqa: BLE001 - callback isolation boundary
         log.warning("event callback raised: %s", exc)
 
 
@@ -61,3 +61,6 @@ class NativeStubOrchestrator:
             tool_calls=0,
             total_tokens=0,
         )
+
+    async def aclose(self) -> None:
+        """The native stub owns no external resources."""

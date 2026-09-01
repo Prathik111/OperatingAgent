@@ -16,17 +16,18 @@ LangGraph track, plus a placeholder native track) without modifying `common`,
 
 ```bash
 uv sync
-uv run api                       # uvicorn on 127.0.0.1:8080
-# equivalently: uv run uvicorn api.app:create_app --factory --port 8080
+uv run api                       # loads .env, then starts on 127.0.0.1:8000
 ```
 
 ```bash
-curl http://127.0.0.1:8080/health
-curl -X POST http://127.0.0.1:8080/tasks \
+curl http://127.0.0.1:8000/health
+curl -X POST http://127.0.0.1:8000/tasks \
   -H 'content-type: application/json' \
   -d '{"goal":"say hi","track":"native"}'
-curl http://127.0.0.1:8080/tasks/<id>
-curl -N http://127.0.0.1:8080/tasks/<id>/events      # SSE stream
+curl http://127.0.0.1:8000/tasks/<id>
+curl http://127.0.0.1:8000/threads
+curl http://127.0.0.1:8000/threads/<thread-id>/tasks
+curl -N http://127.0.0.1:8000/tasks/<id>/events      # SSE stream
 ```
 
 The **native** track responds with no LLM credentials configured. The
@@ -34,23 +35,54 @@ The **native** track responds with no LLM credentials configured. The
 degrades to a `FAILED` result (never a crash) when no live model/gateway is
 reachable.
 
+The LangGraph track launches `gateway_server` itself over FastMCP stdio. Do not
+start a separate HTTP MCP process for normal API use.
+
 ## Configuration (environment)
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `API_HOST` | `127.0.0.1` | bind host |
-| `API_PORT` | `8080` | bind port (8000 is the MCP gateway) |
+| `API_PORT` | `8000` | bind port |
 | `API_LOG_LEVEL` | `info` | uvicorn log level |
 | `DATABASE_URL` | _unset_ | Postgres DSN; when set the repository defaults to `postgres` |
 | `API_REPOSITORY_BACKEND` | `postgres` if `DATABASE_URL` else `memory` | `memory` \| `postgres` |
-| `API_CORS_ORIGINS` | `*` | comma-separated allowed origins |
+| `API_CORS_ORIGINS` | Tauri production origins plus `localhost:1420` | comma-separated frontend origins allowed to call the API |
+| `API_ALLOWED_HOSTS` | `127.0.0.1,localhost,testserver` | accepted HTTP `Host` values; prevents DNS rebinding against the local service |
 | `API_DEFAULT_TRACK` | `langgraph` | `native` \| `langgraph` used when a request omits `track` |
 | `API_APPROVAL_THRESHOLD` | `review` | lowest risk level that requires a human gate |
 | `LLM_PROVIDER` / `LLM_MODEL` / `LLM_BASE_URL` | `ollama` / `llama3.1` / _unset_ | model for the langgraph track |
-| `AGENT_PROMPT_DIR` | `prompts` | directory holding `planner.txt` / `verifier.txt` / `responder.txt` |
+| `LLM_TIMEOUT_SECONDS` / `LLM_TEMPERATURE` / `LLM_MAX_TOKENS` / `LLM_TOP_P` | `60` / `0` / _unset_ / `1` | model generation controls |
+| `MCP_GATEWAY_COMMAND` / `MCP_GATEWAY_ARGS` | current Python / `-m gateway_server` | stdio command the LangGraph track launches for tools |
+| `AGENT_PROMPT_DIR` | packaged prompts | directory holding `planner.txt` / `verifier.txt` / `responder.txt` |
+| `AGENT_PLANNER_PROMPT` / `AGENT_VERIFIER_PROMPT` / `AGENT_RESPONDER_PROMPT` | _unset_ | exact prompt paths overriding `AGENT_PROMPT_DIR` |
+| `AGENT_MAX_ITERATIONS` / `AGENT_EXECUTION_TIMEOUT_SECONDS` / `AGENT_RETRY_ATTEMPTS` | `20` / `300` / `2` | graph and tool execution limits |
+| `AGENT_STREAM` / `AGENT_ENABLE_CHECKPOINTS` / `AGENT_ENABLE_INTERRUPTS` | `true` / `true` / `true` | execution mode and resumability controls |
+| `AGENT_REQUIRE_VERIFICATION` / `AGENT_REQUIRE_HUMAN_APPROVAL` | `false` / `true` | semantic verification and approval gates |
+| `AGENT_CHECKPOINT_BACKEND` / `AGENT_CHECKPOINT_NAMESPACE` | `auto` / `default` | checkpoint storage and namespace |
+| `AGENT_SANDBOX_ENABLED` / `AGENT_WORKSPACE` | `true` / `./workspace` | filesystem tool confinement |
+| `AGENT_PERMISSION_*` | `true` | category switches for filesystem, terminal, git, search, knowledge, and memory tools |
 
 Langfuse tracing follows the shared `observability` package: it is enabled only
 when both `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` are present.
+
+## HTTP security
+
+The API is designed as a loopback service launched by the Tauri application, so
+it does not require an application API key. Keep `API_HOST=127.0.0.1`; do not bind
+to `0.0.0.0` unless the desktop-only trust model is replaced with authentication.
+
+Browser access is restricted to `API_CORS_ORIGINS`, and requests with an
+untrusted `Host` header are rejected through `API_ALLOWED_HOSTS`. Responses also
+carry no-store, MIME-sniffing, framing, referrer, and permissions-policy headers.
+Set the exact Tauri/Vite origin in `API_CORS_ORIGINS` rather than using `*`.
+
+## Threads
+
+`GET /threads` returns conversation summaries ordered by most recent activity.
+`GET /threads/{thread_id}/tasks` returns that thread's tasks with their latest
+run status, newest first. Both endpoints accept `limit` (1-500, default 100) and
+`offset` (default 0) query parameters.
 
 ## Persistence
 
@@ -62,10 +94,9 @@ snapshot **and** from its content hash before anything is written.
 
 ## Known limitations (this pass)
 
-- **Approvals are in-process only.** The `ApprovalGateway` classifies and gates
-  tool calls in memory but is not yet wired into the orchestrators and is not
-  persisted (the `approval_requests` table hangs off `plan_steps`, which is out
-  of the spine scope for this change).
+- **Approvals are in-process only.** The LangGraph executor waits on the same
+  `ApprovalGateway` exposed by `/approvals`, but pending decisions are not
+  persisted and are lost on process restart.
 - Only the run spine is persisted — plans, tool calls, llm calls, verifications
   and findings are not written yet.
 - Postgres repository behaviour is covered by an opt-in live test tier gated on

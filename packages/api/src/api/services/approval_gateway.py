@@ -6,18 +6,15 @@ human. A call below the configured threshold is auto-approved; a ``BLOCKED``
 call is auto-denied; anything in between parks on an ``asyncio.Event`` until
 someone calls :meth:`resolve_approval`.
 
-Scope note: this gate is in-process and is **not yet wired into the
-orchestrators**, nor persisted (the ``approval_requests`` table hangs off
-``plan_steps``, which is outside this change's spine). It is exercised directly
-by the approval endpoints and unit tests.
+Scope note: this gate is in-process and shared with the LangGraph executor, but
+is not yet persisted. Pending approvals are therefore lost on process restart.
 """
 
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
-from typing import Any
 
+from common.approvals import ApprovalRequest
 from common.enums import RiskLevel
 from common.risk import RiskClassifier
 from common.tools import ToolCallRequest
@@ -28,26 +25,10 @@ from ..errors import ApprovalAlreadyResolved, ApprovalNotFound
 _ORDER = {RiskLevel.SAFE: 0, RiskLevel.REVIEW: 1, RiskLevel.BLOCKED: 2}
 
 
-@dataclass(slots=True)
-class ApprovalRequest:
-    """A pending decision about one tool call.
-
-    Defined here rather than in ``common`` (the class diagram places it there,
-    but ``common`` is not modified by this change). ``risk_level`` is filled in
-    by the gateway if the caller leaves it ``None``.
-    """
-
-    id: str
-    task_id: str
-    tool_name: str
-    arguments: dict[str, Any]
-    risk_level: RiskLevel | None = None
-
-
 class _Pending:
     """Bookkeeping for a parked request: the waiter event and its outcome."""
 
-    __slots__ = ("request", "event", "approved", "note", "resolved")
+    __slots__ = ("approved", "event", "note", "request", "resolved")
 
     def __init__(self, request: ApprovalRequest) -> None:
         self.request = request

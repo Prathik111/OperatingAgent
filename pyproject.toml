@@ -22,18 +22,21 @@ dev = [
     "common",
     "observability",
     "agent-langgraph",
+    "api",
     "file-server",
     "git-server",
     "terminal-server",
     "search-server",
     "gateway-server",
     "pytest-cov>=7.1.0",
+    "ruff>=0.16.5",
 ]
 
 [tool.uv.sources]
 common = { workspace = true }
 observability = { workspace = true }
 agent-langgraph = { workspace = true }
+api = { workspace = true }
 file-server = { workspace = true }
 git-server = { workspace = true }
 terminal-server = { workspace = true }
@@ -74,3 +77,11 @@ filterwarnings = [
     # until the default moves to `datetime.now(timezone.utc)`.
     "ignore:datetime.datetime.utcnow:DeprecationWarning",
 ]
+
+[tool.pyright]
+include = ["packages"]
+exclude = ["tests", ".venv", ".sandbox-tmp"]
+typeCheckingMode = "basic"
+pythonVersion = "3.12"
+venvPath = "."
+venv = ".venv"
