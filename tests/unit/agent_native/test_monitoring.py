@@ -175,10 +175,31 @@ async def test_endpoint_set_but_extra_missing_degrades_to_json() -> None:
         assert mon.otlp_attempted is True       # an endpoint was configured
         # SDK may be installed in this env - exported may be True (collector tried) or False
         # In both cases JSON fallback must still write and not crash the run.
+        # Collector-unavailable is expected here; do not require tracing text.
         assert len(written) == 1                # JSON fallback still wrote
         assert Path(written[0]).exists()
         if not mon.otlp_exported:
-            assert mon.otlp_skipped_reason is not None and "tracing" in mon.otlp_skipped_reason
+            assert mon.otlp_skipped_reason is not None
+
+
+def test_missing_tracing_extra_reports_tracing_reason(monkeypatch):
+    """Isolated mocked missing-extra must report tracing."""
+    import builtins
+
+    orig_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name.startswith("opentelemetry"):
+            raise ImportError("No module named 'opentelemetry'")
+        return orig_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    with tempfile.TemporaryDirectory() as tmp:
+        mon = Monitoring(trace_dir=tmp, otlp_endpoint="http://localhost:4318/v1/traces")
+        with mon.run_span("run"), mon.turn_span(1):
+            pass
+        mon.shutdown()
+        assert mon.otlp_skipped_reason is not None and "tracing" in mon.otlp_skipped_reason
 
 
 async def test_shutdown_with_nothing_recorded_is_a_noop() -> None:
