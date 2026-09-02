@@ -16,8 +16,8 @@ from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
 from ..dependencies import get_native_service
-from ..schemas import ResumeRequest, RunResponse, SendMessageRequest
 from ..runtime import attach_mcp_tools
+from ..schemas import ResumeRequest, RunResponse, SendMessageRequest
 
 router = APIRouter(prefix="/native/sessions", tags=["native-messages"])
 

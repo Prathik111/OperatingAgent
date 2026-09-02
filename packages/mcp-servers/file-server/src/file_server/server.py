@@ -17,13 +17,13 @@ from .tools.copy_file import register_copy_file
 from .tools.create_directory import register_create_directory
 from .tools.delete_directory import register_delete_directory
 from .tools.delete_file import register_delete_file
+from .tools.edit_file import register_edit_file
 from .tools.exists import register_exists
 from .tools.list_directory import register_list_directory
 from .tools.metadata import register_metadata
 from .tools.move_file import register_move_file
 from .tools.read_file import register_read_file
 from .tools.rename_file import register_rename_file
-from .tools.edit_file import register_edit_file
 from .tools.search_files import register_search_files
 from .tools.watch_directory import register_watch_directory
 from .tools.write_file import register_write_file

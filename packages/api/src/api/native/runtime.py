@@ -67,8 +67,8 @@ def wire_native_models(runtime: Any) -> list[str]:
     groq_key = os.getenv("GROQ_API_KEY", "").strip()
     if groq_key:
         try:
-            from agent_native.models.groq_model import GROQ_MODELS, Groq
             from agent_native.models.base import Model
+            from agent_native.models.groq_model import GROQ_MODELS, Groq
 
             groq = Groq()
             runtime.models.register_provider("groq", groq)
@@ -115,8 +115,8 @@ def wire_native_models(runtime: Any) -> list[str]:
     # Ollama (optional)
     try:
         ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-        from agent_native.models.ollama_model import Ollama
         from agent_native.models.base import Model, ToolFormat
+        from agent_native.models.ollama_model import Ollama
 
         ollama = Ollama(host=ollama_host)
         runtime.models.register_provider("ollama", ollama)

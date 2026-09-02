@@ -5,11 +5,15 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query, Request, status
-
 from pydantic import BaseModel
 
 from ..dependencies import get_native_service
-from ..schemas import CreateSessionRequest, SessionResponse, SessionWithRunsResponse, RunResponse
+from ..schemas import (
+    CreateSessionRequest,
+    RunResponse,
+    SessionResponse,
+    SessionWithRunsResponse,
+)
 
 router = APIRouter(prefix="/native/sessions", tags=["native-sessions"])
 
