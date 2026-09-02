@@ -271,7 +271,7 @@ The CLI is no longer the only entry point for Step 12 — `packages/api` now shi
 
 Shipped as `packages/api/src/api/{app.py,config.py,repository/{memory,postgres,factory},orchestration/factory.py,services/{task_service,event_broker,approval_gateway}}` plus `native/{runtime.py,routers/sessions,messages,events,permissions,runs,health}` integrating `AgentRuntime`/`AgentService` and native Postgres/Memory persistence. Create a session, post a message and stream events over SSE, replay from cursor, list/get runs, manage permissions, and expose native health.
 
-Remaining gaps (not a stub): native WebSocket parity (`/native/ws/*`), API auth/rate-limiting, production Postgres migration enablement, and the broader Stage C surface — session fork/delete management and the thin web UI (Steps 13–15) — which are future work.
+Remaining gaps (not a stub): native WebSocket parity (`/native/ws/*`), API auth/rate-limiting, production Postgres migration enablement, and the broader Stage C surface — async PermissionResponder channel (Step 13, partial — permission management via `/native/permissions` already exposed), session fork/delete management (Step 14) and the thin web UI (Step 15) — which are future work.
 
 **Files.** Delivered under `packages/api/src/api/`; consumes `AgentService` and the event bus.
 
