@@ -1,0 +1,897 @@
+classDiagram
+    direction LR
+
+    %% =========================================================
+    %% agent-native - AS BUILT (v0.5.0)
+    %%
+    %% This file documents what is actually in
+    %% packages/agent-native/src/agent_native today, class by class.
+    %%
+    %% Referral / companion diagrams:
+    %%   class-diagram.mermaid              - the whole-system master diagram
+    %%   native-agent-v2-classes.mermaid    - the TARGET native design
+    %%   native-agent-v2-sequence.mermaid   - one message, start to finish
+    %%   native-agent-v2-flow.mermaid       - the decisions the loop makes
+    %%   native-agent-runtime.mermaid       - processes and machines
+    %%
+    %% IMPORTANT - the master class-diagram.mermaid is STALE for this package.
+    %% Its "packages/agent-native" section describes the v0.3.0
+    %% Plan-and-Execute + ReAct design (NativeAgent, Planner, ReactExecutor,
+    %% Reflector, Verifier, ContextCompactor, NativeMCPClient, NativePlan,
+    %% NativePlanStep). That code now lives only in
+    %% packages/agent-native/backup/v0.3.0/. The shipped v0.5.0 agent is a
+    %% single conversation-driven tool loop, which follows
+    %% native-agent-v2-classes.mermaid instead. Section 11 maps the master
+    %% diagram's contracts onto what is really here.
+    %%
+    %% Sections are numbered to match native-agent-v2-classes.mermaid so the
+    %% target and the as-built can be read side by side.
+    %% =========================================================
+
+    %% =========================================================
+    %% 1. CONVERSATION / STATE  (conversation.py)
+    %% The one piece of state the agent is built around.
+    %% =========================================================
+    class Role {
+        <<enumeration>>
+        SYSTEM
+        USER
+        ASSISTANT
+        TOOL
+    }
+    class PartType {
+        <<enumeration>>
+        TEXT
+        REASONING
+        TOOL_CALL
+        COMPACTION
+    }
+    class ToolCallStatus {
+        <<enumeration>>
+        PENDING
+        WAITING_PERMISSION
+        DENIED
+        RUNNING
+        SUCCESS
+        ERROR
+    }
+    class MessagePart {
+        <<base class>>
+        +part_type : PartType
+    }
+    class Text {
+        +text : str
+        +part_type : PartType
+    }
+    class Reasoning {
+        +text : str
+        +hidden : bool
+        +part_type : PartType
+    }
+    class ToolCall {
+        +id : str
+        +name : str
+        +arguments : dict
+        +status : ToolCallStatus
+        +output : str
+        +error : str
+        +part_type : PartType
+    }
+    class Compaction {
+        +summary : str
+        +old_messages : list
+        +tokens_before : int
+        +tokens_after : int
+        +part_type : PartType
+    }
+    class Usage {
+        +input_tokens : int
+        +output_tokens : int
+        +cached_tokens : int
+        +total_tokens : int
+    }
+    class Message {
+        +id : str
+        +session_id : str
+        +role : Role
+        +parts : list
+        +model : str
+        +usage : Usage
+        +created_at : datetime
+        +text() str
+        +tool_calls() list
+        +has_tool_calls() bool
+    }
+    class Session {
+        +id : str
+        +agent : str
+        +title : str
+        +working_directory : str
+        +revision : int
+    }
+    class Conversation {
+        +messages : list
+        +add(message) void
+        +get_recent_messages(count) list
+        +estimate_tokens() int
+        +is_valid() bool
+        +render(tool_format) list
+    }
+    class MessageFactories {
+        <<module functions>>
+        +user_message(session_id, text) Message
+        +system_message(text, session_id) Message
+        +assistant_message(session_id, text, tool_calls, model, usage) Message
+        +tool_result_message(session_id, result) Message
+    }
+
+    MessagePart <|-- Text
+    MessagePart <|-- Reasoning
+    MessagePart <|-- ToolCall
+    MessagePart <|-- Compaction
+    MessagePart --> PartType
+    Message *-- MessagePart
+    Message --> Role
+    Message --> Usage
+    Conversation *-- Message
+    ToolCall --> ToolCallStatus
+    MessageFactories ..> Message : builds
+    Conversation ..> ToolFormat : render accepts NATIVE only
+
+    %% NOTE render() raises NotImplementedError for TEXT and JSON formats.
+    %% NOTE Session.revision is declared but never incremented anywhere.
+    %% NOTE PartType is carried as metadata only; dispatch uses isinstance.
+
+    %% =========================================================
+    %% 2. AGENT LOOP  (loop.py)
+    %% think -> act -> observe -> repeat. A failed tool is a result,
+    %% not an error, so only an unexpected exception ends a run.
+    %% =========================================================
+    class Limits {
+        +max_turns : int
+        +wall_clock_seconds : float
+    }
+    class Cancellation {
+        +cancelled : bool
+        +cancel() void
+    }
+    class RunStatus {
+        <<enumeration>>
+        RUNNING
+        FINISHED
+        LIMIT_REACHED
+        CANCELLED
+        ERROR
+    }
+    class RunContext {
+        +session : Session
+        +run_id : str
+        +config : AgentConfig
+        +limits : Limits
+        +cancellation : Cancellation
+        +turn : int
+        +started_at : float
+    }
+    class RunResult {
+        +run_id : str
+        +status : RunStatus
+        +turns : int
+        +final_text : str
+        +usage : Usage
+        +error : str
+    }
+    class RunRecord {
+        +run_id : str
+        +session_id : str
+        +status : str
+        +turns : int
+        +input_tokens : int
+        +output_tokens : int
+        +error : str
+    }
+    class AgentLoop {
+        -_models : ModelRegistry
+        -_tools : ToolRegistry
+        -_tool_manager : ToolManager
+        -_context : ContextManager
+        -_bus : EventBus
+        -_db : Database
+        -_monitoring : Monitoring
+        +run(conversation, context) RunResult
+        +run_turn(conversation, model, provider, context) tuple
+        +run_tools(assistant_msg, conversation, context) void
+        -_finish(session, result) void
+    }
+    class StreamAssembly {
+        <<module functions>>
+        -_merge_fragment(fragments, order, data) void
+        -_build_tool_calls(fragments, order) list
+        -_parse_args(raw) dict
+        -_add_usage(total, usage) void
+    }
+
+    AgentLoop --> ModelRegistry
+    AgentLoop --> ToolRegistry : reads native_schemas
+    AgentLoop --> ToolManager
+    AgentLoop --> ContextManager
+    AgentLoop --> EventBus
+    AgentLoop --> Database
+    AgentLoop --> Monitoring
+    AgentLoop ..> Conversation : grows
+    AgentLoop ..> RunContext : receives
+    AgentLoop ..> RunResult : returns
+    AgentLoop ..> RunRecord : saves via Database
+    AgentLoop ..> StreamAssembly : stitches TOOL_CALL fragments
+    AgentLoop ..> StreamType : reads
+    AgentLoop ..> MessageFactories : builds messages
+    RunContext --> Limits
+    RunContext --> Cancellation
+    RunContext --> Session
+    RunContext --> AgentConfig
+    RunResult --> RunStatus
+    RunResult --> Usage
+
+    %% NOTE run_turn and run_tools are PUBLIC here, private in the target diagram.
+    %% NOTE Limits has no max_tool_calls, max_context_tokens or tool_timeout yet.
+    %% NOTE the model/provider lookup sits inside the try, so a bad model name
+    %%      becomes a clean ERROR RunResult rather than an escaping exception.
+
+    %% =========================================================
+    %% 3. TOOLS  (tools/base.py, tools/manager.py, tools/builtins.py)
+    %% =========================================================
+    class ExecutionMode {
+        <<enumeration>>
+        DIRECT
+        HOST_PROCESS
+        SANDBOX
+    }
+    class ToolPermissions {
+        +read_only : bool
+        +destructive : bool
+        +needs_network : bool
+        +execution_mode : ExecutionMode
+    }
+    class ToolDefinition {
+        +name : str
+        +namespace : str
+        +description : str
+        +input_schema : dict
+        +permissions : ToolPermissions
+        +full_name : str
+    }
+    class ToolResult {
+        +success : bool
+        +output : str
+        +error : str
+        +truncated : bool
+    }
+    class Tool {
+        <<abstract>>
+        +definition : ToolDefinition
+        +execute(arguments, context) ToolResult
+        +preview(arguments) str
+    }
+    class ToolRegistry {
+        -_tools : dict
+        +register(tool) void
+        +find(name) Tool
+        +all() list
+        +get_available_tools(agent) list
+        +native_schemas(agent) list
+    }
+    class ArgumentChecker {
+        +validate(schema, arguments) tuple
+    }
+    class ToolManager {
+        -_registry : ToolRegistry
+        -_policy : Policy
+        -_permissions : PermissionManager
+        -_args : ArgumentChecker
+        -_max_output : int
+        +execute(tool_call, context) ToolResult
+        -_find_tool(name) Tool
+        -_check_permission(context, tool, tool_call) tuple
+        -_limit_output(result) ToolResult
+    }
+    class ReadFileTool {
+        +definition : ToolDefinition
+        +preview(arguments) str
+        +execute(arguments, context) ToolResult
+    }
+    class WriteFileTool {
+        +definition : ToolDefinition
+        +preview(arguments) str
+        +execute(arguments, context) ToolResult
+    }
+    class ToolHelpers {
+        <<module functions>>
+        +native_schema(definition) dict
+        +default_tools() list
+        -_resolve_in_workspace(context, path) str
+        -_type_ok(expected, value) bool
+    }
+
+    Tool <|.. ReadFileTool
+    Tool <|.. WriteFileTool
+    Tool --> ToolDefinition
+    ToolDefinition --> ToolPermissions
+    ToolPermissions --> ExecutionMode
+    ToolRegistry o-- Tool
+    ToolRegistry ..> ToolHelpers : native_schema
+    ToolManager --> ToolRegistry
+    ToolManager --> ArgumentChecker
+    ToolManager --> Policy : asks for a verdict
+    ToolManager --> PermissionManager : asks the user
+    ToolManager ..> ToolResult : always returns one
+    ToolManager ..> ToolCall : consumes
+    ToolManager ..> PermissionRequest : builds
+    ToolHelpers ..> ToolResult : path escape becomes an error
+    ReadFileTool ..> ToolHelpers : resolves in workspace
+    WriteFileTool ..> ToolHelpers : resolves in workspace
+
+    %% NOTE DIRECT and MCP-backed tools ship as present: plan (read_only),
+    %%      invoke_skill/skill (read_only), remember/recall memory (read_only/write),
+    %%      delegate/fan_out subagent (present, dispatched via tools/subagent.py),
+    %%      sandbox-wrapped terminal (SANDBOX), and the full MCP fleet via
+    %%      MCPTool/MCPToolProvider; all are confined to session working_directory.
+    %% NOTE ToolManager is the ONLY thing that runs a tool. Find, validate,
+    %%      gate, run - a failure at any of the first three still returns a
+    %%      ToolResult, and a crashing tool is caught, not propagated.
+    %% NOTE output over 12000 chars is truncated and flagged.
+
+    %% =========================================================
+    %% 4. PERMISSIONS / SECURITY  (permissions.py)
+    %% A pure policy layer, plus the manager that actually asks the user.
+    %% =========================================================
+    class PermissionDecision {
+        <<enumeration>>
+        ALLOW
+        ASK
+        DENY
+    }
+    class Decision {
+        +result : PermissionDecision
+        +reason : str
+        +rule : str
+    }
+    class Policy {
+        <<abstract>>
+        +check(context, definition, arguments) Decision
+    }
+    class PermissionRule {
+        +id : str
+        +tool_pattern : str
+        +argument_pattern : str
+        +result : PermissionDecision
+        +matches(tool_name, arguments) bool
+    }
+    class RulePolicy {
+        +rules : list
+        +check(context, definition, arguments) Decision
+        -_capability_floor(definition) Decision
+    }
+    class SessionPolicy {
+        -_seen_hosts : dict
+        +check(context, definition, arguments) Decision
+    }
+    class PolicyChain {
+        +policies : list
+        +check(context, definition, arguments) Decision
+    }
+    class PermissionDuration {
+        <<enumeration>>
+        ONCE
+        SESSION
+        ALWAYS
+    }
+    class PermissionGrant {
+        +tool_pattern : str
+        +duration : PermissionDuration
+        +session_id : str
+        +covers(tool_name, session_id) bool
+    }
+    class PermissionStore {
+        -_db : Database
+        +covering(tool_name, session_id) bool
+        +save(grant) void
+    }
+    class PermissionRequest {
+        +call_id : str
+        +tool : str
+        +arguments : dict
+        +preview : str
+        +reason : str
+    }
+    class PermissionManager {
+        -_store : PermissionStore
+        -_bus : EventBus
+        -_pending : dict
+        +ask(request, session_id) bool
+        +resolve(call_id, allowed, duration) void
+        +pending() list
+    }
+
+    Policy <|.. RulePolicy
+    Policy <|.. SessionPolicy
+    Policy <|.. PolicyChain
+    Policy ..> Decision : returns
+    PolicyChain o-- Policy : takes the strictest verdict
+    RulePolicy o-- PermissionRule
+    RulePolicy ..> ToolPermissions : reads the capability floor
+    SessionPolicy ..> ToolPermissions : reads needs_network
+    PermissionRule --> PermissionDecision
+    Decision --> PermissionDecision
+    PermissionGrant --> PermissionDuration
+    PermissionStore --> Database
+    PermissionStore ..> PermissionGrant
+    PermissionManager --> PermissionStore
+    PermissionManager --> EventBus : PERMISSION_REQUESTED and RESOLVED
+    PermissionManager ..> PermissionRequest : awaits an answer per call_id
+    PermissionManager ..> PermissionDuration
+
+    %% NOTE PolicyChain exists in code but is MISSING from the target diagram.
+    %% NOTE PermissionStore exposes covering(), not find() as the target says.
+    %% NOTE a RulePolicy rule may only TIGHTEN the capability floor, never
+    %%      loosen it - a stray allow rule cannot wave through a destructive tool.
+    %% NOTE SessionPolicy.seen_hosts is per session; destructive_actions memory
+    %%      from the target diagram is NOT implemented.
+    %% NOTE ask() blocks on an asyncio Future until resolve() lands, so the loop
+    %%      genuinely waits on the user.
+
+    %% =========================================================
+    %% 5. CONTEXT MANAGEMENT  (context.py)
+    %% Never split a tool call from its result across the summary boundary.
+    %% =========================================================
+    class TokenCounter {
+        -_count_fn : Callable
+        -_input : int
+        -_output : int
+        +count(wire_messages) int
+        +record_usage(usage) void
+        +get_total() int
+    }
+    class CompactionResult {
+        +summary : Compaction
+        +old_messages : list
+        +tokens_before : int
+        +tokens_after : int
+    }
+    class ContextManager {
+        +tokens : TokenCounter
+        +recent_window : int
+        +threshold : float
+        +needs_compaction(conversation, model) bool
+        +protect_recent_messages(conversation) int
+        +check_tool_pairs(older, recent) bool
+        +compact(conversation, model) CompactionResult
+        -_leading_system_count(messages) int
+    }
+    class Summarizer {
+        <<module function>>
+        -_summarize(older) str
+    }
+
+    ContextManager --> TokenCounter
+    ContextManager ..> CompactionResult : returns
+    ContextManager ..> Conversation : rewrites messages in place
+    ContextManager ..> Compaction : builds
+    ContextManager ..> Summarizer : deterministic digest
+    ContextManager ..> Model : compares against context_size
+    CompactionResult --> Compaction
+    TokenCounter ..> ModelHelpers : falls back to rough_token_count
+
+    %% NOTE protect_recent_messages and check_tool_pairs are PUBLIC here,
+    %%      private in the target diagram.
+    %% NOTE the summary is a plain deterministic digest (goal, tools used, last
+    %%      result). An LLM-written summary is a later pass.
+    %% NOTE compaction fires above threshold 0.8 of the model context_size,
+    %%      keeping the last 6 messages verbatim.
+
+    %% =========================================================
+    %% 6. AGENT CONFIGURATION  (config.py)
+    %% =========================================================
+    class AgentConfig {
+        +name : str
+        +model : str
+        +description : str
+        +system_prompt : str
+        +temperature : float
+        +max_turns : int
+        +allowed_tools : list
+        +subagents : list
+    }
+    class PromptBuilder {
+        +build(config, session, tool_names) str
+    }
+    class Subagent {
+        <<present, dispatched via DelegateTool/FanOutTool>>
+        +name : str
+        +description : str
+        +model : str
+        +system_prompt : str
+    }
+
+    PromptBuilder ..> AgentConfig : reads
+    PromptBuilder ..> Session : reads working_directory
+    AgentConfig o-- Subagent
+
+    %% NOTE AgentConfig.model is a registry NAME (str), not a Model object as
+    %%      the target diagram shows. ModelRegistry.get resolves it at run time.
+    %% NOTE system_prompt is a single str, not a list. max_depth is absent.
+    %% NOTE Subagent dispatch is present via DelegateTool/FanOutTool (tools/subagent.py)
+    %%      with per-helper turn caps and shared cancellation.
+    %% NOTE empty allowed_tools means "every registered tool".
+
+    %% =========================================================
+    %% 7. AI MODELS  (models/)
+    %% =========================================================
+    class ToolFormat {
+        <<enumeration>>
+        NATIVE
+        TEXT
+        JSON
+    }
+    class Model {
+        +provider : str
+        +model_id : str
+        +context_size : int
+        +max_output : int
+        +parallel_tools : bool
+        +tool_format : ToolFormat
+    }
+    class StreamType {
+        <<enumeration>>
+        TEXT
+        REASONING
+        TOOL_CALL
+        USAGE
+        DONE
+    }
+    class StreamEvent {
+        +type : StreamType
+        +data : dict
+    }
+    class AIModel {
+        <<abstract>>
+        +stream(messages, tools, model, temperature) AsyncIterator
+        +count_tokens(messages) int
+    }
+    class ModelRegistry {
+        -_models : dict
+        -_providers : dict
+        +register_model(name, model) void
+        +register_provider(name, provider) void
+        +get(name) Model
+        +get_provider(model) AIModel
+    }
+    class Groq {
+        -_api_key : str
+        -_client : AsyncGroq
+        +has_key : bool
+        +stream(messages, tools, model, temperature) AsyncIterator
+        +count_tokens(messages) int
+        -_get_client() AsyncGroq
+    }
+    class Ollama {
+        <<not wired>>
+        +host : str
+        +stream(messages, tools, model, temperature) AsyncIterator
+        +count_tokens(messages) int
+    }
+    class FakeModel {
+        <<dead code, safe to delete>>
+        -_script : list
+        -_index : int
+        +seen_messages : list
+        +seen_tools : list
+        +stream(messages, tools, model, temperature) AsyncIterator
+        +count_tokens(messages) int
+    }
+    class ModelHelpers {
+        <<module functions>>
+        +rough_token_count(messages) int
+        +load_env() void
+        +GROQ_MODELS : dict
+    }
+
+    AIModel <|.. Groq
+    AIModel <|.. Ollama
+    AIModel <|.. FakeModel
+    AIModel ..> StreamEvent : yields
+    Model --> ToolFormat
+    ModelRegistry --> Model : by name
+    ModelRegistry --> AIModel : by provider
+    StreamEvent --> StreamType
+    Groq ..> ModelHelpers : load_env and GROQ_MODELS
+    Ollama ..> ModelHelpers : rough_token_count
+
+    %% NOTE Groq is the ONLY working provider. The client is built lazily and
+    %%      the key is read from GROQ_API_KEY or a .env file at or above cwd.
+    %% NOTE Groq.count_tokens is an estimate; exact counts arrive in the USAGE
+    %%      StreamEvent from the API.
+    %% NOTE Ollama.stream raises NotImplementedError - local models need the
+    %%      TEXT tool format, which Conversation.render does not build yet.
+    %% NOTE models/fake.py is referenced by nothing and is not exported from
+    %%      models/__init__.py. Tests call Groq live instead.
+
+    %% =========================================================
+    %% 8. EVENTS / STORAGE / SERVICE  (events.py, database.py, service.py)
+    %% =========================================================
+    class EventType {
+        <<string constants>>
+        MESSAGE_ADDED
+        ASSISTANT_DELTA
+        REASONING_DELTA
+        TOOL_STARTED
+        TOOL_FINISHED
+        PERMISSION_REQUESTED
+        PERMISSION_RESOLVED
+        TURN_STARTED
+        RUN_FINISHED
+        ERROR
+    }
+    class Event {
+        +sequence : int
+        +type : str
+        +session_id : str
+        +run_id : str
+        +data : dict
+        +time : datetime
+    }
+    class EventBus {
+        -_db : Database
+        -_subscribers : dict
+        +emit(session_id, type, data, run_id) Event
+        +publish(event) void
+        +subscribe(session_id, from_sequence) AsyncIterator
+        +close() void
+    }
+    class Database {
+        <<abstract>>
+        +create_session(session) void
+        +get_session(session_id) Session
+        +save_message(message) void
+        +load_conversation(session_id) Conversation
+        +save_event(event) void
+        +load_events(session_id, after_sequence) list
+        +next_sequence(session_id) int
+        +save_run(run) void
+        +save_permission(grant) void
+        +load_permissions(session_id) list
+        +close() void
+    }
+    class MemoryDatabase {
+        -_sessions : dict
+        -_messages : dict
+        -_events : dict
+        -_sequence : dict
+        -_runs : dict
+        -_grants : list
+    }
+    class AgentRuntime {
+        +database : Database
+        +events : EventBus
+        +models : ModelRegistry
+        +tools : ToolRegistry
+        +policy : Policy
+        +permission_store : PermissionStore
+        +permissions : PermissionManager
+        +tool_manager : ToolManager
+        +context : ContextManager
+        +monitoring : Monitoring
+        +prompt : PromptBuilder
+        +loop : AgentLoop
+        +agents : dict
+        +register_default_tools() void
+        +config_for(agent) AgentConfig
+    }
+    class AgentService {
+        +runtime : AgentRuntime
+        +create_session(agent, title, working_directory) Session
+        +send_message(session_id, text, limits, cancellation) RunResult
+        +resolve_permission(call_id, allowed, duration) void
+        +pending_permissions() list
+        +subscribe(session_id, from_sequence) AsyncIterator
+        +get_conversation(session_id) Conversation
+    }
+    class CLI {
+        <<console entrypoint>>
+        +main() void
+        -_run(args) int
+        -_build_runtime(args) AgentRuntime
+    }
+
+    Database <|.. MemoryDatabase
+    EventBus --> Database : stores every event
+    EventBus ..> Event : numbers and fans out
+    Event --> EventType
+
+    AgentRuntime *-- EventBus
+    AgentRuntime *-- ModelRegistry
+    AgentRuntime *-- ToolRegistry
+    AgentRuntime *-- PermissionStore
+    AgentRuntime *-- PermissionManager
+    AgentRuntime *-- ToolManager
+    AgentRuntime *-- ContextManager
+    AgentRuntime *-- Monitoring
+    AgentRuntime *-- PromptBuilder
+    AgentRuntime *-- AgentLoop
+    AgentRuntime --> Database
+    AgentRuntime --> Policy : PolicyChain of RulePolicy and SessionPolicy
+    AgentRuntime o-- AgentConfig : one per named agent
+    AgentRuntime ..> ToolHelpers : default_tools
+
+    AgentService --> AgentRuntime
+    AgentService ..> Session : creates and seeds the system prompt
+    AgentService ..> RunContext : builds one per message
+    AgentService ..> Limits
+    AgentService ..> Cancellation
+    AgentService ..> Conversation : loads from Database
+    CLI ..> AgentService : drives
+    CLI ..> AgentRuntime : wires Groq only
+    CLI ..> EventType : prints deltas and tool events
+
+    %% NOTE COMPOSITION IS INVERTED vs the target diagram: there
+    %%      AgentRuntime *-- AgentService, here AgentService holds a runtime.
+    %% NOTE MemoryDatabase and PostgresDatabase are shipped stores.
+    %% NOTE EventType is a plain class of strings, not an Enum, so values
+    %%      survive storage unchanged.
+    %% NOTE subscribe registers its queue BEFORE replaying stored events and
+    %%      de-dupes by sequence, so a reconnecting client misses nothing and
+    %%      sees nothing twice. This is what backs Last-Event-ID resume.
+    %% NOTE AgentService.cancel() and resume() from the target are ABSENT.
+    %%      A Cancellation can only be passed in at send_message time.
+    %% NOTE service.py imports TokenCounter but never uses it - dead import.
+
+    %% =========================================================
+    %% 9. MONITORING  (monitoring.py)
+    %% =========================================================
+    class Trace {
+        +name : str
+        +attributes : dict
+        +start : float
+        +end : float
+        +duration_s : float
+        +set(attributes) void
+        +finish() void
+    }
+    class Monitoring {
+        +enabled : bool
+        +spans : list
+        +run_span(run_id, attributes) Iterator
+        +turn_span(turn, attributes) Iterator
+        +tool_span(tool, attributes) Iterator
+        +shutdown() void
+        -_span(name, attributes) Iterator
+    }
+
+    Monitoring o-- Trace
+    Monitoring ..> AgentLoop : spans opened per run, turn and tool
+
+    %% NOTE OTLP export is wired when configured; local JSON remains available.
+
+    %% =========================================================
+    %% 10. GAPS vs native-agent-v2-classes.mermaid (the TARGET native design)
+    %% Declared in the target, absent from the code.
+    %% =========================================================
+    class MCPTool {
+        <<present>>
+    }
+    class MCPClient {
+        <<present>>
+    }
+    class PlanTool {
+        <<present>>
+    }
+    class SubtaskTool {
+        <<present>>
+    }
+    class VerifyTool {
+        <<absent>>
+    }
+    class PostgresDatabase {
+        <<present>>
+    }
+
+    Tool <|.. MCPTool
+    Tool <|.. PlanTool
+    Tool <|.. SubtaskTool
+    Tool <|.. VerifyTool : planned
+    MCPTool ..> MCPClient
+    Database <|.. PostgresDatabase
+    SubtaskTool ..> Subagent : dispatched
+    SubtaskTool ..> AgentLoop : recursive run via DelegateTool
+
+    %% =========================================================
+    %% 11. REFERRAL - mapping onto class-diagram.mermaid (master)
+    %%
+    %% THE MASTER DIAGRAM'S agent-native SECTION DOCUMENTS v0.3.0, NOT v0.5.0.
+    %% Verified: packages/agent-native/backup/v0.3.0/src/agent_native/ contains
+    %% agent.py plus planner/, executor/, reflector/, verifier/, compactor/,
+    %% risk/ and mcp/ - a 1:1 match for the master diagram's NativeAgent,
+    %% Planner, ReactExecutor, Reflector, Verifier, ContextCompactor,
+    %% RiskClassifier and NativeMCPClient. The v0.5.0 rewrite replaced that
+    %% Plan-and-Execute pipeline with the single conversation loop above, so
+    %% the master diagram's native section is stale rather than aspirational.
+    %%
+    %% agent_native also imports NOTHING from packages/common, even though
+    %% those contracts DO exist on disk. It is entirely self-contained: its own
+    %% Session/Conversation state, its own run result types, its own permission
+    %% layer, and no MCP client at all. Below is what each unadopted contract
+    %% maps onto today.
+    %% =========================================================
+    class IAgentOrchestrator {
+        <<common - not adopted>>
+        +run(task, on_event) AgentRunResult
+    }
+    class IMCPClient {
+        <<common - not adopted>>
+        +list_tools() ToolInfo[]
+        +call_tool(request) ToolCallResult
+    }
+    class AgentTask {
+        <<common - not adopted>>
+    }
+    class AgentRunResult {
+        <<common - not adopted>>
+    }
+    class ToolInfo {
+        <<common - not adopted>>
+    }
+    class ToolCallResult {
+        <<common - not adopted>>
+    }
+    class CommonRunStatus {
+        <<common RunStatus - name collision>>
+        CREATED
+        RUNNING
+        COMPLETED
+        FAILED
+        INTERRUPTED
+    }
+    class RiskClassifier {
+        <<deleted in v0.5.0>>
+        +classify(call) RiskLevel
+    }
+    class CommonAgentConfig {
+        <<master AgentConfig - does not exist>>
+        +llm : LLMConfig
+        +execution : ExecutionConfig
+        +sandbox : SandboxConfig
+        +checkpoint : CheckpointConfig
+        +tracing : TracingConfig
+    }
+
+    IAgentOrchestrator <|.. AgentLoop : role played by - does not implement
+    AgentTask <|.. Session : role split across Session and the user Message
+    AgentRunResult <|.. RunResult : local equivalent
+    ToolInfo <|.. ToolDefinition : local equivalent
+    ToolCallResult <|.. ToolResult : local equivalent
+    RiskClassifier <|.. PolicyChain : replaced by the policy stack
+    CommonAgentConfig <|.. AgentConfig : flat local equivalent
+    CommonRunStatus ..> RunStatus : same name - different values
+
+    %% NOTE NativePlan and NativePlanStep have no equivalent at all. There is no
+    %%      plan object in v0.5.0: the model decides what to do next by reading
+    %%      the conversation, one turn at a time. Planning, reflection and
+    %%      verification are not separate collaborators. ContextCompactor's job
+    %%      is done by ContextManager.
+    %% NOTE RiskClassifier is NOT in packages/common despite the master diagram
+    %%      placing it there. It only ever existed inside agent-native v0.3.0
+    %%      (backup/v0.3.0/src/agent_native/risk/) and was dropped in the
+    %%      rewrite. Its gate-before-execution role now belongs to PolicyChain,
+    %%      which reads a tool's own ToolPermissions flags instead of matching
+    %%      regex patterns against the call.
+    %% NOTE RunStatus COLLIDES: common.RunStatus is CREATED/RUNNING/COMPLETED/
+    %%      FAILED/INTERRUPTED, native RunStatus is RUNNING/FINISHED/
+    %%      LIMIT_REACHED/CANCELLED/ERROR. Same name, different vocabularies,
+    %%      no translation layer between them.
+    %% NOTE packages/common also names things differently from the master
+    %%      diagram: AgentTrack (not TrackType), RunStatus (not TaskStatus),
+    %%      RiskLevel.REVIEW (not RISKY). It additionally defines ToolSchema and
+    %%      ToolCallRequest, which the master diagram omits.
+    %% NOTE ACTION - update the master class-diagram.mermaid agent-native
+    %%      section to match this file, and decide whether v0.5.0 should adopt
+    %%      the packages/common contracts or stay deliberately standalone.
+    %% NOTE History 2026-08-27: prior “built-in tools only / no MCP client” claim relocated here;
+    %%      as-built now includes MCPTool/MCPToolProvider, delegate/fan_out, plan/skill/memory/sandbox as present.

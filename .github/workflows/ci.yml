@@ -1,0 +1,80 @@
+# Continuous integration for the native-agent thesis packages.
+#
+# One matrix job per substantive package (agent-native, api, evaluation): each
+# runs the same three gates the project holds itself to - ruff, mypy, and the
+# pytest suite - against the tool config already pinned in each package's
+# pyproject.toml (ruff selects E/W/F/I/UP/B, ignores E501; mypy checks src with
+# ignore_missing_imports + check_untyped_defs). The gates run *inside* each
+# package directory so those per-package configs are the ones that apply.
+#
+# What this deliberately does NOT do:
+#   * It does not set GROQ_API_KEY. The live Groq tests (test_loop, and the
+#     live half of a few others) skip themselves when the key is absent, so the
+#     suite is green here without a secret and never touches the network in CI.
+#   * It does not build agent-langgraph. The thesis's native track is what these
+#     gates guard; the LangGraph comparison package is synced only when it is the
+#     thing under test, which it isn't here.
+#
+# The evaluation job is what satisfies "the eval suite runs in CI against a fake
+# provider": packages/evaluation's tests drive the whole harness on a scripted
+# model and in-process fake tools, no key required.
+
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+# Read-only token: nothing here needs to write to the repo.
+permissions:
+  contents: read
+
+# A newer push to the same ref supersedes an in-flight run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: ${{ matrix.package }}
+    runs-on: ubuntu-latest
+    strategy:
+      # One red package shouldn't hide the state of the others.
+      fail-fast: false
+      matrix:
+        package: [ agent-native, api, evaluation ]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # The official standalone installer, so this pins no third-party action
+      # version. uv provisions its own Python 3.12 from each package's
+      # `requires-python`, so there is no separate setup-python step.
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      # Sync just this package (and, through the workspace, its path deps) with
+      # every optional extra installed - the "extras installed" checkout the
+      # verify calls for - plus the dev group that carries pytest.
+      - name: Sync ${{ matrix.package }} (all extras + dev)
+        run: uv sync --package ${{ matrix.package }} --all-extras --dev
+
+      # ruff and mypy are developer tools, not runtime deps (see the pyproject
+      # comment), so they are layered on for the run rather than added to the
+      # project. `working-directory` makes each package's own [tool.ruff] /
+      # [tool.mypy] the config in force.
+      - name: Lint (ruff)
+        working-directory: packages/${{ matrix.package }}
+        run: uv run --with ruff ruff check .
+
+      - name: Type-check (mypy)
+        working-directory: packages/${{ matrix.package }}
+        run: uv run --with mypy mypy
+
+      - name: Tests (pytest)
+        working-directory: packages/${{ matrix.package }}
+        run: uv run pytest

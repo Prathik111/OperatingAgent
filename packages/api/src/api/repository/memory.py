@@ -16,7 +16,7 @@ from uuid import uuid4
 from common.agent import AgentRunResult, AgentTask
 from common.config import AgentConfig
 from common.enums import RunStatus, TaskStatus
-from common.events import AgentEvent
+from common.events import AgentEvent, LLMCallRecord, ToolCallRecord
 
 from ..errors import TaskNotFound, ThreadNotFound
 from .base import ThreadRecord
@@ -31,6 +31,14 @@ class _Run:
     output: str | None = None
     last_error: str | None = None
     events: list[tuple[int, str, dict]] = field(default_factory=list)
+    llm_calls: list[LLMCallRecord] = field(default_factory=list)
+    tool_calls: list[ToolCallRecord] = field(default_factory=list)
+    phases: list[dict] = field(default_factory=list)
+    plans: list[dict] = field(default_factory=list)
+    findings: list[dict] = field(default_factory=list)
+    verifications: list[dict] = field(default_factory=list)
+    trace_refs: list[dict] = field(default_factory=list)
+    approvals: list[dict] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -48,6 +56,7 @@ class InMemoryTaskRepository:
         self._task_status: dict[str, TaskStatus] = {}
         self._runs: dict[str, _Run] = {}
         self._order = itertools.count()
+        self._tools: dict[tuple[str, str], tuple[str, dict]] = {}
 
     async def save_task(self, task: AgentTask) -> None:
         self._tasks[task.id] = task
@@ -122,6 +131,75 @@ class InMemoryTaskRepository:
     ) -> None:
         self._runs[run_id].events.append((sequence_number, event.type, event.payload))
 
+    async def save_llm_call(self, run_id: str, record: LLMCallRecord) -> None:
+        self._runs[run_id].llm_calls.append(record)
+
+    async def save_tool_call(self, run_id: str, record: ToolCallRecord) -> None:
+        tool_id = await self.upsert_tool(
+            record.server_name,
+            record.base_url,
+            {
+                "name": record.tool_name,
+                "description": record.description,
+                "input_schema": record.input_schema,
+            },
+        )
+        from dataclasses import replace
+        self._runs[run_id].tool_calls.append(replace(record, tool_id=tool_id))
+
+    async def save_phase(self, run_id: str, payload: dict) -> str:
+        value = {**payload, "id": payload.get("id") or str(uuid4())}
+        self._runs[run_id].phases.append(value)
+        return value["id"]
+
+    async def close_phase(self, run_id: str, payload: dict) -> None:
+        for phase in self._runs[run_id].phases:
+            if phase["id"] == payload["phase_id"]:
+                phase.update(payload)
+                return
+
+    async def save_plan(self, run_id: str, payload: dict) -> str:
+        value = {**payload, "id": payload.get("id") or str(uuid4())}
+        self._runs[run_id].plans.append(value)
+        return value["id"]
+
+    async def save_finding(self, run_id: str, payload: dict) -> str:
+        value = {**payload, "id": payload.get("id") or str(uuid4())}
+        self._runs[run_id].findings.append(value)
+        return value["id"]
+
+    async def save_verification(self, run_id: str, payload: dict) -> str:
+        value = {**payload, "id": payload.get("id") or str(uuid4())}
+        self._runs[run_id].verifications.append(value)
+        return value["id"]
+
+    async def save_trace_ref(self, run_id: str, payload: dict) -> str:
+        value = {**payload, "id": payload.get("id") or str(uuid4())}
+        self._runs[run_id].trace_refs.append(value)
+        return value["id"]
+
+    async def save_approval(self, run_id: str, payload: dict) -> str:
+        value = {**payload, "id": payload.get("id") or str(uuid4()), "status": "pending"}
+        self._runs[run_id].approvals.append(value)
+        return value["id"]
+
+    async def resolve_approval(self, payload: dict) -> None:
+        for run in self._runs.values():
+            for approval in run.approvals:
+                if approval["id"] == payload["approval_id"]:
+                    approval.update(payload)
+                    approval["status"] = "approved" if payload["approved"] else "denied"
+                    return
+
+    async def upsert_tool(
+        self, server_name: str, base_url: str | None, tool_spec: dict
+    ) -> str:
+        key = (server_name, str(tool_spec["name"]))
+        existing = self._tools.get(key)
+        tool_id = existing[0] if existing else str(uuid4())
+        self._tools[key] = (tool_id, {**tool_spec, "base_url": base_url})
+        return tool_id
+
     async def finalize_run(self, run_id: str, result: AgentRunResult) -> None:
         run = self._runs[run_id]
         run.status = result.status
@@ -144,6 +222,12 @@ class InMemoryTaskRepository:
 
     def events_for(self, run_id: str) -> list[tuple[int, str, dict]]:
         return list(self._runs[run_id].events)
+
+    def llm_calls_for(self, run_id: str) -> list[LLMCallRecord]:
+        return list(self._runs[run_id].llm_calls)
+
+    def tool_calls_for(self, run_id: str) -> list[ToolCallRecord]:
+        return list(self._runs[run_id].tool_calls)
 
     def task_status(self, task_id: str) -> TaskStatus | None:
         return self._task_status.get(task_id)

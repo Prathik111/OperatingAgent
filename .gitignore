@@ -64,6 +64,9 @@ review/
 evaluation-results/
 traces/
 *.trace
+.agent*/
+**/.agent-traces/
+/backup/
 
 ### Sandbox runtime (packages/sandbox) ###
 .sandbox-tmp/
@@ -83,3 +86,6 @@ desktop.ini
 *.tmp
 *.bak
 .cache/
+
+demo/
+backup/

@@ -9,9 +9,12 @@
 -- "Which representation to generate the schema from" section.
 --
 -- Target: PostgreSQL 14+.
--- Apply: mount into the postgres container's /docker-entrypoint-initdb.d/, or
---        run once with `psql "$DATABASE_URL" -f schema.sql`. Idempotent enough
---        to re-run against an empty database; not a migration tool.
+-- Apply: owned by infrastructure/deployment (Docker /docker-entrypoint-initdb.d/
+--        or `psql "$DATABASE_URL" -f schema.sql`). Applications (native, langgraph)
+--        MUST NOT apply DDL at runtime; they verify the required migration id
+--        via `SELECT 1 FROM schema_migrations WHERE id = $1`.
+--        This file is the base (id='001_base'); additive migrations append
+--        distinct ids (e.g., '002_native_conversation').
 --
 -- Deliberately NOT created here:
 --   * The langgraph.checkpoint.postgres tables (checkpoints, checkpoint_blobs,
@@ -30,6 +33,21 @@
 -- (common/enums.py) becomes a Postgres ENUM type, so a mismatch fails at insert.
 -- An ad-hoc / open-ended string set is a TEXT column with a CHECK, which is
 -- cheaper to evolve than ALTER TYPE.
+--
+-- Native integration contract (additive, infra-owned):
+--   * agent_threads.id is TEXT (not uuid) - LangGraph checkpoints.thread_id is TEXT.
+--     Every thread_id FK referencing agent_threads(id) MUST be TEXT. Run/task/actor/plan/call ids remain uuid.
+--   * Native working_directory / revision / agent are NOT columns on agent_threads;
+--     store via agent_threads.metadata JSONB (e.g., metadata->>'working_directory').
+--     This keeps the canonical thread table cross-track without a native-specific column.
+--   * Canonical run model is single source of truth: both tracks create
+--     actors -> agent_threads -> agent_tasks (track='native'|'langgraph') ->
+--     agent_runs -> run_phases -> plans -> plan_steps -> tool_calls/llm_calls ->
+--     agent_events. Metrics derive from those child tables.
+--   * Only genuinely missing native concepts are additive: conversation_messages
+--     (ordered conversation history with parts/media/compaction) and
+--     native_permission_grants (durable ONCE/SESSION/ALWAYS with path scope).
+--     Memories use canonical memory_items.
 -- =============================================================================
 
 BEGIN;
@@ -47,11 +65,22 @@ CREATE TYPE verification_verdict AS ENUM ('verified', 'not_verified', 'skipped')
 CREATE TYPE workflow_phase       AS ENUM ('investigate', 'remediate', 'complete');
 
 -- -----------------------------------------------------------------------------
--- Shared trigger: keep updated_at honest without trusting the writer
+-- Shared triggers: keep updated_at honest without trusting the writer
 -- -----------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION set_updated_at() RETURNS trigger AS $$
 BEGIN
     NEW.updated_at := now();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+-- A task's thread is part of its identity. Moving it after child rows exist can
+-- invalidate cross-table provenance (messages, checkpoints, approvals).
+CREATE OR REPLACE FUNCTION prevent_agent_task_thread_change() RETURNS trigger AS $$
+BEGIN
+    IF NEW.thread_id IS DISTINCT FROM OLD.thread_id THEN
+        RAISE EXCEPTION 'agent_tasks.thread_id is immutable';
+    END IF;
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
@@ -73,6 +102,7 @@ CREATE TABLE actors (
 -- id is TEXT holding a canonical UUID string (not uuid): it is the exact value
 -- handed to LangGraph as configurable.thread_id, and checkpoints.thread_id is
 -- TEXT. Matching the type keeps that logical join cast-free.
+-- Native stores working_directory/agent/revision in metadata, not as columns.
 CREATE TABLE agent_threads (
     id                 text PRIMARY KEY DEFAULT (gen_random_uuid())::text,
     external_thread_id text UNIQUE,
@@ -226,6 +256,7 @@ CREATE TABLE risk_policies (
 -- (run_id, plan_id) -> plans(run_id, id) makes the two unable to disagree; it
 -- earns its place as the partition key for every per-run query. verified was
 -- dropped (derivable from verification_results); tool_name became tool_id.
+-- Every step requires plan_id, run_id, step_number (schema.sql:229-246).
 CREATE TABLE plan_steps (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     plan_id     uuid NOT NULL,
@@ -293,6 +324,8 @@ CREATE TABLE tool_calls (
 
 -- Gives llm_calls / total_tokens / cost a source of truth: without it the
 -- orchestrator hardcodes them to zero. total_tokens and duration_ms are derived.
+-- prompt_tokens/completion_tokens remain nullable: NULL means unknown usage is
+-- legitimate (not yet reported); total_tokens is then NULL. Non-negative when present.
 CREATE TABLE llm_calls (
     id                   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     run_id               uuid NOT NULL REFERENCES agent_runs (id) ON DELETE CASCADE,
@@ -300,10 +333,10 @@ CREATE TABLE llm_calls (
     node_name            text,                          -- planner | verifier | responder | error_handler
     provider             text,
     model                text,
-    prompt_tokens        integer,
-    completion_tokens    integer,
+    prompt_tokens        integer CHECK (prompt_tokens IS NULL OR prompt_tokens >= 0),
+    completion_tokens    integer CHECK (completion_tokens IS NULL OR completion_tokens >= 0),
     total_tokens         integer GENERATED ALWAYS AS (prompt_tokens + completion_tokens) STORED,
-    cost                 numeric,
+    cost                 numeric CHECK (cost IS NULL OR cost >= 0),
     trace_observation_id text,
     error                text,
     started_at           timestamptz,
@@ -341,7 +374,7 @@ CREATE TABLE run_findings (
 CREATE TABLE agent_events (
     id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     run_id          uuid NOT NULL REFERENCES agent_runs (id) ON DELETE CASCADE,
-    sequence_number bigint NOT NULL,
+    sequence_number bigint NOT NULL CHECK (sequence_number >= 0),
     event_type      text NOT NULL,                      -- state | error | finished | planning_started | tool_started | tool_finished
     payload         jsonb NOT NULL DEFAULT '{}'::jsonb,
     created_at      timestamptz NOT NULL DEFAULT now(),
@@ -561,8 +594,23 @@ CREATE TABLE knowledge_chunks (
 );
 
 -- =============================================================================
+-- Schema migrations (infra-owned; one migration is exactly one row)
+-- Applications verify `SELECT 1 FROM schema_migrations WHERE id = $1`
+-- for the exact required migration, not MAX(version). Legacy INTEGER version
+-- retained for agent-native postgres.py backward compat.
+-- =============================================================================
+CREATE TABLE schema_migrations (
+    id         TEXT PRIMARY KEY,
+    version    INTEGER UNIQUE,
+    applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+INSERT INTO schema_migrations (id, version)
+VALUES ('001_base', 1)
+ON CONFLICT (id) DO NOTHING;
+
+-- =============================================================================
 -- Indexes on foreign keys (skipped where a UNIQUE constraint already leads with
--- the column, e.g. tools(server_id,name), evaluation_scores(result_id,metric)).
+-- the column, e.g., tools(server_id,name), evaluation_scores(result_id,metric)).
 -- run_id is indexed everywhere: it is the partition key for the hottest query.
 -- =============================================================================
 CREATE INDEX ix_agent_threads_owner        ON agent_threads (owner_actor_id);
@@ -606,7 +654,6 @@ CREATE INDEX ix_memory_items_thread        ON memory_items (thread_id);
 CREATE INDEX ix_memory_items_superseded    ON memory_items (superseded_by_id);
 -- Non-FK lookup: content_hash is how a re-index decides a source changed (not unique).
 CREATE INDEX ix_knowledge_sources_hash     ON knowledge_sources (content_hash);
-
 -- =============================================================================
 -- updated_at triggers (the only tables carrying updated_at)
 -- =============================================================================
@@ -614,6 +661,8 @@ CREATE TRIGGER trg_agent_threads_updated_at BEFORE UPDATE ON agent_threads
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 CREATE TRIGGER trg_agent_tasks_updated_at BEFORE UPDATE ON agent_tasks
     FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+CREATE TRIGGER trg_agent_tasks_thread_immutable BEFORE UPDATE OF thread_id ON agent_tasks
+    FOR EACH ROW EXECUTE FUNCTION prevent_agent_task_thread_change();
 
 -- =============================================================================
 -- v_run_metrics - the run counters that used to be denormalized onto agent_runs.
@@ -621,6 +670,7 @@ CREATE TRIGGER trg_agent_tasks_updated_at BEFORE UPDATE ON agent_tasks
 -- so the three independent child fan-outs cannot multiply each other's counts.
 -- Promote to a materialized view or trigger-maintained rollup only if run-list
 -- latency ever demands it; the numbers stay derived either way.
+-- v_run_metrics_extended adds latency and tool success for evaluation.
 -- =============================================================================
 CREATE VIEW v_run_metrics AS
 SELECT
@@ -629,8 +679,33 @@ SELECT
     (SELECT count(*) FROM plan_steps ps WHERE ps.run_id = r.id)                       AS steps_taken,
     (SELECT count(*) FROM tool_calls tc WHERE tc.run_id = r.id)                       AS tool_calls,
     (SELECT count(*) FROM llm_calls  lc WHERE lc.run_id = r.id)                       AS llm_calls,
-    COALESCE((SELECT sum(lc.total_tokens) FROM llm_calls lc WHERE lc.run_id = r.id), 0) AS total_tokens,
-    COALESCE((SELECT sum(lc.cost)         FROM llm_calls lc WHERE lc.run_id = r.id), 0) AS cost
+    (SELECT sum(lc.total_tokens) FROM llm_calls lc WHERE lc.run_id = r.id) AS total_tokens,
+    (SELECT sum(lc.cost)         FROM llm_calls lc WHERE lc.run_id = r.id) AS cost,
+    (SELECT count(*) FROM llm_calls lc WHERE lc.run_id = r.id AND
+        (lc.prompt_tokens IS NULL OR lc.completion_tokens IS NULL)) AS llm_calls_with_unknown_usage,
+    (SELECT count(*) FROM llm_calls lc WHERE lc.run_id = r.id AND lc.cost IS NULL) AS llm_calls_with_unknown_cost
 FROM agent_runs r;
+
+CREATE VIEW v_run_metrics_extended AS
+SELECT
+    r.id      AS run_id,
+    r.task_id AS task_id,
+    at.track  AS track,
+    at.thread_id AS thread_id,
+    r.status  AS status,
+    r.duration_ms AS latency_ms,
+    (SELECT count(*) FROM plan_steps ps WHERE ps.run_id = r.id)                       AS steps_taken,
+    (SELECT count(*) FROM tool_calls tc WHERE tc.run_id = r.id)                       AS tool_calls,
+    (SELECT count(*) FROM tool_calls tc WHERE tc.run_id = r.id AND tc.success = true)  AS tool_calls_succeeded,
+    (SELECT count(*) FROM tool_calls tc WHERE tc.run_id = r.id AND tc.success = false) AS tool_calls_failed,
+    (SELECT count(*) FROM tool_calls tc WHERE tc.run_id = r.id AND tc.success IS NULL) AS tool_calls_unresolved,
+    (SELECT count(*) FROM llm_calls  lc WHERE lc.run_id = r.id)                       AS llm_calls,
+    (SELECT sum(lc.total_tokens) FROM llm_calls lc WHERE lc.run_id = r.id) AS total_tokens,
+    (SELECT sum(lc.cost)         FROM llm_calls lc WHERE lc.run_id = r.id) AS cost,
+    (SELECT count(*) FROM llm_calls lc WHERE lc.run_id = r.id AND
+        (lc.prompt_tokens IS NULL OR lc.completion_tokens IS NULL)) AS llm_calls_with_unknown_usage,
+    (SELECT count(*) FROM llm_calls lc WHERE lc.run_id = r.id AND lc.cost IS NULL) AS llm_calls_with_unknown_cost
+FROM agent_runs r
+JOIN agent_tasks at ON at.id = r.task_id;
 
 COMMIT;

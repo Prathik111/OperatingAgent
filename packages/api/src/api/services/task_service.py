@@ -17,13 +17,13 @@ from uuid import uuid4
 
 from common.agent import AgentRunResult, AgentTask
 from common.enums import AgentTrack, RunStatus, TaskStatus
-from common.events import AgentEvent
+from common.events import AgentEvent, LLMCallRecord, ToolCallRecord
 from common.interfaces import IAgentOrchestrator
-
-from api.repository.base import TaskRepository, ThreadRecord
 
 from ..config import ApiSettings
 from ..errors import UnknownTrack
+from ..repository.base import TaskRepository, ThreadRecord
+from .approval_gateway import ApprovalGateway
 from .event_broker import EventBroker
 
 log = logging.getLogger(__name__)
@@ -47,12 +47,14 @@ class TaskService:
         orchestrators: dict[AgentTrack, IAgentOrchestrator],
         repository: TaskRepository,
         broker: EventBroker,
+        approvals: ApprovalGateway,
         settings: ApiSettings,
         background: set[asyncio.Task],
     ) -> None:
         self._orchestrators = orchestrators
         self._repo = repository
         self._broker = broker
+        self._approvals = approvals
         self._settings = settings
         # Held so the event loop keeps a strong ref — asyncio only weak-refs
         # tasks, so a fire-and-forget run could otherwise be GC'd mid-flight.
@@ -123,6 +125,30 @@ class TaskService:
         async def on_event(event: AgentEvent) -> None:
             # Persist first (ordered, durable), then fan out to subscribers.
             await self._repo.append_event(run_id, event, next(sequence))
+            if event.type == "llm_call":
+                await self._repo.save_llm_call(
+                    run_id, LLMCallRecord.from_payload(event.payload)
+                )
+            elif event.type == "tool_call":
+                await self._repo.save_tool_call(
+                    run_id, ToolCallRecord.from_payload(event.payload)
+                )
+            elif event.type == "phase_entered":
+                await self._repo.save_phase(run_id, event.payload)
+            elif event.type == "phase_exited":
+                await self._repo.close_phase(run_id, event.payload)
+            elif event.type == "plan_created":
+                await self._repo.save_plan(run_id, event.payload)
+            elif event.type == "finding_recorded":
+                await self._repo.save_finding(run_id, event.payload)
+            elif event.type == "verification_recorded":
+                await self._repo.save_verification(run_id, event.payload)
+            elif event.type == "trace_ref":
+                await self._repo.save_trace_ref(run_id, event.payload)
+            elif event.type == "approval_requested":
+                await self._repo.save_approval(run_id, event.payload)
+            elif event.type == "approval_resolved":
+                await self._repo.resolve_approval(event.payload)
             await self._broker.publish(task.id, event)
 
         try:

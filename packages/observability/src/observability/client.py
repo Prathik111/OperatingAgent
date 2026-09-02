@@ -77,7 +77,7 @@ def init_tracing(settings: LangfuseSettings | None = None) -> Langfuse | None:
                 mask_otel_spans=mask_otel_spans,
             )
             log.info("Langfuse tracing enabled (env=%s, host=%s).", resolved.environment, resolved.host)
-        except Exception as exc:  # noqa: BLE001 - tracing must not break startup
+        except Exception as exc:
             log.warning("Langfuse initialisation failed; continuing without tracing: %s", exc)
             client = None
 
@@ -107,7 +107,7 @@ def get_callback_handler() -> Any | None:
         from langfuse.langchain import CallbackHandler
 
         return CallbackHandler()
-    except Exception as exc:  # noqa: BLE001 - optional SDK integration
+    except Exception as exc:
         log.warning("Could not create Langfuse CallbackHandler: %s", exc)
         return None
 
@@ -118,7 +118,7 @@ def flush() -> None:
     if client is not None:
         try:
             client.flush()
-        except Exception as exc:  # noqa: BLE001 - tracing is best effort
+        except Exception as exc:
             log.debug("Langfuse flush failed: %s", exc)
 
 
@@ -128,5 +128,5 @@ def shutdown() -> None:
     if client is not None:
         try:
             client.shutdown()
-        except Exception as exc:  # noqa: BLE001 - tracing is best effort
+        except Exception as exc:
             log.debug("Langfuse shutdown failed: %s", exc)

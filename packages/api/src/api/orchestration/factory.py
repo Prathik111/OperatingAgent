@@ -13,6 +13,7 @@ taking the process down at startup.
 from __future__ import annotations
 
 import logging
+from importlib import import_module
 from typing import TYPE_CHECKING
 
 from common.agent import AgentRunResult, AgentTask
@@ -77,7 +78,8 @@ def build_orchestrators(
     config = settings.build_agent_config(AgentTrack.LANGGRAPH)
 
     try:
-        from agent_langgraph.orchestrator.langgraph_agent import LangGraphAgent
+        module = import_module("agent_langgraph.orchestrator.langgraph_agent")
+        LangGraphAgent = module.LangGraphAgent
 
         orchestrators[AgentTrack.LANGGRAPH] = LangGraphAgent(
             config,
@@ -85,7 +87,7 @@ def build_orchestrators(
             mcp_gateway_command=settings.mcp_gateway_command,
             mcp_gateway_args=list(settings.mcp_gateway_args),
         )
-    except Exception as exc:  # noqa: BLE001 - optional track degradation boundary
+    except Exception as exc:
         log.warning(
             "LangGraph orchestrator unavailable, registering degraded stub: %s", exc
         )

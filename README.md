@@ -241,10 +241,17 @@ gh repo create <repo-name> --private --source=. --remote=origin --push
 
 ## Infra (Postgres / Qdrant / Langfuse)
 
-Not yet scaffolded — planned under `infra/docker/`. Once added:
+Start the canonical PostgreSQL store on host port `5433`:
 ```bash
 docker compose -f infra/docker/docker-compose.yml up -d
 ```
+
+Use `postgresql://agent_native:agent_native@localhost:5433/agent_native` for
+agent-native. DDL is owned by `infra/docker/postgres/schema.sql` and numbered
+migrations. Agent-native verifies `001_base` plus `002_native_conversation` and
+never creates tables at runtime. Existing volumes with the
+older `agent_native_*` tables can be imported using
+`infra/docker/postgres/migrations/003_import_legacy_agent_native.sql`.
 
 ---
 

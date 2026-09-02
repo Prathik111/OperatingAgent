@@ -14,7 +14,6 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from agent_langgraph.runtime.prompt_manager import DEFAULT_PROMPT_DIR
 from common.config import (
     AgentConfig,
     BehaviourConfig,
@@ -38,6 +37,26 @@ DEFAULT_CORS_ORIGINS = (
     "http://127.0.0.1:1420",
 )
 DEFAULT_ALLOWED_HOSTS = ("127.0.0.1", "localhost", "testserver")
+
+
+def _default_prompt_dir() -> Path:
+    """Resolve LangGraph prompts via package resources when installed."""
+    try:
+        from importlib.resources import files
+
+        pkg_prompts = files("agent_langgraph") / "prompts"
+        # files() returns a Traversable; check existence without requiring as_file
+        try:
+            if pkg_prompts.is_dir():
+                return Path(str(pkg_prompts))
+        except Exception:
+            pass
+    except Exception:
+        pass
+    return Path(__file__).resolve().parents[3] / "agent-langgraph" / "prompts"
+
+
+DEFAULT_PROMPT_DIR = _default_prompt_dir()
 
 
 def _split_csv(raw: str, default: tuple[str, ...]) -> tuple[str, ...]:

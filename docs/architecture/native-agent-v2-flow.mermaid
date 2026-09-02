@@ -1,0 +1,98 @@
+%% agent-native - THE DECISIONS THE LOOP MAKES.
+%%
+%% Same names as native-agent-v2-classes.mermaid. This is the target design,
+%% not what the code does today. Companion diagrams:
+%%   native-agent-v2-classes.mermaid   - the parts and how they connect
+%%   native-agent-v2-sequence.mermaid  - one message, start to finish
+%%   native-agent-runtime.mermaid      - processes and machines
+%%
+%% The shape to notice: every way a tool call can go wrong - unknown tool, bad
+%% arguments, denied by policy, refused by the user, timed out, crashed - lands
+%% on the SAME box, "add the result to the conversation". A failure is just
+%% something the model reads next turn. That is the whole trick, and it is why
+%% there is only one exit from the tool section.
+%%
+%% Colours match the runtime diagram: RED = runs with the user's full
+%% privileges, GREEN = isolated.
+
+flowchart TD
+
+    START(["User sends a message"]) --> SAVE["Save the message\nPublish a numbered event"]
+    SAVE --> TURN["Start a turn"]
+
+    %% ===================== can we even keep going =====================
+    TURN --> BUDGET{"Any budget left?\ntime, turns, tool calls"}
+    BUDGET -->|"no"| STOP_LIMIT["Stop - out of budget"]
+    BUDGET -->|"yes"| CANCEL{"Did the user cancel?"}
+    CANCEL -->|"yes"| STOP_CANCEL["Stop - cancelled"]
+    CANCEL -->|"no"| LONG{"Is the conversation too long\nfor the model?"}
+
+    %% ======================= make room, then ask ======================
+    LONG -->|"yes"| COMPACT["Summarise the older messages\nKeep the recent ones\nNever split a tool call from its result"]
+    LONG -->|"no"| ASK_AI["Send the conversation to the model\nStream the reply back as it arrives"]
+    COMPACT --> ASK_AI
+
+    ASK_AI --> SAVE_AI["Save the assistant message"]
+    SAVE_AI --> WANTS{"Did the model ask for any tools?"}
+    WANTS -->|"no, it just answered"| STOP_DONE["Stop - this is the answer"]
+    WANTS -->|"yes"| NEXT["Take the next tool call"]
+
+    %% ============ the boxes every branch below converges on ===========
+    OBSERVE["Add the result to the conversation\nas something the model can read next turn"]
+    WHERE{"Where should this tool run?"}
+    WORKED{"Did it finish in time,\nwithout an error?"}
+
+    %% ================== is this call even runnable? ===================
+    NEXT --> EXISTS{"Do we have that tool?"}
+    EXISTS -->|"no"| OBSERVE
+    EXISTS -->|"yes"| ARGS{"Are the arguments valid?"}
+    ARGS -->|"no"| OBSERVE
+    ARGS -->|"yes"| POLICY{"What does the policy say?"}
+
+    %% ========================= is it allowed? =========================
+    POLICY -->|"deny"| OBSERVE
+    POLICY -->|"allow"| WHERE
+    POLICY -->|"ask"| GRANT{"Did the user already allow\nthis earlier?"}
+    GRANT -->|"yes"| WHERE
+    GRANT -->|"no"| PROMPT["Ask the user\nShow the real tool name, the real arguments\nand a preview of what will change"]
+    PROMPT --> ANSWER{"What did the user say?"}
+    ANSWER -->|"no"| OBSERVE
+    ANSWER -->|"yes"| REMEMBER["Remember it if they said\nthis session or always"]
+    REMEMBER --> WHERE
+
+    %% ============================ run it =============================
+    WHERE -->|"inside the agent"| RUN_HERE["Run it in this process"]
+    WHERE -->|"tool process"| RUN_MCP["Hand it to the MCP tool process\nfull user privileges"]
+    WHERE -->|"sandbox"| RUN_BOX["Run it in a container\nno network, one folder"]
+    RUN_HERE --> WORKED
+    RUN_MCP --> WORKED
+    RUN_BOX --> WORKED
+
+    WORKED -->|"no"| OBSERVE
+    WORKED -->|"yes"| TRIM["Shorten the output if it is huge"]
+    TRIM --> OBSERVE
+
+    %% ===================== round and round we go ======================
+    OBSERVE --> MORE{"More tool calls from this reply?"}
+    MORE -->|"yes"| NEXT
+    MORE -->|"no"| TURN
+
+    %% ========================== every ending =========================
+    STOP_LIMIT --> RECORD["Save the run record\nstatus, turns, tokens, tool calls\nPublish the final event"]
+    STOP_CANCEL --> RECORD
+    STOP_DONE --> RECORD
+    RECORD --> SHOWN(["App shows the answer"])
+
+    %% ============================ styling ============================
+    style START fill:#E8EEF9,stroke:#1F3864
+    style SHOWN fill:#E8EEF9,stroke:#1F3864
+    style OBSERVE fill:#FDECC8,stroke:#8A6D3B,stroke-width:3px
+    style PROMPT fill:#FCE4E4,stroke:#A33A3A,stroke-width:2px
+    style RUN_HERE fill:#FFFDF5,stroke:#8A6D3B
+    style RUN_MCP fill:#FCE4E4,stroke:#A33A3A
+    style RUN_BOX fill:#E4F0E6,stroke:#2E6B3E
+    style COMPACT fill:#F3E8F5,stroke:#6B2E8A
+    style STOP_DONE fill:#E4F0E6,stroke:#2E6B3E
+    style STOP_LIMIT fill:#F2F2F2,stroke:#666666
+    style STOP_CANCEL fill:#F2F2F2,stroke:#666666
+    style RECORD fill:#F2F2F2,stroke:#666666
