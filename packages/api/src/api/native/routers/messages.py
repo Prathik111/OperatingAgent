@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
@@ -21,7 +21,7 @@ from ..runtime import attach_mcp_tools
 
 router = APIRouter(prefix="/native/sessions", tags=["native-messages"])
 
-NativeServiceDep = Annotated[object, Depends(get_native_service)]
+NativeServiceDep = Annotated[Any, Depends(get_native_service)]
 
 
 def _limits_from_request(limits: object | None):
@@ -146,11 +146,8 @@ async def send_message(
                 except Exception:
                     pass
                 # Now send a lightweight follow-up text so the loop has a user turn to answer
-                # If text was empty and only media, reuse empty; else the media message already carries text, so send empty to just trigger loop
-                trigger_text = "" if text else ""
-                # Avoid double-counting text: if media_msg already had text, send_message with empty still creates a run
-                # but the loop will answer based on the persisted media_msg + this empty turn. Better to just send text again;
-                # the conversation render will include both, which is fine (two user turns). Keep simple: send text as-is.
+                # The media message already carries the user text; send text as-is
+                # (two user turns render correctly, and avoids double-counting complexity).
                 result = await service.send_message(session_id, text, limits=limits, cancellation=cancellation)
             else:
                 result = await service.send_message(session_id, text, limits=limits, cancellation=cancellation)

@@ -7,7 +7,7 @@ Two modes:
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
@@ -18,7 +18,7 @@ from ..schemas import EventResponse
 
 router = APIRouter(prefix="/native/sessions", tags=["native-events"])
 
-NativeServiceDep = Annotated[object, Depends(get_native_service)]
+NativeServiceDep = Annotated[Any, Depends(get_native_service)]
 
 
 def _event_to_response(e: object) -> EventResponse:

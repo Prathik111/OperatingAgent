@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends
 
@@ -11,7 +11,7 @@ from ..schemas import PermissionResponse, ResolvePermissionRequest
 
 router = APIRouter(prefix="/native/permissions", tags=["native-permissions"])
 
-NativeServiceDep = Annotated[object, Depends(get_native_service)]
+NativeServiceDep = Annotated[Any, Depends(get_native_service)]
 
 
 @router.get("", response_model=list[PermissionResponse])

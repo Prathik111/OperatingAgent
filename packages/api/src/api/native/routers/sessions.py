@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query, Request, status
 
@@ -13,7 +13,7 @@ from ..schemas import CreateSessionRequest, SessionResponse, SessionWithRunsResp
 
 router = APIRouter(prefix="/native/sessions", tags=["native-sessions"])
 
-NativeServiceDep = Annotated[object, Depends(get_native_service)]
+NativeServiceDep = Annotated[Any, Depends(get_native_service)]
 Limit = Annotated[int, Query(ge=0, le=500)]
 Offset = Annotated[int, Query(ge=0)]
 

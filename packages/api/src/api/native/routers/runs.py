@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends
 
@@ -11,7 +11,7 @@ from ..schemas import RunResponse
 
 router = APIRouter(prefix="/native", tags=["native-runs"])
 
-NativeServiceDep = Annotated[object, Depends(get_native_service)]
+NativeServiceDep = Annotated[Any, Depends(get_native_service)]
 
 
 @router.get("/runs/{run_id}", response_model=RunResponse)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends
 
@@ -14,8 +14,8 @@ router = APIRouter(prefix="/native", tags=["native-health"])
 
 @router.get("/health", response_model=NativeHealthResponse)
 async def native_health(
-    runtime: Annotated[object, Depends(get_native_runtime)],
-    settings: Annotated[object, Depends(get_native_settings)],
+    runtime: Annotated[Any, Depends(get_native_runtime)],
+    settings: Annotated[Any, Depends(get_native_settings)],
 ) -> NativeHealthResponse:
     agents = sorted(getattr(runtime, "agents", {}).keys()) if isinstance(getattr(runtime, "agents", None), dict) else []
     models: list[str] = []
