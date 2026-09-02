@@ -198,7 +198,9 @@ def test_missing_tracing_extra_reports_tracing_reason(monkeypatch):
         mon = Monitoring(trace_dir=tmp, otlp_endpoint="http://localhost:4318/v1/traces")
         with mon.run_span("run"), mon.turn_span(1):
             pass
-        mon.shutdown()
+        written = mon.shutdown()
+        assert len(written) == 1
+        assert Path(written[0]).exists()
         assert mon.otlp_skipped_reason is not None and "tracing" in mon.otlp_skipped_reason
 
 
