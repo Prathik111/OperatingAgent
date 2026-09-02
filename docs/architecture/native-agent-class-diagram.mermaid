@@ -870,7 +870,7 @@ classDiagram
     RiskClassifier <|.. PolicyChain : replaced by the policy stack
     CommonAgentConfig <|.. AgentConfig : flat local equivalent
     CommonRunStatus ..> RunStatus : same name - different values
-    IMCPClient ..> Tool : MCP-backed via MCPTool/MCPToolProvider (see §10 history)
+    IMCPClient ..> Tool : agent_native native MCPClient via MCPTool/MCPToolProvider (does not adopt common IMCPClient; see §10 history)
 
     %% NOTE NativePlan and NativePlanStep have no equivalent at all. There is no
     %%      plan object in v0.5.0: the model decides what to do next by reading

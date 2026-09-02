@@ -25,6 +25,9 @@ BEGIN
         SELECT 1 FROM pg_index
         WHERE indrelid = 'schema_migrations'::regclass
           AND indisunique
+          AND indpred IS NULL
+          AND indnkeyatts = 0
+          AND array_length(indkey, 1) = 1
           AND indkey[0] = (SELECT attnum FROM pg_attribute WHERE attrelid = 'schema_migrations'::regclass AND attname = 'id')
     ) THEN
         ALTER TABLE schema_migrations ADD PRIMARY KEY (id);

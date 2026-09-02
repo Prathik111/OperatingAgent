@@ -85,8 +85,9 @@ def make_runtime(
     _orig_create = service.create_session
 
     async def _create_with_workdir(*args, **kwargs):  # type: ignore[no-untyped-def]
-        # args: (agent, title, working_directory) positionally
-        if args or "working_directory" in kwargs:
+        # Detect explicit working_directory: 3rd positional arg or keyword
+        has_pos_workdir = len(args) >= 3
+        if has_pos_workdir or "working_directory" in kwargs:
             # If caller already supplied a directory, keep it (explicit wins)
             return await _orig_create(*args, **kwargs)  # type: ignore[call-arg]
         kwargs["working_directory"] = workdir

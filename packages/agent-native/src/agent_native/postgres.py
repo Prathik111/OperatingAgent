@@ -372,7 +372,7 @@ class PostgresDatabase(Database):
         rows = await self._fetch(
             """
             SELECT at.thread_id AS session_id, ae.sequence_number AS sequence,
-                   ae.event_type AS type, COALESCE(ae.payload->>'native_run_id', '') AS run_id,
+                   ae.event_type AS type, COALESCE(ae.payload->>'native_run_id', ar.metadata->>'native_run_id', '') AS run_id,
                    ae.payload AS data, ae.created_at AS time
             FROM agent_events ae
             JOIN agent_runs ar ON ar.id = ae.run_id
