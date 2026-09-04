@@ -39,6 +39,25 @@ DEFAULT_CORS_ORIGINS = (
 DEFAULT_ALLOWED_HOSTS = ("127.0.0.1", "localhost", "testserver")
 
 
+def _default_data_dir() -> Path:
+    """Return the per-user application data directory for this platform."""
+    if os.name == "nt":
+        root = os.getenv("APPDATA") or os.getenv("LOCALAPPDATA")
+        if root:
+            return Path(root) / "OperatingAgent"
+    elif os.name == "posix":
+        if sys.platform == "darwin":
+            return Path.home() / "Library" / "Application Support" / "OperatingAgent"
+        root = os.getenv("XDG_DATA_HOME")
+        if root:
+            return Path(root) / "OperatingAgent"
+    return Path.home() / ".operating-agent"
+
+
+DEFAULT_DATA_DIR = _default_data_dir()
+DEFAULT_SQLITE_DATABASE_PATH = DEFAULT_DATA_DIR / "operating-agent.db"
+
+
 def _default_prompt_dir() -> Path:
     """Resolve LangGraph prompts via package resources when installed."""
     try:
@@ -46,13 +65,10 @@ def _default_prompt_dir() -> Path:
 
         pkg_prompts = files("agent_langgraph") / "prompts"
         # files() returns a Traversable; check existence without requiring as_file
-        try:
-            if pkg_prompts.is_dir():
-                return Path(str(pkg_prompts))
-        except Exception:
-            pass
-    except Exception:
-        pass
+        if pkg_prompts.is_dir():
+            return Path(str(pkg_prompts))
+    except (ImportError, OSError, RuntimeError, TypeError, ValueError):
+        return Path(__file__).resolve().parents[3] / "agent-langgraph" / "prompts"
     return Path(__file__).resolve().parents[3] / "agent-langgraph" / "prompts"
 
 
@@ -101,6 +117,11 @@ class ApiSettings:
 
     database_url: str | None = field(default=None, repr=False)
     repository_backend: str = "memory"
+    # Production-safe default: an unavailable configured Postgres store should
+    # fail startup unless a desktop fallback is explicitly selected.
+    repository_fallback: str = "error"
+    repository_connect_timeout_seconds: float = 5.0
+    sqlite_database_path: str = str(DEFAULT_SQLITE_DATABASE_PATH)
 
     cors_origins: tuple[str, ...] = DEFAULT_CORS_ORIGINS
     allowed_hosts: tuple[str, ...] = DEFAULT_ALLOWED_HOSTS
@@ -125,6 +146,7 @@ class ApiSettings:
 
     sandbox_enabled: bool = True
     sandbox_workspace: str = "./workspace"
+    sandbox_image: str = ""
 
     permission_file_system: bool = True
     permission_terminal: bool = True
@@ -166,12 +188,21 @@ class ApiSettings:
         backend = os.getenv(
             "API_REPOSITORY_BACKEND", "postgres" if database_url else "memory"
         ).lower()
+        data_dir = Path(os.getenv("OPERATING_AGENT_DATA_DIR") or DEFAULT_DATA_DIR)
+        sqlite_database_path = os.getenv("SQLITE_DATABASE_PATH") or str(
+            data_dir / "operating-agent.db"
+        )
         return cls(
             host=os.getenv("API_HOST", "127.0.0.1"),
             port=int(os.getenv("API_PORT", "8000")),
             log_level=os.getenv("API_LOG_LEVEL", "info"),
             database_url=database_url,
             repository_backend=backend,
+            repository_fallback=os.getenv("API_REPOSITORY_FALLBACK", "error").strip().lower(),
+            repository_connect_timeout_seconds=_env_float(
+                "API_REPOSITORY_CONNECT_TIMEOUT_SECONDS", 5.0
+            ),
+            sqlite_database_path=sqlite_database_path,
             cors_origins=_split_csv(
                 os.getenv("API_CORS_ORIGINS", ",".join(DEFAULT_CORS_ORIGINS)),
                 DEFAULT_CORS_ORIGINS,
@@ -201,6 +232,7 @@ class ApiSettings:
             execution_enable_interrupts=_env_bool("AGENT_ENABLE_INTERRUPTS", True),
             sandbox_enabled=_env_bool("AGENT_SANDBOX_ENABLED", True),
             sandbox_workspace=os.getenv("AGENT_WORKSPACE", "./workspace"),
+            sandbox_image=os.getenv("AGENT_SANDBOX_IMAGE", ""),
             permission_file_system=_env_bool("AGENT_PERMISSION_FILE_SYSTEM", True),
             permission_terminal=_env_bool("AGENT_PERMISSION_TERMINAL", True),
             permission_git=_env_bool("AGENT_PERMISSION_GIT", True),
@@ -227,15 +259,29 @@ class ApiSettings:
 
         The api key is read from ``{PROVIDER}_API_KEY`` at call time and defaults
         to an empty string (hermetic). The ``auto`` checkpoint backend selects
-        Postgres iff a ``DATABASE_URL`` is configured, else in-memory. Tracing
-        follows the shared Langfuse enablement rule (both keys present).
+        Postgres when a ``DATABASE_URL`` is configured, SQLite when the
+        repository backend is SQLite, and memory otherwise. Tracing follows the
+        shared Langfuse enablement rule (both keys present).
         """
         provider = self.llm_provider
         api_key = os.getenv(f"{provider.upper()}_API_KEY", "")
         prompts = Path(self.prompt_dir)
         checkpoint_backend = self.checkpoint_backend
         if checkpoint_backend == "auto":
-            checkpoint_backend = "postgres" if self.database_url else "memory"
+            if self.repository_backend in {
+                "sqlite",
+                "file",
+                "file-based",
+                "file_based",
+            }:
+                checkpoint_backend = "sqlite"
+            elif self.database_url:
+                checkpoint_backend = "postgres"
+            else:
+                checkpoint_backend = "memory"
+        checkpoint_connection = self.database_url
+        if checkpoint_backend == "sqlite":
+            checkpoint_connection = self.sqlite_database_path
         resolved_track = track or self.default_track
         return AgentConfig(
             llm=LLMConfig(
@@ -259,6 +305,7 @@ class ApiSettings:
             sandbox=SandboxConfig(
                 enabled=self.sandbox_enabled,
                 workspace=Path(self.sandbox_workspace),
+                image=self.sandbox_image,
             ),
             permissions=ToolPermissionConfig(
                 file_system=self.permission_file_system,
@@ -270,7 +317,7 @@ class ApiSettings:
             ),
             checkpoint=CheckpointConfig(
                 backend=checkpoint_backend,
-                connection_string=self.database_url,
+                connection_string=checkpoint_connection,
                 namespace=self.checkpoint_namespace,
             ),
             tracing=TracingConfig(enabled=self.tracing_enabled),

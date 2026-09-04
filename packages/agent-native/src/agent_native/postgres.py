@@ -407,14 +407,15 @@ class PostgresDatabase(Database):
                 duration = float(getattr(run, "duration_seconds", 0.0) or 0.0)
                 await conn.execute(
                     """
-                    UPDATE agent_runs SET status=$2::run_status, last_error=$3,
-                        retry_count=$4, metadata=$5::jsonb,
-                        started_at=now() - ($6 * interval '1 second'),
+                    UPDATE agent_runs SET status=$2::run_status, output=$3,
+                        last_error=$4, retry_count=$5, metadata=$6::jsonb,
+                        started_at=now() - ($7 * interval '1 second'),
                         finished_at=now()
                     WHERE id=$1
                     """,
                     run_uuid,
                     status,
+                    str(getattr(run, "final_text", "") or "") or None,
                     str(getattr(run, "error", "") or "") or None,
                     int(getattr(run, "retries", 0) or 0),
                     json.dumps(receipt),
@@ -458,7 +459,7 @@ class PostgresDatabase(Database):
         """One run's receipt, rebuilt into a `RunRecord`, or None if there isn't one."""
         row = await self._fetchrow(
             """
-            SELECT ar.metadata, at.thread_id AS session_id, ar.status, ar.last_error,
+             SELECT ar.metadata, at.thread_id AS session_id, ar.status, ar.output, ar.last_error,
                    ar.retry_count, ar.duration_ms, lc.model, lc.prompt_tokens,
                    lc.completion_tokens, lc.cost
             FROM agent_runs ar
@@ -482,7 +483,7 @@ class PostgresDatabase(Database):
         them in a shuffling order every time is not a report you can diff.
         """
         sql = """
-            SELECT ar.metadata, at.thread_id AS session_id, ar.status, ar.last_error,
+             SELECT ar.metadata, at.thread_id AS session_id, ar.status, ar.output, ar.last_error,
                    ar.retry_count, ar.duration_ms, lc.model, lc.prompt_tokens,
                    lc.completion_tokens, lc.cost
             FROM agent_runs ar
@@ -692,6 +693,7 @@ def _row_to_run(row: Any) -> Any:
         run_id=metadata.get("native_run_id", ""),
         session_id=row["session_id"],
         status=metadata.get("native_status", row["status"]),
+        final_text=row["output"] or "",
         turns=int(metadata.get("turns", 0) or 0),
         input_tokens=int(row["prompt_tokens"] or 0),
         output_tokens=int(row["completion_tokens"] or 0),
@@ -702,6 +704,7 @@ def _row_to_run(row: Any) -> Any:
         model=row["model"] or "",
         retries=row["retry_count"],
         reasoning_tokens=int(metadata.get("reasoning_tokens", 0) or 0),
+        trace_id=metadata.get("trace_id", "") or "",
     )
 
 
@@ -777,6 +780,7 @@ def _run_metadata(run: Any) -> dict:
         "turns": int(getattr(run, "turns", 0) or 0),
         "cached_tokens": int(getattr(run, "cached_tokens", 0) or 0),
         "reasoning_tokens": int(getattr(run, "reasoning_tokens", 0) or 0),
+        "trace_id": str(getattr(run, "trace_id", "") or ""),
     }
 
 

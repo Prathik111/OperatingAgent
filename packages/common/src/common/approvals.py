@@ -20,6 +20,15 @@ class ApprovalRequest:
     plan_step_id: str | None = None
 
 
+@dataclass(slots=True, frozen=True)
+class ApprovalRecord:
+    """Durable approval state reconstructed from the application event log."""
+
+    request: ApprovalRequest
+    approved: bool | None = None
+    note: str | None = None
+
+
 class ApprovalHandler(Protocol):
     """Runtime approval boundary shared by orchestrators and the API."""
 

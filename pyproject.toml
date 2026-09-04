@@ -25,6 +25,8 @@ dev = [
     "observability",
     "agent-langgraph",
     "api",
+    "sandbox",
+    "evaluation",
     "file-server",
     "git-server",
     "terminal-server",
@@ -41,6 +43,8 @@ agent-native = { workspace = true }
 observability = { workspace = true }
 agent-langgraph = { workspace = true }
 api = { workspace = true }
+sandbox = { workspace = true }
+evaluation = { workspace = true }
 file-server = { workspace = true }
 git-server = { workspace = true }
 terminal-server = { workspace = true }
@@ -115,6 +119,7 @@ ignore_missing_imports = true
 [tool.pyright]
 include = ["packages"]
 exclude = ["tests", ".venv", ".sandbox-tmp"]
+extraPaths = ["packages/agent-native/src"]
 typeCheckingMode = "basic"
 pythonVersion = "3.12"
 venvPath = "."

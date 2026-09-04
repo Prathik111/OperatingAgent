@@ -7,7 +7,13 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 
 from ..dependencies import get_task_service
-from ..schemas import TaskResponse, ThreadResponse
+from ..schemas import (
+    CreateTaskRequest,
+    ResumeTaskRequest,
+    TaskResponse,
+    ThreadEventResponse,
+    ThreadResponse,
+)
 from ..services.task_service import TaskService
 
 router = APIRouter(prefix="/threads", tags=["threads"])
@@ -15,6 +21,23 @@ router = APIRouter(prefix="/threads", tags=["threads"])
 TaskServiceDep = Annotated[TaskService, Depends(get_task_service)]
 Limit = Annotated[int, Query(ge=1, le=500)]
 Offset = Annotated[int, Query(ge=0)]
+
+
+@router.post("/{thread_id}/tasks", response_model=TaskResponse, status_code=202)
+async def create_thread_task(
+    thread_id: str,
+    body: CreateTaskRequest,
+    service: TaskServiceDep,
+) -> TaskResponse:
+    """Append a new task to an existing conversation thread."""
+    task = await service.create_thread_task(
+        thread_id=thread_id,
+        goal=body.goal,
+        track=body.track,
+        metadata=body.metadata,
+        workspace=body.workspace,
+    )
+    return TaskResponse.from_task(task, status="pending")
 
 
 @router.get("", response_model=list[ThreadResponse])
@@ -36,7 +59,7 @@ async def list_thread_tasks(
     offset: Offset = 0,
 ) -> list[TaskResponse]:
     """Return one thread's tasks ordered newest-first."""
-    tasks = await service.list_thread_tasks(
+    tasks = await service.list_thread_task_details(
         thread_id,
         limit=limit,
         offset=offset,
@@ -44,7 +67,52 @@ async def list_thread_tasks(
     return [
         TaskResponse.from_task(
             task,
-            status=run_status.value if run_status is not None else None,
+            status=run.status.value if run is not None else None,
+            run=run,
         )
-        for task, run_status in tasks
+        for task, run in tasks
+    ]
+
+
+@router.get("/{thread_id}/tasks/{task_id}", response_model=TaskResponse)
+async def get_thread_task(
+    thread_id: str,
+    task_id: str,
+    service: TaskServiceDep,
+) -> TaskResponse:
+    """Return a task only when it belongs to the requested conversation thread."""
+    task, run = await service.get_task_in_thread(thread_id, task_id)
+    return TaskResponse.from_task(
+        task,
+        status=run.status.value if run is not None else None,
+        run=run,
+    )
+
+
+@router.post("/{thread_id}/tasks/{task_id}/resume", response_model=TaskResponse)
+async def resume_thread_task(
+    thread_id: str,
+    task_id: str,
+    body: ResumeTaskRequest,
+    service: TaskServiceDep,
+) -> TaskResponse:
+    task = await service.resume_task_in_thread(
+        thread_id,
+        task_id,
+        resume_value=body.resume_value,
+        checkpoint_id=body.checkpoint_id,
+    )
+    return TaskResponse.from_task(task, status="pending")
+
+
+@router.get("/{thread_id}/events", response_model=list[ThreadEventResponse])
+async def list_thread_events(
+    thread_id: str,
+    service: TaskServiceDep,
+) -> list[ThreadEventResponse]:
+    """Return the durable event history for every task in a thread."""
+    events = await service.list_thread_events(thread_id)
+    return [
+        ThreadEventResponse(task_id=task_id, type=event.type, payload=event.payload)
+        for task_id, event in events
     ]

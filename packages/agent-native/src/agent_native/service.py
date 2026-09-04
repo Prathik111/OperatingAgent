@@ -173,6 +173,7 @@ class AgentService:
         agent: str = "build",
         title: str = "",
         working_directory: str = ".",
+        session_id: str | None = None,
     ) -> Session:
         """Start a new session and seed it with the agent's system prompt.
 
@@ -183,7 +184,14 @@ class AgentService:
         instructions.
         """
         config = self.runtime.config_for(agent)
-        session = Session(agent=agent, title=title, working_directory=working_directory)
+        session_kwargs: dict[str, Any] = {
+            "agent": agent,
+            "title": title,
+            "working_directory": working_directory,
+        }
+        if session_id is not None:
+            session_kwargs["id"] = session_id
+        session = Session(**session_kwargs)
         await self.runtime.database.create_session(session)
 
         tool_names = [
@@ -209,6 +217,7 @@ class AgentService:
         text: str,
         limits: Limits | None = None,
         cancellation: Cancellation | None = None,
+        media: list | None = None,
     ):
         """Add the user's message and run the agent until it stops."""
         session = await self.runtime.database.get_session(session_id)
@@ -219,7 +228,7 @@ class AgentService:
         # Mint the run before writing its first event.  The canonical Postgres
         # schema anchors every event to an agent_run, including MESSAGE_ADDED.
         run_id = "run_" + uuid.uuid4().hex[:8]
-        user_msg = user_message(session_id, text)
+        user_msg = user_message(session_id, text, media=media)
         await self.runtime.database.save_message(user_msg)
         await self.runtime.events.emit(
             session_id,
@@ -411,6 +420,7 @@ def _run_result_from_event(event: Any) -> RunResult:
         retries=int(data.get("retries", 0) or 0),
         fallbacks=int(data.get("fallbacks", 0) or 0),
         stop_reason=data.get("stop_reason", "") or "",
+        trace_id=data.get("trace_id", "") or "",
     )
 
 

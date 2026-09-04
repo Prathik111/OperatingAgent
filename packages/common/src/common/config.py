@@ -79,6 +79,8 @@ class SandboxConfig:
 
     workspace: Path = Path("./workspace")
 
+    image: str = ""
+
 
 # ============================================================
 # Tool Permissions

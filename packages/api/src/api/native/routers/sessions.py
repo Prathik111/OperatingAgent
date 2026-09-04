@@ -7,6 +7,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, Query, Request, status
 from pydantic import BaseModel
 
+from ...workspace import resolve_workspace
 from ..dependencies import get_native_service
 from ..schemas import (
     CreateSessionRequest,
@@ -23,11 +24,20 @@ Offset = Annotated[int, Query(ge=0)]
 
 
 @router.post("", response_model=SessionResponse, status_code=status.HTTP_201_CREATED)
-async def create_session(body: CreateSessionRequest, service: NativeServiceDep) -> SessionResponse:
+async def create_session(
+    body: CreateSessionRequest,
+    service: NativeServiceDep,
+    request: Request,
+) -> SessionResponse:
+    settings = request.app.state.settings
+    workspace = resolve_workspace(
+        body.workspace,
+        default=getattr(settings, "sandbox_workspace", "."),
+    )
     session = await service.create_session(
         agent=body.agent or "build",
         title=body.title or "",
-        working_directory=body.working_directory or ".",
+        working_directory=workspace,
     )
     return SessionResponse.from_native(session)
 
@@ -36,13 +46,17 @@ async def create_session(body: CreateSessionRequest, service: NativeServiceDep) 
 async def list_sessions(
     request: Request,
     service: NativeServiceDep,
-    working_directory: str = Query(default="", description="Filter by working_directory (exact)"),
+    workspace: str = Query(default="", description="Filter by workspace (exact)"),
     limit: Limit = 100,
     offset: Offset = 0,
 ) -> list[SessionResponse]:
     db = service.runtime.database
-    sessions = await db.list_sessions(working_directory=working_directory, limit=0)
-    # offset/limit in Python so working_directory filter is consistent across backends
+    selected = resolve_workspace(
+        workspace or None,
+        default=getattr(request.app.state.settings, "sandbox_workspace", "."),
+    ) if workspace else ""
+    sessions = await db.list_sessions(working_directory=selected, limit=0)
+    # offset/limit in Python so workspace filtering is consistent across backends
     sliced = sessions[offset : offset + limit] if limit else sessions[offset:]
     return [SessionResponse.from_native(s) for s in sliced]
 
@@ -133,6 +147,8 @@ async def get_conversation(session_id: str, service: NativeServiceDep):
             "role": getattr(getattr(m, "role", ""), "value", str(getattr(m, "role", ""))),
             "parts": parts,
             "model": getattr(m, "model", "") or "",
-            "created_at": getattr(m, "created_at", None).isoformat() if getattr(m, "created_at", None) else None,
+            "created_at": (
+                created.isoformat() if (created := getattr(m, "created_at", None)) else None
+            ),
         })
     return {"session_id": session_id, "messages": out}

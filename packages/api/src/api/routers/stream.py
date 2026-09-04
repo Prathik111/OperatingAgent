@@ -25,11 +25,12 @@ async def stream_events(
 ) -> EventSourceResponse:
     """Server-Sent Events stream of a task's run events."""
     service = request.app.state.task_service
-    await service.get_task(task_id)  # raises TaskNotFound -> 404 before we stream
-    broker = request.app.state.broker
+    # Validate before EventSourceResponse sends HTTP headers; errors raised from
+    # its body iterator cannot be converted into a 404 after response start.
+    await service.get_task(task_id)
 
     async def event_source():
-        async for event in broker.subscribe(task_id):
+        async for event in service.stream_task(task_id):
             yield event_to_sse(event)
 
     return EventSourceResponse(event_source(), ping=15)
@@ -39,7 +40,6 @@ async def stream_events(
 async def stream_ws(websocket: WebSocket, task_id: str) -> None:
     """WebSocket stream of the same run events; closes with 4404 if unknown."""
     service = websocket.app.state.task_service
-    broker = websocket.app.state.broker
 
     try:
         await service.get_task(task_id)
@@ -49,7 +49,7 @@ async def stream_ws(websocket: WebSocket, task_id: str) -> None:
 
     await websocket.accept()
     try:
-        async for event in broker.subscribe(task_id):
+        async for event in service.stream_task(task_id):
             await websocket.send_json(event_to_dict(event))
     except WebSocketDisconnect:
         pass

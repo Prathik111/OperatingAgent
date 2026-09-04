@@ -13,6 +13,7 @@ from .client import (
     flush,
     get_callback_handler,
     get_client,
+    get_trace_url,
     init_tracing,
     shutdown,
 )
@@ -24,6 +25,7 @@ __all__ = [
     "flush",
     "get_callback_handler",
     "get_client",
+    "get_trace_url",
     "init_tracing",
     "mask",
     "shutdown",

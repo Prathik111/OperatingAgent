@@ -23,7 +23,7 @@ async def native_health(
         reg = getattr(runtime, "models", None)
         if reg is not None and hasattr(reg, "_models"):
             models = sorted(reg._models.keys())  # type: ignore[attr-defined]
-    except Exception:
+    except (AttributeError, TypeError, ValueError):
         models = []
     backend = getattr(settings, "repository_backend", "memory") or "memory"
     # If a real DSN is set, report postgres even when Task API is still memory
@@ -34,4 +34,15 @@ async def native_health(
         db = getattr(runtime, "database", None)
         if not isinstance(db, MemoryDatabase):
             backend = "postgres"
-    return NativeHealthResponse(status="ok", database=backend, agents=agents, models=models)
+    monitoring = getattr(runtime, "monitoring", None)
+    client = getattr(monitoring, "langfuse_client", None)
+    langfuse_enabled = bool(
+        client is not None and getattr(client, "_tracing_enabled", True)
+    )
+    return NativeHealthResponse(
+        status="ok",
+        database=backend,
+        agents=agents,
+        models=models,
+        langfuse_enabled=langfuse_enabled,
+    )

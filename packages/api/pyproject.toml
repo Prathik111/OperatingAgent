@@ -12,6 +12,7 @@ dependencies = [
     "observability",
     "agent-langgraph",
     "agent-native",
+    "sandbox",
     "fastapi>=0.141.1",
     "uvicorn[standard]>=0.30",
     "psycopg[binary,pool]>=3.2",
@@ -33,3 +34,4 @@ common = { workspace = true }
 observability = { workspace = true }
 agent-langgraph = { workspace = true }
 agent-native = { workspace = true }
+sandbox = { workspace = true }

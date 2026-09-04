@@ -11,7 +11,7 @@ from agent_native.memory import Memory
 from agent_native.permissions import PermissionDuration, PermissionGrant
 from agent_native.postgres import PostgresDatabase
 
-DSN = os.getenv("OPERATING_AGENT_POSTGRES_DSN", "")
+DSN = os.getenv("OPERATING_AGENT_POSTGRES_DSN", os.getenv("DATABASE_URL", ""))
 pytestmark = pytest.mark.skipif(not DSN, reason="set OPERATING_AGENT_POSTGRES_DSN for live Postgres")
 
 

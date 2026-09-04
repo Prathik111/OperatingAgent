@@ -25,9 +25,15 @@ import asyncio
 import json
 import sys
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 
+from agent_native.config import AgentConfig
+from agent_native.database import MemoryDatabase
 from agent_native.monitoring import Monitoring, _otlp_attributes
+from agent_native.service import AgentRuntime, AgentService
+
+from tests._scripted import ScriptedProvider, scripted_registry, text_event
 
 
 def _by_name(mon: Monitoring) -> dict:
@@ -92,6 +98,87 @@ def test_langfuse_receives_native_run_generation_and_tool_observations() -> None
     assert generation["usage_details"] == {"input": 10, "output": 4, "total": 14}
     assert client.observations[2]["update"]["output"] == {"text": "port=8080"}
     assert mon.langfuse_trace_ids == {"run_lf": "trace-native"}
+    assert client.flushes == 1
+
+
+def test_native_root_observation_uses_v4_io_and_propagated_attributes(
+    monkeypatch,
+) -> None:
+    propagated: list[dict] = []
+
+    @contextmanager
+    def fake_propagate_attributes(**values):
+        propagated.append(values)
+        yield
+
+    monkeypatch.setattr("langfuse.propagate_attributes", fake_propagate_attributes)
+    client = _FakeLangfuse()
+    mon = Monitoring(langfuse_client=client)
+
+    with mon.run_span(
+        "run_v4",
+        input={"goal": "question"},
+        session_id="session-1",
+        trace_name="agent-native.run",
+        tags=["agent-native"],
+    ) as run:
+        with mon.turn_span(1):
+            pass
+        run.set(output={"answer": "answer"}, status="finished", turns=1)
+
+    mon.shutdown()
+
+    root = client.observations[0]
+    assert root["start"]["input"] == {"goal": "question"}
+    assert root["update"]["output"] == {"answer": "answer"}
+    assert propagated == [
+        {
+            "session_id": "session-1",
+            "trace_name": "agent-native.run",
+            "tags": ["agent-native"],
+            "metadata": {"run_id": "run_v4"},
+        }
+    ]
+
+
+def test_default_monitoring_uses_shared_langfuse_client(monkeypatch) -> None:
+    client = _FakeLangfuse()
+    monkeypatch.setattr("observability.get_client", lambda: client)
+
+    mon = Monitoring()
+
+    assert mon.langfuse_client is client
+
+
+def test_flush_delivers_without_clearing_recorded_spans() -> None:
+    client = _FakeLangfuse()
+    mon = Monitoring(langfuse_client=client)
+
+    with mon.run_span("run_flush"):
+        pass
+    mon.flush()
+
+    assert client.flushes == 1
+    assert len(mon.spans) == 1
+
+
+async def test_native_loop_flushes_after_each_run() -> None:
+    client = _FakeLangfuse()
+    runtime = AgentRuntime(
+        database=MemoryDatabase(),
+        model_registry=scripted_registry(
+            ScriptedProvider([text_event("done")])
+        ),
+        agents=[AgentConfig(name="build", model="scripted-1")],
+        monitoring=Monitoring(langfuse_client=client),
+    )
+    service = AgentService(runtime)
+    session = await service.create_session()
+
+    result = await service.send_message(session.id, "hello")
+
+    assert result.status.value == "finished"
+    assert result.trace_id == "trace-native"
     assert client.flushes == 1
 
 

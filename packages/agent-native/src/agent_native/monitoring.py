@@ -33,6 +33,7 @@ time, without holding the SDK open for the length of a run.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 import uuid
@@ -45,6 +46,15 @@ from pathlib import Path
 from typing import Any
 
 _AUTO_LANGFUSE = object()
+log = logging.getLogger(__name__)
+
+# Attributes understood by Langfuse v4's propagation context are not observation
+# metadata.  Keep them out of the metadata payload so they are stored in their
+# indexed fields and copied to every child observation.
+_PROPAGATED_ATTRIBUTES = frozenset(
+    {"session_id", "user_id", "tags", "trace_name", "version", "environment"}
+)
+_OBSERVATION_IO = frozenset({"input", "output"})
 
 #: Which run the code currently executing belongs to. A ContextVar rather than a
 #: plain attribute because two runs can be in flight in the same process, and
@@ -163,14 +173,24 @@ class Monitoring:
         }.get(trace.name, "span")
         stack = ExitStack()
         try:
+            attributes = self._redact_attrs(trace.attributes)
+            observation_kwargs: dict[str, Any] = {
+                "name": f"agent-native.{trace.name}",
+                "as_type": observation_type,
+                "metadata": self._metadata(attributes),
+            }
+            if "input" in attributes:
+                observation_kwargs["input"] = attributes["input"]
+            if "output" in attributes and trace.name != "run":
+                observation_kwargs["output"] = attributes["output"]
+            # Enter propagation before creating the observation: v4 tags and
+            # correlating attributes are captured at observation creation time.
+            self._enter_propagation_context(stack, attributes)
             observation = stack.enter_context(
-                client.start_as_current_observation(
-                    name=f"agent-native.{trace.name}",
-                    as_type=observation_type,
-                    metadata=self._redact_attrs(trace.attributes),
-                )
+                client.start_as_current_observation(**observation_kwargs)
             )
-        except Exception:
+        except Exception as exc:
+            log.debug("Langfuse observation start failed for %s: %s", trace.name, exc)
             stack.close()
             yield None
             return
@@ -187,13 +207,21 @@ class Monitoring:
         if observation is None:
             return
         attributes = self._redact_attrs(trace.attributes)
-        update: dict[str, Any] = {"metadata": attributes}
+        update: dict[str, Any] = {"metadata": self._metadata(attributes)}
         if trace.name == "run":
-            update["output"] = {
-                "status": attributes.get("status"),
-                "turns": attributes.get("turns"),
-            }
+            if attributes.get("output") is not None:
+                update["output"] = attributes["output"]
+            else:
+                update["output"] = {
+                    "status": attributes.get("status"),
+                    "turns": attributes.get("turns"),
+                }
+            if attributes.get("error"):
+                update["level"] = "ERROR"
+                update["status_message"] = str(attributes["error"])
         elif trace.name == "turn":
+            if attributes.get("output") is not None:
+                update["output"] = attributes["output"]
             update["model"] = attributes.get("model")
             update["usage_details"] = {
                 key: value
@@ -213,8 +241,58 @@ class Monitoring:
                 update["status_message"] = str(attributes["error"])
         try:
             observation.update(**update)
-        except Exception:
+        except Exception as exc:
+            log.debug("Langfuse observation update failed for %s: %s", trace.name, exc)
             return
+
+    @staticmethod
+    def _metadata(attributes: dict[str, Any]) -> dict[str, str]:
+        """Return v4-compatible, filterable observation metadata.
+
+        Langfuse v4 requires propagated metadata values to be strings with a
+        bounded length.  JSON keeps structured values readable while the bound
+        prevents an oversized request context from making ingestion fail.
+        """
+        metadata: dict[str, str] = {}
+        for key, value in attributes.items():
+            if key in _PROPAGATED_ATTRIBUTES or key in _OBSERVATION_IO or value is None:
+                continue
+            if isinstance(value, str):
+                rendered = value
+            else:
+                try:
+                    rendered = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+                except (TypeError, ValueError):
+                    rendered = str(value)
+            metadata[str(key)] = rendered[:200]
+        return metadata
+
+    @staticmethod
+    def _enter_propagation_context(stack: ExitStack, attributes: dict[str, Any]) -> None:
+        """Propagate v4 trace attributes to every nested observation when set."""
+        values: dict[str, Any] = {
+            key: attributes.get(key)
+            for key in _PROPAGATED_ATTRIBUTES
+            if attributes.get(key) is not None
+        }
+        if not values:
+            return
+        try:
+            from langfuse import propagate_attributes
+
+            if "tags" in values:
+                values["tags"] = [str(tag) for tag in values["tags"]]
+            if "session_id" in values:
+                values["session_id"] = str(values["session_id"])
+            if "user_id" in values:
+                values["user_id"] = str(values["user_id"])
+            if "metadata" not in values:
+                values["metadata"] = Monitoring._metadata(attributes)
+            stack.enter_context(propagate_attributes(**values))
+        except Exception as exc:
+            # Tracing is best effort.  The root observation remains useful even
+            # when an older or partially installed SDK lacks propagation support.
+            log.debug("Langfuse attribute propagation unavailable: %s", exc)
 
     @contextmanager
     def _span(self, name: str, **attributes) -> Iterator[Trace]:
@@ -239,8 +317,13 @@ class Monitoring:
                 yield trace
             else:
                 with self._langfuse_observation(trace) as observation:
-                    yield trace
-                    self._update_langfuse(observation, trace)
+                    try:
+                        yield trace
+                    except Exception as exc:
+                        trace.set(error=f"{type(exc).__name__}: {exc}", status="error")
+                        raise
+                    finally:
+                        self._update_langfuse(observation, trace)
         finally:
             trace.finish()
             _CURRENT_SPAN.reset(token)
@@ -296,6 +379,22 @@ class Monitoring:
             self._write_json(spans)
         return self.written
 
+    def flush(self) -> None:
+        """Deliver buffered Langfuse observations without closing the monitor.
+
+        Native runtimes can be long-lived (for example, the FastAPI process), so
+        waiting for process shutdown would leave completed runs buffered and
+        invisible in Langfuse. This is intentionally best effort: tracing must
+        never change the run result or make a provider failure look worse.
+        """
+        client = self.langfuse_client
+        if client is None:
+            return
+        try:
+            client.flush()
+        except Exception as exc:
+            log.debug("Langfuse flush failed: %s", exc)
+
     # -- the JSON fallback --------------------------------------------------
     def _redact_attrs(self, attributes: dict) -> dict:
         """Span attributes with any secret masked, or the attributes unchanged if
@@ -321,6 +420,7 @@ class Monitoring:
             origin = min(trace.start for trace in traces)
             payload = {
                 "run_id": run_id,
+                "langfuse_trace_id": self.langfuse_trace_ids.get(run_id, ""),
                 "written_at": datetime.now(UTC).isoformat(),
                 "span_count": len(traces),
                 "spans": [

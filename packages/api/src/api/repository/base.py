@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 from common.agent import AgentRunResult, AgentTask
+from common.approvals import ApprovalRecord, ApprovalRequest
 from common.config import AgentConfig
 from common.enums import RunStatus, TaskStatus
 from common.events import AgentEvent, LLMCallRecord, ToolCallRecord
@@ -29,6 +30,17 @@ class ThreadRecord:
     task_count: int
     created_at: datetime
     updated_at: datetime
+
+
+@dataclass(slots=True, frozen=True)
+class RunSummary:
+    """The persisted receipt needed to render a task after execution."""
+
+    run_id: str
+    status: RunStatus
+    output: str | None
+    error: str | None
+    metadata: dict
 
 
 @runtime_checkable
@@ -51,8 +63,21 @@ class TaskRepository(Protocol):
         """Return a thread's tasks and latest run statuses or raise ThreadNotFound."""
         ...
 
-    async def create_run(self, task_id: str, config: AgentConfig) -> str:
+    async def create_run(
+        self,
+        task_id: str,
+        config: AgentConfig,
+        metadata: dict | None = None,
+    ) -> str:
         """Open a run for a task against a config snapshot; return its run id."""
+        ...
+
+    async def get_latest_run_id(self, task_id: str) -> str | None:
+        """Return the most recent run id for a task, if one exists."""
+        ...
+
+    async def get_latest_run_metadata(self, task_id: str) -> dict:
+        """Return metadata attached to the most recent run."""
         ...
 
     async def mark_run_running(self, run_id: str) -> None:
@@ -95,4 +120,35 @@ class TaskRepository(Protocol):
 
     async def save_approval(self, run_id: str, payload: dict) -> str: ...
 
-    async def resolve_approval(self, payload: dict) -> None: ...
+    async def resolve_approval(
+        self,
+        request_or_payload: str | dict,
+        approved: bool | None = None,
+        note: str | None = None,
+    ) -> None: ...
+
+    async def list_events(
+        self, task_id: str, *, latest_run_only: bool = True
+    ) -> list[AgentEvent]:
+        """Return persisted events for a task, ordered within each run."""
+        ...
+
+    async def list_thread_events(self, thread_id: str) -> list[tuple[str, AgentEvent]]:
+        """Return persisted events for every task in a thread."""
+        ...
+
+    async def save_approval_request(self, request: ApprovalRequest) -> None:
+        """Persist an approval request in the run event history."""
+        ...
+
+    async def get_approval_state(self, request_id: str) -> ApprovalRecord | None:
+        """Return the latest durable state for an approval request."""
+        ...
+
+    async def list_pending_approvals(self) -> list[ApprovalRequest]:
+        """Return durable approval requests that have not been resolved."""
+        ...
+
+    async def get_latest_run(self, task_id: str) -> RunSummary | None:
+        """Return the latest persisted run receipt for a task."""
+        ...

@@ -37,15 +37,18 @@ cents on the chosen model, and `--max-tokens 200000` once input and output token
 reach that many. Either way it stops cleanly between turns and hands back what it
 had, with the ceiling it hit named on the receipt. Both are off by default.
 
-By default nothing is kept once the process ends. Pass `--database postgres://...`
+By default nothing is kept once the process ends. Pass `--database sqlite` or
+`--database postgres://...`
 to keep sessions, messages, events and run receipts.
 
-Once receipts are kept, `agent-native runs --database postgres://...` lists recent
+Once receipts are kept, `agent-native runs --database sqlite` or
+`--database postgres://...` lists recent
 runs - turns, tokens, cost and time, with a totals line - for a session
 (`--session`), a folder (`--dir`), or every session. It only reads, so it's the
 place to answer "did it get cheaper?" without re-running anything.
 
-`agent-native sessions --database postgres://...` manages those stored sessions:
+`agent-native sessions --database sqlite` or `--database postgres://...` manages
+those stored sessions:
 `sessions list` shows them newest-first, each with its last receipt; `sessions
 fork <id>` branches a conversation into a new session to try an alternative from
 the same history; `sessions delete <id>` removes one and everything under it.
@@ -65,9 +68,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import os
 import sys
 from pathlib import Path
 from typing import Any
+
+from sandbox import DEFAULT_IMAGE, ContainerSandbox
 
 from .checkpoint import CheckpointStore, default_base_for, install_auto_checkpoint
 from .config import AgentConfig
@@ -89,13 +95,32 @@ from .tools.subagent import is_helper_run
 
 # A sensible default model for each backend, used when --model is omitted.
 DEFAULT_MODELS = {
-    "groq": "llama-3.3-70b",
+    # This model is available to the project's configured Groq account and
+    # supports the structured/tool responses used by the native loop.
+    "groq": "gpt-oss-20b",
     "ollama": "qwen3.5:4b-q4_K_M",
 }
 
 #: Where run traces go when --trace-dir isn't given. Inside the working folder,
 #: dot-prefixed, so it sits next to the work it describes and stays out of the way.
 DEFAULT_TRACE_DIR = ".agent-traces"
+
+
+def _load_environment() -> None:
+    """Load the nearest ``.env`` for standalone CLI runs.
+
+    The API entrypoint already does this before startup. The native CLI is also a
+    supported entrypoint, so it must load the same provider and Langfuse settings
+    before constructing ``Monitoring`` or a model provider. Exported variables
+    remain authoritative.
+    """
+    try:
+        from dotenv import find_dotenv, load_dotenv
+    except ImportError:
+        return
+    path = find_dotenv(usecwd=True)
+    if path:
+        load_dotenv(path, override=False)
 
 
 def _build_runtime(args: argparse.Namespace, workdir: Path, database=None) -> AgentRuntime:
@@ -133,19 +158,51 @@ def _build_sandbox(args: argparse.Namespace):
     """
     if args.sandbox == "off":
         return None
-    from .tools.sandbox import ContainerSandbox
 
-    return ContainerSandbox(image=args.sandbox_image, network=args.sandbox_network)
+    return ContainerSandbox(
+        image=args.sandbox_image or DEFAULT_IMAGE,
+        network=args.sandbox_network,
+    )
 
 
 async def _open_database(dsn: str):
     """Open the store the user asked for. `memory` (the default) means None.
 
     Returning None lets `AgentRuntime` build its own `MemoryDatabase`, so the
-    default path has no Postgres code in it at all.
+    default path has no database code in it at all. ``sqlite`` uses the standard
+    per-user application data directory; ``sqlite:///path`` selects an explicit
+    file.
     """
     if not dsn or dsn == "memory":
         return None
+    if dsn.lower() == "sqlite" or dsn.lower().startswith("sqlite:"):
+        from .sqlite import SQLiteDatabase
+
+        if dsn.lower() == "sqlite":
+            if os.name == "nt":
+                root = os.getenv("APPDATA") or os.getenv("LOCALAPPDATA")
+                base = (
+                    Path(root) / "OperatingAgent"
+                    if root
+                    else Path.home() / "OperatingAgent"
+                )
+            elif sys.platform == "darwin":
+                base = Path.home() / "Library" / "Application Support" / "OperatingAgent"
+            else:
+                base = Path(
+                    os.getenv("XDG_DATA_HOME") or Path.home() / ".local" / "share"
+                ) / "OperatingAgent"
+            path = base / "operating-agent.db"
+        elif dsn.lower().startswith("sqlite:///"):
+            raw = dsn[len("sqlite:///") :]
+            path = Path(
+                raw
+                if os.name == "nt" and len(raw) > 1 and raw[1] == ":"
+                else f"/{raw}"
+            )
+        else:
+            path = Path(dsn[len("sqlite:") :].lstrip("/"))
+        return SQLiteDatabase(path)
     from .postgres import PostgresDatabase
 
     return await PostgresDatabase.open(dsn)
@@ -192,6 +249,7 @@ def _wire_ollama(runtime: AgentRuntime, model_name: str, host: str) -> None:
 
 
 async def _run(args: argparse.Namespace) -> int:
+    _load_environment()
     # Resolve the working folder first. This is the one folder the agent's file
     # tools may touch, so it has to exist before we start - a clear message here
     # beats a confusing "file not found" on every path the model tries. It also
@@ -311,6 +369,12 @@ async def _run(args: argparse.Namespace) -> int:
             ),
         )
         await printer
+        if result.trace_id:
+            from observability import get_trace_url
+
+            trace_url = get_trace_url(result.trace_id)
+            if trace_url:
+                print(f"[trace] {trace_url}", flush=True)
     finally:
         if not printer.done():
             printer.cancel()
@@ -380,6 +444,8 @@ def _receipt(data: dict, helper: bool = False) -> str:
         parts.append(f"retries={data['retries']}")
     if data.get("model"):
         parts.append(f"model={data['model']}")
+    if data.get("trace_id"):
+        parts.append(f"trace={data['trace_id']}")
     label = f"[helper {data.get('run_id', '')}]" if helper else "[done]"
     return label + " " + " ".join(parts)
 
@@ -474,7 +540,7 @@ async def _runs_view(argv: list) -> int:
         default="memory",
         help=(
             "Where to read runs from. `memory` (the default) is empty in a fresh "
-            "process, so this view wants a Postgres URL like "
+            "process, so this view wants `sqlite` or a Postgres URL like "
             "postgres://user:pass@localhost/agent - the same store the run used."
         ),
     )
@@ -777,7 +843,7 @@ async def _sessions_view(argv: list) -> int:
     """
     store_help = (
         "Where sessions are kept. `memory` (the default) is empty in a fresh "
-        "process, so this wants a Postgres URL like "
+        "process, so this wants `sqlite` or a Postgres URL like "
         "postgres://user:pass@localhost/agent - the same store the run used."
     )
     parser = argparse.ArgumentParser(
@@ -942,7 +1008,7 @@ def main() -> None:
         default=None,
         help=(
             "Model to think with. Omit to use the provider's default "
-            "(groq: llama-3.3-70b; ollama: qwen3.5:4b-q4_K_M). For Groq, any "
+            "(groq: gpt-oss-20b; ollama: qwen3.5:4b-q4_K_M). For Groq, any "
             "Groq model id works; for Ollama, any pulled model name."
         ),
     )
@@ -1002,9 +1068,11 @@ def main() -> None:
         default="memory",
         help=(
             "Where to keep sessions, messages, events and runs. `memory` (the "
-            "default) forgets everything when the process ends; a Postgres URL "
-            "like postgres://user:pass@localhost/agent keeps them. The Postgres "
-            "extra must be installed: uv sync --all-packages --extra postgres"
+            "default) forgets everything when the process ends; `sqlite` keeps a "
+            "durable per-user file, `sqlite:///path` selects an explicit file, and "
+            "a Postgres URL like postgres://user:pass@localhost/agent keeps them in "
+            "Postgres. The Postgres extra must be installed: uv sync --all-packages "
+            "--extra postgres"
         ),
     )
     parser.add_argument(
@@ -1047,9 +1115,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--sandbox-image",
-        default="",
+        default=DEFAULT_IMAGE,
         dest="sandbox_image",
-        help="Container image for the sandbox (default: python:3.12-slim).",
+        help="Container image for the sandbox (default: the shared project image).",
     )
     parser.add_argument(
         "--sandbox-network",

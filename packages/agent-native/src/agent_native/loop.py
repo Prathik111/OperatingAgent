@@ -21,8 +21,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -218,6 +220,7 @@ class RunResult:
     retries: int = 0
     fallbacks: int = 0
     stop_reason: str = ""
+    trace_id: str = ""
 
 
 @dataclass
@@ -227,6 +230,7 @@ class RunRecord:
     run_id: str
     session_id: str
     status: str
+    final_text: str = ""
     turns: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
@@ -237,6 +241,7 @@ class RunRecord:
     model: str = ""
     retries: int = 0
     reasoning_tokens: int = 0
+    trace_id: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -308,8 +313,29 @@ class AgentLoop:
         model = None
         total_cost = 0.0
 
+        # The root Langfuse v4 observation represents this complete agent turn.
+        # Keep the user request on it so evaluations and the tracing table have a
+        # useful root input instead of only opaque child generations.
+        goal = ""
+        for message in reversed(getattr(conversation, "messages", [])):
+            if getattr(message, "role", None) is Role.USER:
+                goal = message.text()
+                break
+        run_attributes = {
+            "input": goal,
+            "session_id": session.id,
+            "trace_name": f"native-run:{session.agent}",
+            "tags": ["agent-native", f"agent:{context.config.name}"],
+        }
+        environment = os.getenv("LANGFUSE_TRACING_ENVIRONMENT")
+        release = os.getenv("LANGFUSE_RELEASE")
+        if environment:
+            run_attributes["environment"] = environment
+        if release:
+            run_attributes["version"] = release
+
         try:
-            with self._monitoring.run_span(run_id) as run_trace:
+            with self._monitoring.run_span(run_id, **run_attributes) as run_trace:
                 # Inside the try: a bad model/provider name becomes a clean ERROR
                 # result, not an exception that escapes with no record. The primary
                 # (config.model) is resolved strictly - a bad name raises here, as
@@ -397,6 +423,7 @@ class AgentLoop:
                             turn_trace.set(
                                 model=model.model_id,
                                 provider=model.provider,
+                                output=assistant_msg.text(),
                                 input_tokens=assistant_msg.usage.input_tokens,
                                 output_tokens=assistant_msg.usage.output_tokens,
                                 total_tokens=(
@@ -440,6 +467,7 @@ class AgentLoop:
                         break
 
                 run_trace.set(
+                    output=final_text,
                     status=status.value,
                     turns=turn,
                     # Only interesting when it's True: the prompt cache can't hit
@@ -454,6 +482,8 @@ class AgentLoop:
             error = f"{type(exc).__name__}: {exc}"
             await self._bus.emit(session.id, EventType.ERROR, {"error": error}, run_id)
 
+        trace_ids = getattr(self._monitoring, "langfuse_trace_ids", None)
+        trace_id = trace_ids.get(run_id, "") if isinstance(trace_ids, Mapping) else ""
         result = RunResult(
             run_id=run_id,
             status=status,
@@ -475,9 +505,19 @@ class AgentLoop:
             retries=context.retries,
             fallbacks=context.fallbacks,
             stop_reason=stop_reason,
+            trace_id=trace_id,
         )
-        await self._finish(session, result)
-        await self._run_stop(session, run_id, result)
+        try:
+            await self._finish(session, result)
+            await self._run_stop(session, run_id, result)
+        finally:
+            # The API process is long-lived, so waiting for shutdown would keep
+            # completed native traces buffered. Flush after each run just like the
+            # LangGraph track; Monitoring makes this best-effort and optional for
+            # custom monitoring implementations.
+            flush = getattr(self._monitoring, "flush", None)
+            if callable(flush):
+                flush()
         return result
 
     async def _run_stop(self, session: Any, run_id: str, result: RunResult) -> None:
@@ -1006,7 +1046,10 @@ class AgentLoop:
         else:
             result = await self._pre_tool_veto(call, context, read_only)  # a hook may block it
             if result is None:
-                with self._monitoring.tool_span(call.name) as tool_trace:
+                with self._monitoring.tool_span(
+                    call.name,
+                    input={"name": call.name, "arguments": call.arguments},
+                ) as tool_trace:
                     if limit is None:
                         result = await self._tool_manager.run_authorized(call, context)
                     else:
@@ -1128,6 +1171,8 @@ class AgentLoop:
             run_id=result.run_id,
             session_id=session.id,
             status=result.status.value,
+            final_text=result.final_text,
+            trace_id=result.trace_id,
             turns=result.turns,
             input_tokens=result.usage.input_tokens,
             output_tokens=result.usage.output_tokens,
@@ -1167,6 +1212,7 @@ class AgentLoop:
                 # Empty unless a ceiling stopped the run, in which case it names
                 # which one - so a stream watcher can report the reason too.
                 "stop_reason": result.stop_reason,
+                "trace_id": result.trace_id,
             },
             result.run_id,
         )

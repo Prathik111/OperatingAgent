@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request
@@ -22,6 +23,7 @@ from ..schemas import ResumeRequest, RunResponse, SendMessageRequest
 router = APIRouter(prefix="/native/sessions", tags=["native-messages"])
 
 NativeServiceDep = Annotated[Any, Depends(get_native_service)]
+log = logging.getLogger(__name__)
 
 
 def _limits_from_request(limits: object | None):
@@ -29,7 +31,7 @@ def _limits_from_request(limits: object | None):
         return None
     try:
         from agent_native.loop import Limits
-    except Exception:
+    except ImportError:
         return None
 
     kwargs: dict = {}
@@ -41,7 +43,7 @@ def _limits_from_request(limits: object | None):
         return None
     try:
         return Limits(**kwargs)
-    except Exception:
+    except (TypeError, ValueError):
         return None
 
 
@@ -61,7 +63,7 @@ def _media_from_request(media: list[dict] | None):
             # data may already be base64 string; media_part handles both bytes and str
             out.append(media_part(data, mime_type=mime, detail=detail))
         return out or None
-    except Exception:
+    except (ImportError, TypeError, ValueError):
         return None
 
 
@@ -75,9 +77,20 @@ def _event_to_sse_dict(e: object) -> dict:
         "session_id": str(getattr(e, "session_id", "")),
         "run_id": str(getattr(e, "run_id", "") or ""),
         "data": dict(getattr(e, "data", {}) or {}),
-        "time": getattr(e, "time", None).isoformat() if getattr(e, "time", None) else None,
+        "time": (
+            event_time.isoformat() if (event_time := getattr(e, "time", None)) else None
+        ),
     }
     return {"id": str(seq), "event": typ, "data": json.dumps(payload, ensure_ascii=False, default=str)}
+
+
+def _run_receipt_to_sse_dict(result: object) -> dict:
+    payload = RunResponse.from_native(result).model_dump(mode="json")
+    return {
+        "id": str(getattr(result, "run_id", "") or "receipt"),
+        "event": "run_receipt",
+        "data": json.dumps(payload, ensure_ascii=False, default=str),
+    }
 
 
 @router.post("/{session_id}/messages")
@@ -101,15 +114,11 @@ async def send_message(
     # Attach MCP tools once per working_directory (lazy, in-process, no network)
     try:
         await attach_mcp_tools(service.runtime, working_directory=getattr(session, "working_directory", "."))
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001 - MCP attachment is optional
+        log.debug("MCP attachment skipped: %s", exc)
 
-    # Build limits and optional media-aware message.
-    # AgentService.send_message currently takes text only; media is handled by
-    # building a user_message with Media parts before invoking the loop.
-    # For backwards compat, we inject media via a direct DB save + emit path
-    # when media is present, then call send_message with the text. The loop's
-    # conversation will already contain the media message.
+    # Build limits and optional media-aware message. AgentService persists one
+    # user turn containing both text and media, avoiding duplicate user turns.
     media_parts = _media_from_request(body.media)
     limits = _limits_from_request(body.limits)
 
@@ -119,48 +128,41 @@ async def send_message(
     cancellation = Cancellation()
     # Register cancellation on the service runtime so POST /cancel can find it
     # Keyed by session_id -> Cancellation
-    cancels: dict = getattr(request.app.state, "native_cancels", None)
-    if cancels is None:
-        request.app.state.native_cancels = cancels = {}
+    existing_cancels = getattr(request.app.state, "native_cancels", None)
+    cancels: dict[str, Any] = (
+        existing_cancels if isinstance(existing_cancels, dict) else {}
+    )
+    request.app.state.native_cancels = cancels
     cancels[session_id] = cancellation
 
     # We need to capture the run_id that send_message mints. Wrap service.send_message
     # to emit with that run_id, then stream events for that run_id.
 
     # Background run so we can stream events concurrently
-    async def run_in_background():
-        try:
-            if media_parts:
-                # Persist a media-bearing user message before the text turn so the
-                # loop sees images/documents on its next render. We reuse the
-                # conversation's user_message factory.
-                from agent_native.conversation import user_message
-                from agent_native.events import EventType
+    run_result: Any | None = None
 
-                media_msg = user_message(session_id, text=text, media=media_parts)
-                await db.save_message(media_msg)
-                # Also emit a MESSAGE_ADDED for observability (run_id will be minted inside send_message,
-                # so this is a session-scoped marker, not run-scoped)
-                try:
-                    await service.runtime.events.emit(session_id, EventType.MESSAGE_ADDED, {"id": media_msg.id, "role": "user", "has_media": True}, run_id="")
-                except Exception:
-                    pass
-                # Now send a lightweight follow-up text so the loop has a user turn to answer
-                # The media message already carries the user text; send text as-is
-                # (two user turns render correctly, and avoids double-counting complexity).
-                result = await service.send_message(session_id, text, limits=limits, cancellation=cancellation)
-            else:
-                result = await service.send_message(session_id, text, limits=limits, cancellation=cancellation)
-            return result
+    async def run_in_background():
+        nonlocal run_result
+        try:
+            run_result = await service.send_message(
+                session_id,
+                text,
+                limits=limits,
+                cancellation=cancellation,
+                media=media_parts,
+            )
+            return run_result
         finally:
             # Unregister cancellation when run ends
             cancels.pop(session_id, None)
 
     background = asyncio.create_task(run_in_background())
     # Ensure background is awaited even if client disconnects
-    background_set: set = getattr(request.app.state, "native_background", None)
-    if background_set is None:
-        request.app.state.native_background = background_set = set()
+    existing_background = getattr(request.app.state, "native_background", None)
+    background_set: set[asyncio.Task[Any]] = (
+        existing_background if isinstance(existing_background, set) else set()
+    )
+    request.app.state.native_background = background_set
     background_set.add(background)
     background.add_done_callback(background_set.discard)
 
@@ -173,7 +175,8 @@ async def send_message(
     # Snapshot the current tail so we only stream this run's events
     try:
         tip = max([0] + [int(getattr(e, "sequence", 0) or 0) for e in await db.load_events(session_id, after_sequence=0)], default=0)
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 - event history is best effort
+        log.debug("Could not determine native event tail: %s", exc)
         tip = 0
 
     async def event_source():
@@ -183,7 +186,7 @@ async def send_message(
             # Stop on top-level RUN_FINISHED (helper runs contain "/")
             typ = str(getattr(event, "type", ""))
             run_id = str(getattr(event, "run_id", "") or "")
-            if typ == "run_finished" and "/" not in run_id:
+            if typ in ("run_finished", "error") and "/" not in run_id:
                 break
             # Also stop if background done and we've drained events up to its finish
             if background.done() and typ in ("run_finished", "error"):
@@ -191,15 +194,17 @@ async def send_message(
                 await asyncio.sleep(0.05)
                 # If no new events arrive quickly, the loop will idle; break on background done
                 # We don't break immediately to avoid cutting off the receipt event
-                if background.done():
-                    # Check if next event would be the terminal; if already yielded it, break
-                    if typ == "run_finished":
-                        break
+                # Check if the terminal event was already yielded.
+                if typ == "run_finished":
+                    break
         # Ensure background is awaited (propagate exception if any, but don't crash stream)
         try:
-            await background
-        except Exception:
-            pass
+            result = await background
+        except Exception as exc:  # noqa: BLE001 - background errors are already represented in events
+            log.debug("Native background task ended with error: %s", exc)
+        else:
+            if result is not None:
+                yield _run_receipt_to_sse_dict(result)
 
     return EventSourceResponse(
         event_source(),
@@ -231,9 +236,11 @@ async def resume_run(
     from agent_native.loop import Cancellation
 
     cancellation = Cancellation()
-    cancels: dict = getattr(request.app.state, "native_cancels", None)
-    if cancels is None:
-        request.app.state.native_cancels = cancels = {}
+    existing_cancels = getattr(request.app.state, "native_cancels", None)
+    cancels: dict[str, Any] = (
+        existing_cancels if isinstance(existing_cancels, dict) else {}
+    )
+    request.app.state.native_cancels = cancels
     cancels[session_id] = cancellation
     try:
         result = await service.resume_run(session_id, limits=limits, cancellation=cancellation)
@@ -257,8 +264,5 @@ async def cancel_run(session_id: str, request: Request, service: NativeServiceDe
     if cancellation is None:
         # No in-flight run to cancel — idempotent 202 with hint
         return JSONResponse(status_code=202, content={"session_id": session_id, "cancelled": False, "reason": "no active run"})
-    try:
-        cancellation.cancel()
-    except Exception:
-        pass
+    cancellation.cancel()
     return JSONResponse(status_code=202, content={"session_id": session_id, "cancelled": True})

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 from sse_starlette.sse import EventSourceResponse
 
@@ -51,7 +51,6 @@ async def get_events(
     service: NativeServiceDep,
     from_seq: int = Query(default=0, alias="from", ge=0, description="Last sequence the client has"),
     stream: int = Query(default=0, ge=0, le=1, description="1 to keep SSE open after catch-up"),
-    request: Request = None,  # noqa: ARG001
 ):
     from fastapi import HTTPException
 

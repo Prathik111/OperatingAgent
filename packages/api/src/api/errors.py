@@ -40,6 +40,13 @@ class ThreadNotFound(ApiError):
         super().__init__(f"thread '{thread_id}' not found")
 
 
+class TaskNotInThread(ApiError):
+    status_code = 404
+
+    def __init__(self, task_id: str, thread_id: str) -> None:
+        super().__init__(f"task '{task_id}' does not belong to thread '{thread_id}'")
+
+
 class UnknownTrack(ApiError):
     status_code = 400
 
@@ -59,6 +66,20 @@ class ApprovalAlreadyResolved(ApiError):
 
     def __init__(self, request_id: str) -> None:
         super().__init__(f"approval request '{request_id}' is already resolved")
+
+
+class TaskAlreadyRunning(ApiError):
+    status_code = 409
+
+    def __init__(self, task_id: str) -> None:
+        super().__init__(f"task '{task_id}' already has a run in progress")
+
+
+class InvalidWorkspace(ApiError):
+    status_code = 422
+
+    def __init__(self, workspace: str) -> None:
+        super().__init__(f"workspace '{workspace}' must be an existing directory")
 
 
 def register_exception_handlers(app: FastAPI) -> None:

@@ -16,6 +16,8 @@ env/
 .ruff_cache/
 .coverage
 .coverage.*
+.coverage-*
+coverage*.xml
 research/
 htmlcov/
 dist/

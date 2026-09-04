@@ -68,6 +68,27 @@ class EventBroker:
             for queue in topic.subscribers:
                 queue.put_nowait(_CLOSE)
 
+    async def reopen(self, task_id: str, *, clear: bool = False) -> None:
+        """Open a topic for a new attempt, optionally dropping old replay data."""
+        async with self._lock:
+            topic = self._ensure_topic(task_id)
+            topic.closed = False
+            if clear:
+                topic.buffer.clear()
+
+    async def hydrate(
+        self, task_id: str, events: list[AgentEvent], *, closed: bool
+    ) -> None:
+        """Load persisted events once after an API process restart."""
+        async with self._lock:
+            topic = self._ensure_topic(task_id)
+            if not topic.buffer:
+                topic.buffer.extend(events)
+            # Hydration must never reopen a topic that an in-process run has
+            # already closed; a fresh topic is open by default unless the
+            # persisted run is terminal.
+            topic.closed = topic.closed or closed
+
     async def aclose_all(self) -> None:
         """Close every topic — used on application shutdown."""
         async with self._lock:

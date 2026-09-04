@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 from .base import TaskRepository
 from .memory import InMemoryTaskRepository
+from .sqlite import SQLiteTaskRepository
 
 if TYPE_CHECKING:
     from ..config import ApiSettings
@@ -27,6 +28,9 @@ def build_repository(settings: ApiSettings) -> tuple[TaskRepository, Any | None]
 
     if backend in ("memory", "inmemory", "in_memory"):
         return InMemoryTaskRepository(), None
+
+    if backend in ("sqlite", "file", "file-based", "file_based"):
+        return SQLiteTaskRepository(settings.sqlite_database_path), None
 
     if backend == "postgres":
         if not settings.database_url:

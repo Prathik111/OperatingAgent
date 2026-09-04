@@ -25,7 +25,7 @@ async def get_run(run_id: str, service: NativeServiceDep) -> RunResponse:
     # RunRecord vs RunResult — normalize via from_record
     try:
         return RunResponse.from_native(rec)
-    except Exception:
+    except Exception:  # noqa: BLE001 - normalize either native result shape
         return RunResponse.from_record(rec)
 
 
@@ -42,6 +42,6 @@ async def list_runs(session_id: str, service: NativeServiceDep) -> list[RunRespo
     for r in recs:
         try:
             out.append(RunResponse.from_native(r))
-        except Exception:
+        except Exception:  # noqa: BLE001 - normalize either native result shape
             out.append(RunResponse.from_record(r))
     return out

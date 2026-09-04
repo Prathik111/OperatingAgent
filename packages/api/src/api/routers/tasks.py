@@ -7,7 +7,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, status
 
 from ..dependencies import get_task_service
-from ..schemas import CreateTaskRequest, TaskResponse
+from ..schemas import CreateTaskRequest, ResumeTaskRequest, TaskResponse
 from ..services.task_service import TaskService
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
@@ -22,24 +22,41 @@ async def create_task(
 ) -> TaskResponse:
     """Accept a goal and start a run in the background (returns 202).
 
-    The run status is reported as ``pending`` here; poll ``GET /tasks/{id}`` or
-    stream ``/tasks/{id}/events`` to watch it progress.
+    The run status is reported as ``pending`` here; use the returned thread id to
+    read the task or list the conversation history.
     """
+    legacy_thread_id = body.model_extra.get("thread_id") if body.model_extra else None
     task = await service.create_task(
         goal=body.goal,
         track=body.track,
-        thread_id=body.thread_id,
         metadata=body.metadata,
+        workspace=body.workspace,
+        thread_id=str(legacy_thread_id) if legacy_thread_id else None,
     )
     return TaskResponse.from_task(task, status="pending")
 
 
-@router.get("/{task_id}", response_model=TaskResponse)
-async def get_task(
+@router.get("/{task_id}", response_model=TaskResponse, include_in_schema=False)
+async def get_legacy_task(task_id: str, service: TaskServiceDep) -> TaskResponse:
+    """Compatibility lookup; new clients must use the thread-scoped route."""
+    task, run = await service.get_task_details(task_id)
+    return TaskResponse.from_task(
+        task,
+        status=run.status.value if run is not None else None,
+        run=run,
+    )
+
+
+@router.post("/{task_id}/resume", response_model=TaskResponse)
+async def resume_task(
     task_id: str,
+    body: ResumeTaskRequest,
     service: TaskServiceDep,
 ) -> TaskResponse:
-    task, run_status = await service.get_task(task_id)  # raises TaskNotFound -> 404
-    return TaskResponse.from_task(
-        task, status=run_status.value if run_status is not None else None
+    """Resume the task from its latest persisted LangGraph checkpoint."""
+    task = await service.resume_task(
+        task_id,
+        resume_value=body.resume_value,
+        checkpoint_id=body.checkpoint_id,
     )
+    return TaskResponse.from_task(task, status="pending")

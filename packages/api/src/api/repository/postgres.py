@@ -5,9 +5,9 @@ agent_runs -> agent_events`` using a psycopg 3 async connection pool. The pool
 runs in autocommit mode; the multi-row writes (``save_task``, ``create_run``)
 are wrapped in an explicit ``conn.transaction()`` so they land atomically.
 
-Only the spine is persisted this pass — plans, tool/llm calls, verifications
-and findings are not written. This backend is covered by an opt-in live test
-tier (gated on ``DATABASE_URL``), not by the hermetic unit suite.
+The run spine and durable state/action events are persisted here. LangGraph's
+checkpointer owns graph snapshots separately, while Langfuse remains the source
+of truth for model observations and evaluation metrics.
 """
 
 from __future__ import annotations
@@ -15,15 +15,16 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from common.agent import AgentRunResult, AgentTask
+from common.approvals import ApprovalRecord, ApprovalRequest
 from common.config import AgentConfig
 from common.enums import AgentTrack, RunStatus, TaskStatus
-from common.events import LLMCallRecord, ToolCallRecord
+from common.events import AgentEvent, LLMCallRecord, ToolCallRecord
 from psycopg.types.json import Jsonb
 
 from ..errors import TaskNotFound, ThreadNotFound
 from ..serialization import config_content_hash, config_to_snapshot
 from . import _sql
-from .base import ThreadRecord
+from .base import RunSummary, ThreadRecord
 
 if TYPE_CHECKING:  # avoid importing psycopg_pool at module import time
     from psycopg_pool import AsyncConnectionPool
@@ -141,7 +142,9 @@ class PostgresTaskRepository:
             ) in rows
         ]
 
-    async def create_run(self, task_id: str, config: AgentConfig) -> str:
+    async def create_run(
+        self, task_id: str, config: AgentConfig, metadata: dict | None = None
+    ) -> str:
         snapshot = config_to_snapshot(config)
         content_hash = config_content_hash(snapshot)
         async with (
@@ -169,13 +172,46 @@ class PostgresTaskRepository:
             snapshot_id = snapshot_row[0]
             await cur.execute(
                 _sql.INSERT_RUN,
-                (task_id, task_id, snapshot_id, RunStatus.CREATED.value),
+                (
+                    task_id,
+                    task_id,
+                    snapshot_id,
+                    RunStatus.CREATED.value,
+                    Jsonb(metadata or {}),
+                ),
             )
             run_row = await cur.fetchone()
             if run_row is None:
                 raise RuntimeError("run insert returned no row")
             run_id = run_row[0]
         return str(run_id)
+
+    async def get_latest_run_id(self, task_id: str) -> str | None:
+        async with self._pool.connection() as conn, conn.cursor() as cur:
+            await cur.execute(_sql.SELECT_LATEST_RUN_ID, (task_id,))
+            row = await cur.fetchone()
+        return str(row[0]) if row is not None else None
+
+    async def get_latest_run_metadata(self, task_id: str) -> dict:
+        async with self._pool.connection() as conn, conn.cursor() as cur:
+            await cur.execute(_sql.SELECT_LATEST_RUN_METADATA, (task_id,))
+            row = await cur.fetchone()
+        return dict(row[0] or {}) if row is not None else {}
+
+    async def get_latest_run(self, task_id: str) -> RunSummary | None:
+        async with self._pool.connection() as conn, conn.cursor() as cur:
+            await cur.execute(_sql.SELECT_LATEST_RUN, (task_id,))
+            row = await cur.fetchone()
+        if row is None:
+            return None
+        run_id, status, output, error, metadata = row
+        return RunSummary(
+            run_id=str(run_id),
+            status=RunStatus(status),
+            output=output,
+            error=error,
+            metadata=dict(metadata or {}),
+        )
 
     async def mark_run_running(self, run_id: str) -> None:
         async with self._pool.connection() as conn, conn.cursor() as cur:
@@ -374,7 +410,7 @@ class PostgresTaskRepository:
             )
             return str(await _fetch_scalar(cur))
 
-    async def resolve_approval(self, payload: dict) -> None:
+    async def _resolve_approval_record(self, payload: dict) -> None:
         async with self._pool.connection() as conn:
             async with conn.transaction(), conn.cursor() as cur:
                 external_id = payload.get(
@@ -408,6 +444,7 @@ class PostgresTaskRepository:
                     result.status.value,
                     result.output,
                     result.metadata.get("error"),
+                    Jsonb(result.metadata),
                     run_id,
                 ),
             )
@@ -423,3 +460,131 @@ class PostgresTaskRepository:
         if row is None:
             return None
         return RunStatus(row[0])
+
+    async def list_events(
+        self, task_id: str, *, latest_run_only: bool = True
+    ) -> list[AgentEvent]:
+        async with self._pool.connection() as conn, conn.cursor() as cur:
+            await cur.execute(
+                _sql.SELECT_TASK_EVENTS,
+                (task_id, latest_run_only, task_id),
+            )
+            rows = await cur.fetchall()
+        return [AgentEvent(type=event_type, payload=payload or {}) for event_type, payload in rows]
+
+    async def list_thread_events(self, thread_id: str) -> list[tuple[str, AgentEvent]]:
+        async with self._pool.connection() as conn, conn.cursor() as cur:
+            await cur.execute(_sql.SELECT_THREAD_EVENTS, (thread_id,))
+            rows = await cur.fetchall()
+        return [
+            (str(task_id), AgentEvent(type=event_type, payload=payload or {}))
+            for task_id, event_type, payload in rows
+        ]
+
+    @staticmethod
+    def _approval_from_payload(payload: dict) -> ApprovalRequest:
+        from common.enums import RiskLevel
+
+        risk = payload.get("risk_level")
+        return ApprovalRequest(
+            id=str(payload["request_id"]),
+            task_id=str(payload["task_id"]),
+            tool_name=str(payload["tool_name"]),
+            arguments=payload.get("arguments") or {},
+            risk_level=RiskLevel(risk) if risk else None,
+            description=payload.get("description"),
+        )
+
+    @classmethod
+    def _approval_record(cls, event_type: str, payload: dict) -> ApprovalRecord:
+        request = cls._approval_from_payload(payload)
+        if event_type == "approval_resolved":
+            return ApprovalRecord(
+                request=request,
+                approved=bool(payload.get("approved")),
+                note=payload.get("note"),
+            )
+        return ApprovalRecord(request=request)
+
+    async def _insert_approval_event(
+        self, request_id: str, task_id: str, event_type: str, payload: dict
+    ) -> None:
+        run_id = await self.get_latest_run_id(task_id)
+        if run_id is None:
+            return
+        async with self._pool.connection() as conn, conn.cursor() as cur:
+            await cur.execute(
+                _sql.INSERT_APPROVAL_EVENT,
+                (
+                    run_id,
+                    run_id,
+                    run_id,
+                    event_type,
+                    Jsonb(payload),
+                ),
+            )
+
+    async def save_approval_request(self, request: ApprovalRequest) -> None:
+        await self._insert_approval_event(
+            request.id,
+            request.task_id,
+            "approval_requested",
+            {
+                "request_id": request.id,
+                "task_id": request.task_id,
+                "tool_name": request.tool_name,
+                "arguments": request.arguments,
+                "risk_level": request.risk_level.value if request.risk_level else None,
+                "description": request.description,
+            },
+        )
+
+    async def resolve_approval(
+        self,
+        request_or_payload: str | dict,
+        approved: bool | None = None,
+        note: str | None = None,
+    ) -> None:
+        if isinstance(request_or_payload, dict):
+            await self._resolve_approval_record(request_or_payload)
+            return
+        request_id = request_or_payload
+        current = await self.get_approval_state(request_id)
+        if current is None:
+            return
+        payload = {
+            "request_id": request_id,
+            "task_id": current.request.task_id,
+            "tool_name": current.request.tool_name,
+            "arguments": current.request.arguments,
+            "risk_level": (
+                current.request.risk_level.value
+                if current.request.risk_level
+                else None
+            ),
+            "description": current.request.description,
+            "approved": approved,
+            "note": note,
+        }
+        await self._insert_approval_event(
+            request_id, current.request.task_id, "approval_resolved", payload
+        )
+
+    async def _approval_states(self) -> dict[str, ApprovalRecord]:
+        async with self._pool.connection() as conn, conn.cursor() as cur:
+            await cur.execute(_sql.SELECT_APPROVAL_STATES)
+            rows = await cur.fetchall()
+        return {
+            str(payload["request_id"]): self._approval_record(event_type, payload)
+            for event_type, payload in rows
+        }
+
+    async def get_approval_state(self, request_id: str) -> ApprovalRecord | None:
+        return (await self._approval_states()).get(request_id)
+
+    async def list_pending_approvals(self) -> list[ApprovalRequest]:
+        return [
+            record.request
+            for record in (await self._approval_states()).values()
+            if record.approved is None
+        ]

@@ -12,9 +12,9 @@ from typing import Any
 
 from common.agent import AgentTask
 from common.enums import AgentTrack, RiskLevel
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
-from .repository.base import ThreadRecord
+from .repository.base import RunSummary, ThreadRecord
 
 
 class CreateTaskRequest(BaseModel):
@@ -22,12 +22,35 @@ class CreateTaskRequest(BaseModel):
 
     goal: str = Field(min_length=1, description="what the agent should accomplish")
     track: AgentTrack | None = Field(
-        default=None, description="which orchestrator to use; server default if omitted"
+        default=None,
+        description=(
+            "which orchestrator to use; server default if omitted. "
+            "The native track invokes the same AgentService used by /native."
+        ),
     )
-    thread_id: str | None = Field(
-        default=None, description="conversation id to attach this task to; generated if omitted"
+    workspace: str | None = Field(
+        default=None,
+        description="existing directory the agent may access; server default if omitted",
     )
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    # Keep accepting the pre-thread-route body during client rollout. The field
+    # is deliberately undocumented and is only read by the compatibility shim.
+    model_config = ConfigDict(extra="allow")
+
+
+
+class ResumeTaskRequest(BaseModel):
+    """Body of ``POST /tasks/{task_id}/resume``."""
+
+    resume_value: Any | None = Field(
+        default=None,
+        description="Value supplied to a pending LangGraph interrupt, if any",
+    )
+    checkpoint_id: str | None = Field(
+        default=None,
+        description="Optional checkpoint id; latest checkpoint is used by default",
+    )
 
 
 class TaskResponse(BaseModel):
@@ -36,19 +59,50 @@ class TaskResponse(BaseModel):
     id: str
     goal: str
     thread_id: str
+    workspace: str | None = None
     track: AgentTrack
     status: str | None = Field(default=None, description="latest run status, if a run exists")
+    output: str | None = Field(default=None, description="latest run final answer")
+    final_message: str | None = Field(
+        default=None,
+        description="latest run final assistant message",
+    )
+    error: str | None = Field(default=None, description="latest run error, if any")
+    run_id: str | None = Field(default=None, description="latest run id")
+    trace_id: str | None = Field(default=None, description="latest Langfuse trace id")
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
 
     @classmethod
-    def from_task(cls, task: AgentTask, *, status: str | None) -> TaskResponse:
+    def from_task(
+        cls,
+        task: AgentTask,
+        *,
+        status: str | None,
+        run: RunSummary | None = None,
+    ) -> TaskResponse:
+        metadata = run.metadata if run is not None else {}
         return cls(
             id=task.id,
             goal=task.goal,
             thread_id=task.thread_id,
+            workspace=str(
+                task.metadata.get("workspace")
+                or task.metadata.get("working_directory")
+                or ""
+            )
+            or None,
             track=task.track,
             status=status,
+            output=run.output if run is not None else None,
+            final_message=run.output if run is not None else None,
+            error=run.error if run is not None else None,
+            run_id=run.run_id if run is not None else None,
+            trace_id=(
+                str(metadata.get("trace_id") or metadata.get("langfuse_trace_id"))
+                if metadata.get("trace_id") or metadata.get("langfuse_trace_id")
+                else None
+            ),
             metadata=task.metadata,
             created_at=task.created_at,
         )
@@ -97,6 +151,12 @@ class ApprovalResponse(BaseModel):
             arguments=request.arguments,
             risk_level=request.risk_level,
         )
+
+
+class ThreadEventResponse(BaseModel):
+    task_id: str
+    type: str
+    payload: dict[str, Any]
 
 
 class HealthResponse(BaseModel):

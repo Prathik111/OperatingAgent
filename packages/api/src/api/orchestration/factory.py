@@ -1,6 +1,6 @@
-"""Build the per-track orchestrator map, degrading rather than crashing.
+"""Build the per-track ``IAgentOrchestrator`` map, degrading rather than crashing.
 
-The native track is always the local stub. The LangGraph track is the real
+The native track delegates to the real ``agent_native`` service. The LangGraph track is the real
 ``LangGraphAgent`` — but its constructor eagerly builds a ``ModelProvider``,
 which raises for an unsupported/misconfigured provider (and its model
 integration may be absent). So construction is **guarded**: on any failure we
@@ -22,7 +22,7 @@ from common.enums import AgentTrack, RunStatus
 from common.events import AgentEvent
 from common.interfaces import IAgentOrchestrator
 
-from .native_stub import EventCallback, NativeStubOrchestrator, emit_event
+from .native import EventCallback, NativeAgentOrchestrator, _emit
 
 if TYPE_CHECKING:
     from ..config import ApiSettings
@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-class UnavailableOrchestrator:
+class UnavailableOrchestrator(IAgentOrchestrator):
     """Stands in for a track that could not be constructed; every run fails cleanly."""
 
     def __init__(self, track: str, reason: str) -> None:
@@ -41,8 +41,8 @@ class UnavailableOrchestrator:
         self, task: AgentTask, on_event: EventCallback = None
     ) -> AgentRunResult:
         message = f"orchestrator for track '{self._track}' is unavailable: {self._reason}"
-        await emit_event(on_event, AgentEvent(type="error", payload={"error": message}))
-        await emit_event(
+        await _emit(on_event, AgentEvent(type="error", payload={"error": message}))
+        await _emit(
             on_event,
             AgentEvent(
                 type="finished",
@@ -67,9 +67,16 @@ def build_orchestrators(
     settings: ApiSettings,
     *,
     approval_handler: ApprovalHandler | None = None,
+    native_service: object | None = None,
 ) -> dict[AgentTrack, IAgentOrchestrator]:
     orchestrators: dict[AgentTrack, IAgentOrchestrator] = {
-        AgentTrack.NATIVE: NativeStubOrchestrator(),
+        AgentTrack.NATIVE: (
+            NativeAgentOrchestrator(native_service)
+            if native_service is not None
+            else UnavailableOrchestrator(
+                AgentTrack.NATIVE.value, "native service is not initialized"
+            )
+        ),
     }
 
     # Configuration is application state, not an optional integration. Validate

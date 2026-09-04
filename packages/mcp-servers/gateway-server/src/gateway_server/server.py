@@ -82,7 +82,9 @@ def build_gateway(root: str | None = None) -> FastMCP:
     mounts = dict(MOUNTS)
     if root is not None:
         mounts["filesystem"] = build_file_server(root=root)
-    gateway._operating_agent_mounts = mounts
+    # Private diagnostics handle; FastMCP does not declare arbitrary instance
+    # attributes in its type.
+    gateway._operating_agent_mounts = mounts  # pyright: ignore[reportAttributeAccessIssue]
 
     for namespace, sub_server in mounts.items():
         gateway.mount(sub_server, namespace=namespace)

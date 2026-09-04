@@ -94,6 +94,20 @@ def get_client() -> Langfuse | None:
     return _client
 
 
+def get_trace_url(trace_id: str | None) -> str | None:
+    """Return the Cloud/self-hosted URL for a trace, when tracing is enabled."""
+    if not trace_id:
+        return None
+    client = get_client()
+    if client is None:
+        return None
+    try:
+        return client.get_trace_url(trace_id=trace_id)
+    except Exception as exc:
+        log.debug("Langfuse trace URL lookup failed: %s", exc)
+        return None
+
+
 def get_callback_handler() -> Any | None:
     """Return a LangChain/LangGraph ``CallbackHandler``, or None if disabled.
 

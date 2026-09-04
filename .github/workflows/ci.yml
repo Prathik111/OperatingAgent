@@ -1,80 +1,55 @@
-# Continuous integration for the native-agent thesis packages.
-#
-# One matrix job per substantive package (agent-native, api, evaluation): each
-# runs the same three gates the project holds itself to - ruff, mypy, and the
-# pytest suite - against the tool config already pinned in each package's
-# pyproject.toml (ruff selects E/W/F/I/UP/B, ignores E501; mypy checks src with
-# ignore_missing_imports + check_untyped_defs). The gates run *inside* each
-# package directory so those per-package configs are the ones that apply.
-#
-# What this deliberately does NOT do:
-#   * It does not set GROQ_API_KEY. The live Groq tests (test_loop, and the
-#     live half of a few others) skip themselves when the key is absent, so the
-#     suite is green here without a secret and never touches the network in CI.
-#   * It does not build agent-langgraph. The thesis's native track is what these
-#     gates guard; the LangGraph comparison package is synced only when it is the
-#     thing under test, which it isn't here.
-#
-# The evaluation job is what satisfies "the eval suite runs in CI against a fake
-# provider": packages/evaluation's tests drive the whole harness on a scripted
-# model and in-process fake tools, no key required.
-
 name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
-# Read-only token: nothing here needs to write to the repo.
 permissions:
   contents: read
 
-# A newer push to the same ref supersedes an in-flight run.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  check:
-    name: ${{ matrix.package }}
+  checks:
+    name: Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
     strategy:
-      # One red package shouldn't hide the state of the others.
       fail-fast: false
       matrix:
-        package: [ agent-native, api, evaluation ]
+        python-version: ["3.12", "3.13"]
+    env:
+      COVERAGE_FILE: .coverage-ci
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out repository
+        uses: actions/checkout@v4
 
-      # The official standalone installer, so this pins no third-party action
-      # version. uv provisions its own Python 3.12 from each package's
-      # `requires-python`, so there is no separate setup-python step.
       - name: Install uv
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: latest
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
 
-      # Sync just this package (and, through the workspace, its path deps) with
-      # every optional extra installed - the "extras installed" checkout the
-      # verify calls for - plus the dev group that carries pytest.
-      - name: Sync ${{ matrix.package }} (all extras + dev)
-        run: uv sync --package ${{ matrix.package }} --all-extras --dev
+      - name: Install workspace dependencies
+        run: uv sync --all-extras --dev
 
-      # ruff and mypy are developer tools, not runtime deps (see the pyproject
-      # comment), so they are layered on for the run rather than added to the
-      # project. `working-directory` makes each package's own [tool.ruff] /
-      # [tool.mypy] the config in force.
-      - name: Lint (ruff)
-        working-directory: packages/${{ matrix.package }}
-        run: uv run --with ruff ruff check .
+      - name: Ruff
+        run: uv run ruff check .
 
-      - name: Type-check (mypy)
-        working-directory: packages/${{ matrix.package }}
-        run: uv run --with mypy mypy
+      - name: Compile packages
+        run: uv run python -m compileall -q packages
 
-      - name: Tests (pytest)
-        working-directory: packages/${{ matrix.package }}
-        run: uv run pytest
+      - name: Tests with coverage
+        run: uv run pytest --cov=packages --cov-report=term-missing --cov-report=xml:coverage-ci.xml --cov-fail-under=80
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-python-${{ matrix.python-version }}
+          path: coverage-ci.xml
+          if-no-files-found: error

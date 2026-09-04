@@ -49,12 +49,13 @@ RETURNING id
 # attempt is derived so a retried task (a second run) gets attempt 2 and does
 # not collide with UNIQUE (task_id, attempt).
 INSERT_RUN = """
-INSERT INTO agent_runs (task_id, attempt, config_snapshot_id, status)
+INSERT INTO agent_runs (task_id, attempt, config_snapshot_id, status, metadata)
 VALUES (
     %s,
     (SELECT COALESCE(MAX(attempt), 0) + 1 FROM agent_runs WHERE task_id = %s),
     %s,
-    %s::run_status
+    %s::run_status,
+    %s
 )
 RETURNING id
 """
@@ -73,7 +74,11 @@ ON CONFLICT (run_id, sequence_number) DO NOTHING
 
 FINALIZE_RUN = """
 UPDATE agent_runs
-SET status = %s::run_status, output = %s, last_error = %s, finished_at = now()
+SET status = %s::run_status,
+    output = %s,
+    last_error = %s,
+    metadata = metadata || %s,
+    finished_at = now()
 WHERE id = %s
 """
 
@@ -236,4 +241,80 @@ UPDATE approval_requests SET
     status = %s, resolved_by_actor_id = %s, decision_note = %s,
     resolved_at = COALESCE(%s, now()), tool_call_id = COALESCE(%s, tool_call_id)
 WHERE id = %s
+"""
+
+SELECT_LATEST_RUN_ID = """
+SELECT id FROM agent_runs
+WHERE task_id = %s
+ORDER BY attempt DESC
+LIMIT 1
+"""
+
+SELECT_LATEST_RUN_METADATA = """
+SELECT metadata FROM agent_runs
+WHERE task_id = %s
+ORDER BY attempt DESC
+LIMIT 1
+"""
+
+SELECT_TASK_EVENTS = """
+SELECT event.event_type, event.payload
+FROM agent_events AS event
+JOIN agent_runs AS run ON run.id = event.run_id
+WHERE run.task_id = %s
+  AND (%s = false OR run.id = (
+      SELECT latest.id FROM agent_runs AS latest
+      WHERE latest.task_id = %s
+      ORDER BY latest.attempt DESC
+      LIMIT 1
+  ))
+ORDER BY run.attempt ASC, event.sequence_number ASC, event.id ASC
+"""
+
+SELECT_THREAD_EVENTS = """
+SELECT task.id, event.event_type, event.payload
+FROM agent_tasks AS task
+JOIN agent_runs AS run ON run.task_id = task.id
+JOIN agent_events AS event ON event.run_id = run.id
+WHERE task.thread_id = %s
+ORDER BY task.created_at ASC, run.attempt ASC,
+         event.sequence_number ASC, event.id ASC
+"""
+
+SELECT_APPROVAL_STATES = """
+WITH ranked AS (
+    SELECT event.event_type, event.payload,
+           ROW_NUMBER() OVER (
+               PARTITION BY event.payload->>'request_id'
+               ORDER BY event.created_at DESC, event.id DESC
+           ) AS rank
+    FROM agent_events AS event
+    WHERE event.event_type IN ('approval_requested', 'approval_resolved')
+)
+SELECT event_type, payload
+FROM ranked
+WHERE rank = 1
+"""
+
+INSERT_APPROVAL_EVENT = """
+WITH lock AS (
+    SELECT pg_advisory_xact_lock(hashtext(%s::text))
+), next_sequence AS (
+    SELECT COALESCE(
+        (SELECT MAX(sequence_number) FROM agent_events WHERE run_id = %s),
+        -1
+    ) + 1 AS sequence_number
+    FROM lock
+)
+INSERT INTO agent_events (run_id, sequence_number, event_type, payload)
+SELECT %s, next_sequence.sequence_number, %s, %s
+FROM next_sequence
+"""
+
+SELECT_LATEST_RUN = """
+SELECT id, status, output, last_error, metadata
+FROM agent_runs
+WHERE task_id = %s
+ORDER BY attempt DESC
+LIMIT 1
 """

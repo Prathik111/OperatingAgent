@@ -18,6 +18,15 @@ class AgentTask:
 
     created_at: datetime = field(default_factory=datetime.utcnow)
 
+    # Runtime-only execution controls.  They are deliberately not part of the
+    # database task row: a task can have multiple attempts with different
+    # modes while the task itself remains the user's durable turn.
+    execution_mode: str = "new"  # new | continue | resume
+    resume_value: Any = None
+    resume_checkpoint_id: str | None = None
+    resume_checkpoint_namespace: str | None = None
+    completed_tool_calls: dict[str, str] = field(default_factory=dict)
+
 
 @dataclass(slots=True)
 class AgentRunResult:

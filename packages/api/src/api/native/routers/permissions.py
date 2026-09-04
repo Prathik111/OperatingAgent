@@ -64,7 +64,7 @@ async def resolve_permission(
         from agent_native.permissions import PermissionDuration
 
         dur = PermissionDuration(dur_str)
-    except Exception:
+    except ValueError:
         from agent_native.permissions import PermissionDuration
 
         dur = PermissionDuration.ONCE

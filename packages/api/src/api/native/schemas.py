@@ -9,7 +9,8 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field
+from observability import get_trace_url
+from pydantic import AliasChoices, BaseModel, Field
 
 
 # ---------------------------------------------------------------------------
@@ -18,15 +19,18 @@ from pydantic import BaseModel, Field
 class CreateSessionRequest(BaseModel):
     agent: str = Field(default="build", description="AgentConfig name")
     title: str = Field(default="", description="Human title")
-    working_directory: str = Field(default=".", description="Folder file tools are confined to")
+    workspace: str | None = Field(
+        default=None,
+        description="Existing folder file tools are confined to; server default if omitted",
+        validation_alias=AliasChoices("workspace", "working_directory"),
+    )
 
 
 class SessionResponse(BaseModel):
     id: str
     agent: str
     title: str
-    working_directory: str
-    revision: int = 0
+    workspace: str
 
     @classmethod
     def from_native(cls, s: Any) -> SessionResponse:
@@ -34,8 +38,7 @@ class SessionResponse(BaseModel):
             id=getattr(s, "id", ""),
             agent=getattr(s, "agent", "build"),
             title=getattr(s, "title", ""),
-            working_directory=getattr(s, "working_directory", "."),
-            revision=int(getattr(s, "revision", 0) or 0),
+            workspace=getattr(s, "working_directory", ".") or ".",
         )
 
 
@@ -47,7 +50,12 @@ class RunResponse(BaseModel):
     session_id: str = ""
     status: str
     turns: int = 0
-    final_text: str = ""
+    final_text: str = Field(
+        default="",
+        deprecated=True,
+        description="Compatibility alias for final_message; use final_message",
+    )
+    final_message: str = ""
     error: str = ""
     duration_seconds: float = 0.0
     cost_usd: float = 0.0
@@ -59,16 +67,20 @@ class RunResponse(BaseModel):
     output_tokens: int = 0
     cached_tokens: int = 0
     reasoning_tokens: int = 0
+    trace_id: str = ""
+    trace_url: str = ""
 
     @classmethod
     def from_native(cls, r: Any) -> RunResponse:
         usage = getattr(r, "usage", None)
+        trace_id = getattr(r, "trace_id", "") or ""
         return cls(
             run_id=getattr(r, "run_id", ""),
             session_id=getattr(r, "session_id", "") or "",
             status=getattr(getattr(r, "status", ""), "value", str(getattr(r, "status", ""))),
             turns=int(getattr(r, "turns", 0) or 0),
             final_text=getattr(r, "final_text", "") or "",
+            final_message=getattr(r, "final_text", "") or "",
             error=getattr(r, "error", "") or "",
             duration_seconds=float(getattr(r, "duration_seconds", 0.0) or 0.0),
             cost_usd=float(getattr(r, "cost_usd", 0.0) or 0.0),
@@ -76,21 +88,35 @@ class RunResponse(BaseModel):
             retries=int(getattr(r, "retries", 0) or 0),
             fallbacks=int(getattr(r, "fallbacks", 0) or 0),
             stop_reason=getattr(r, "stop_reason", "") or "",
-            input_tokens=int(getattr(usage, "input_tokens", 0) or 0) if usage else 0,
-            output_tokens=int(getattr(usage, "output_tokens", 0) or 0) if usage else 0,
-            cached_tokens=int(getattr(usage, "cached_tokens", 0) or 0) if usage else 0,
-            reasoning_tokens=int(getattr(usage, "reasoning_tokens", 0) or 0) if usage else 0,
+            # ``RunResult`` exposes a nested Usage object; persisted native
+            # ``RunRecord`` rows store the same values as top-level columns.
+            input_tokens=int(
+                getattr(usage, "input_tokens", getattr(r, "input_tokens", 0)) or 0
+            ),
+            output_tokens=int(
+                getattr(usage, "output_tokens", getattr(r, "output_tokens", 0)) or 0
+            ),
+            cached_tokens=int(
+                getattr(usage, "cached_tokens", getattr(r, "cached_tokens", 0)) or 0
+            ),
+            reasoning_tokens=int(
+                getattr(usage, "reasoning_tokens", getattr(r, "reasoning_tokens", 0)) or 0
+            ),
+            trace_id=trace_id,
+            trace_url=get_trace_url(trace_id) or "",
         )
 
     @classmethod
     def from_record(cls, rec: Any) -> RunResponse:
         # Postgres RunRecord shape
+        trace_id = getattr(rec, "trace_id", "") or ""
         return cls(
             run_id=getattr(rec, "run_id", ""),
             session_id=getattr(rec, "session_id", ""),
             status=str(getattr(rec, "status", "")),
             turns=int(getattr(rec, "turns", 0) or 0),
-            final_text="",
+            final_text=getattr(rec, "final_text", "") or "",
+            final_message=getattr(rec, "final_text", "") or "",
             error=getattr(rec, "error", "") or "",
             duration_seconds=float(getattr(rec, "duration_seconds", 0.0) or 0.0),
             cost_usd=float(getattr(rec, "cost_usd", 0.0) or 0.0),
@@ -102,6 +128,8 @@ class RunResponse(BaseModel):
             output_tokens=int(getattr(rec, "output_tokens", 0) or 0),
             cached_tokens=int(getattr(rec, "cached_tokens", 0) or 0),
             reasoning_tokens=int(getattr(rec, "reasoning_tokens", 0) or 0),
+            trace_id=trace_id,
+            trace_url=get_trace_url(trace_id) or "",
         )
 
 
@@ -114,14 +142,16 @@ class SessionWithRunsResponse(SessionResponse):
 # Messages
 # ---------------------------------------------------------------------------
 class SendMessageRequest(BaseModel):
-    message: str | None = Field(default=None, description="User text (alias: text)")
-    text: str | None = Field(default=None, description="Alias for message")
+    message: str | None = Field(
+        default=None,
+        description="User text (legacy clients may send text)",
+        validation_alias=AliasChoices("message", "text"),
+    )
     media: list[dict[str, Any]] | None = Field(default=None, description="Optional Media parts [{data_base64,mime_type,detail}]")
     limits: LimitsRequest | None = None
 
     def resolved_text(self) -> str:
-        t = (self.message or self.text or "").strip()
-        return t
+        return (self.message or "").strip()
 
 
 class LimitsRequest(BaseModel):
@@ -206,3 +236,4 @@ class NativeHealthResponse(BaseModel):
     database: str
     agents: list[str] = Field(default_factory=list)
     models: list[str] = Field(default_factory=list)
+    langfuse_enabled: bool = False

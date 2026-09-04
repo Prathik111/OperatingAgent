@@ -65,12 +65,14 @@ def build_file_server(root: str | Path | None = None) -> FastMCP:
 
     # Kept for diagnostics and focused tests without exposing service internals
     # through the public tool surface.
-    server._operating_agent_filesystem_service = service
+    # This diagnostic handle is intentionally private and is not part of the
+    # FastMCP public API.
+    server._operating_agent_filesystem_service = service  # pyright: ignore[reportAttributeAccessIssue]
     return server
 
 
 mcp = build_file_server()
-filesystem_service = mcp._operating_agent_filesystem_service
+filesystem_service = mcp._operating_agent_filesystem_service  # pyright: ignore[reportAttributeAccessIssue]
 
 
 if __name__ == "__main__":

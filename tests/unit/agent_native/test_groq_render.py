@@ -77,14 +77,41 @@ class _Completions:
         return _Stream(self._chunks)
 
 
+class _StrictCompletions:
+    """Models the current Groq SDK, which rejects ``stream_options``."""
+
+    def __init__(self, chunks):
+        self._chunks = chunks
+        self.kwargs = None
+
+    async def create(self, *, model, messages, temperature, stream):
+        self.kwargs = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "stream": stream,
+        }
+        return _Stream(self._chunks)
+
+
 class _Chat:
     def __init__(self, chunks):
         self.completions = _Completions(chunks)
 
 
+class _StrictChat:
+    def __init__(self, chunks):
+        self.completions = _StrictCompletions(chunks)
+
+
 class _Client:
     def __init__(self, chunks):
         self.chat = _Chat(chunks)
+
+
+class _StrictClient:
+    def __init__(self, chunks):
+        self.chat = _StrictChat(chunks)
 
 
 async def test_groq_stream_converts_chunks():
@@ -131,3 +158,21 @@ async def test_groq_fragments_reassemble_into_a_tool_call():
     assert calls[0].id == "id1"
     assert calls[0].name == "read_file"
     assert calls[0].arguments == {"path": "a.txt"}
+
+
+async def test_groq_stream_works_with_sdk_without_stream_options():
+    """The installed Groq SDK must not receive an unsupported keyword."""
+    completions = _StrictCompletions([_Chunk(choices=[_Choice(_Delta(content="ok"))])])
+    groq = Groq(api_key="test")
+    groq._client = _StrictClient([])
+    groq._client.chat.completions = completions
+
+    events = [
+        event
+        async for event in groq.stream(
+            [{"role": "user", "content": "hi"}], [], GROQ_MODELS["llama-3.3-70b"]
+        )
+    ]
+
+    assert any(event.type == StreamType.TEXT for event in events)
+    assert "stream_options" not in (completions.kwargs or {})

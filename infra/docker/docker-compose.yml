@@ -1,14 +1,17 @@
+name: operating-agent
+
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: agent-native-postgres
     environment:
-      POSTGRES_USER: agent_native
+      POSTGRES_USER: ${POSTGRES_USER:-operating_agent}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required - set it in .env}
-      POSTGRES_DB: agent_native
+      POSTGRES_DB: ${POSTGRES_DB:-operating_agent}
+      # Keep the data-directory layout used by the existing development volume.
+      PGDATA: /var/lib/postgresql/data/pgdata
     ports:
-      # Bind to localhost by default; set POSTGRES_HOST=0.0.0.0 to expose more broadly.
-      - "${POSTGRES_HOST:-127.0.0.1}:${POSTGRES_PORT:-5433}:5432"
+      # Bind to localhost by default; set POSTGRES_HOST to expose more broadly.
+      - "${POSTGRES_HOST:-127.0.0.1}:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./postgres/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
@@ -16,11 +19,10 @@ services:
       - ./postgres/migrations/003_import_legacy_agent_native.sql:/docker-entrypoint-initdb.d/03-import-legacy.sql:ro
       - ./postgres/migrations/004_schema_hardening.sql:/docker-entrypoint-initdb.d/04-schema-hardening.sql:ro
       - ./postgres/migrations/005_native_message_id.sql:/docker-entrypoint-initdb.d/05-native-message-id.sql:ro
-      # Upgrade path for existing volumes (init scripts only run on fresh DB):
-      # psql "$DATABASE_URL" -f ./postgres/migrations/005_native_message_id.sql
-      # Or: docker compose exec postgres psql -U agent_native -d agent_native -f /docker-entrypoint-initdb.d/05-native-message-id.sql
+      # Init scripts run only on a fresh volume. Apply numbered migrations
+      # explicitly to an existing volume before starting the API.
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U agent_native -d agent_native"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-operating_agent} -d ${POSTGRES_DB:-operating_agent}"]
       interval: 5s
       timeout: 3s
       retries: 10

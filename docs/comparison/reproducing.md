@@ -56,7 +56,7 @@ It prints the sixteen tasks and their categories (suite version `1.0`).
 export GROQ_API_KEY=sk-...          # or a .env file at the repo root with GROQ_API_KEY=...
 ```
 
-The native track's default Groq model is `llama-3.3-70b`; override with `--model`.
+The native track's default Groq model is `gpt-oss-20b`; override with `--model`.
 
 **Option B — Ollama (local, no key).** Start Ollama and pull the default local model, then pass
 `--provider ollama`:

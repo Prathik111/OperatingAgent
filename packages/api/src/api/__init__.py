@@ -16,6 +16,16 @@ from .app import create_app
 __all__ = ["create_app", "main"]
 
 
+def _selector_loop_factory() -> asyncio.AbstractEventLoop:
+    """Create the selector loop required by async database drivers on Windows.
+
+    Uvicorn passes a custom import-string hook directly to ``asyncio.Runner``
+    as its zero-argument loop factory, so this function must return an instance
+    rather than the loop class itself.
+    """
+    return asyncio.SelectorEventLoop()
+
+
 def _server_loop() -> str | Callable[[], asyncio.AbstractEventLoop]:
     """Return a Uvicorn loop compatible with psycopg's async pool.
 
@@ -45,5 +55,7 @@ def main() -> None:
         host=settings.host,
         port=settings.port,
         log_level=settings.log_level,
-        loop=_server_loop(),
+        # Uvicorn accepts an import string for a custom loop setup. Keep the
+        # callable-returning helper public for embedders and tests.
+        loop=("api:_selector_loop_factory" if sys.platform == "win32" else "auto"),
     )
