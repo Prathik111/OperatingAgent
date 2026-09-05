@@ -1,0 +1,585 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>OperatingAgent — Desktop Prototype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="./tokens.css" />
+<script>
+tailwind.config = {
+  darkMode: 'class',
+  theme: {
+    extend: {
+      fontFamily: {
+        sans: ['Inter','ui-sans-serif','system-ui'],
+        mono: ['JetBrains Mono','ui-monospace','monospace'],
+      }
+    }
+  }
+}
+</script>
+<style>
+  /* app shell — precise, Linear-grade */
+  body { font-family: var(--font-sans); background: var(--bg-0); color: var(--fg-0); }
+  /* thin dividers */
+  .hairline { border-color: var(--bg-4); }
+  .hairline-y { border-color: var(--bg-4); }
+  /* custom select */
+  select { background-image: none; }
+  /* turn connector */
+  .turn-line {
+    position: absolute; left: 15px; top: 28px; bottom: -12px; width: 1px;
+    background: var(--bg-4);
+  }
+  .turn:last-child .turn-line { display:none; }
+</style>
+</head>
+<body class="antialiased overflow-hidden h-[100vh] flex flex-col select-none">
+
+<!-- ── Tauri titlebar (drag region) ─────────────────────────────────── -->
+<div class="h-7 flex items-center justify-between px-3 shrink-0 border-b hairline" style="background: var(--bg-1); -webkit-app-region: drag;">
+  <div class="flex items-center gap-2">
+    <div class="flex gap-1.5">
+      <span class="w-3 h-3 rounded-full" style="background:#ff5f57; border:1px solid #e0443e"></span>
+      <span class="w-3 h-3 rounded-full" style="background:#ffbd2e; border:1px solid #dea123"></span>
+      <span class="w-3 h-3 rounded-full" style="background:#28c940; border:1px solid #1aab29"></span>
+    </div>
+    <span class="ml-3 text-[11px] font-medium tracking-wide" style="color:var(--fg-2)">OperatingAgent — design preview</span>
+    <span class="text-[10px] px-1.5 py-0.5 rounded font-medium" style="background:var(--bg-3); color:var(--fg-2); border:1px solid var(--bg-4)">TAURI SIDE CAR · 127.0.0.1: · SSE</span>
+  </div>
+  <div class="flex items-center gap-2 text-[11px]" style="color:var(--fg-2)">
+    <span class="hidden sm:inline">⌘K palette</span>
+    <span class="w-px h-3" style="background:var(--bg-4)"></span>
+    <button id="themeToggle" class="px-2 py-1 rounded hover:opacity-80" style="background:var(--bg-2); border:1px solid var(--bg-4)">◐ Theme</button>
+  </div>
+</div>
+
+<!-- ── App body ─────────────────────────────────────────────────────── -->
+<div class="flex flex-1 min-h-0">
+
+  <!-- ── Sidebar ──────────────────────────────────────────────────── -->
+  <aside class="w-[268px] shrink-0 flex flex-col border-r hairline-y hidden md:flex" style="background:var(--bg-1)">
+    <!-- search + new -->
+    <div class="p-3 space-y-3">
+      <button id="newSessionBtn" class="w-full flex items-center justify-center gap-2 h-8 rounded-lg text-[13px] font-medium hover:opacity-95 active:scale-[0.99] transition" style="background:var(--accent); color:white; box-shadow: var(--shadow-sm)">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+        New session
+        <span class="ml-1 text-[10px] opacity-70 font-mono">⌘N</span>
+      </button>
+      <div class="relative">
+        <svg class="absolute left-2.5 top-1/2 -translate-y-1/2 opacity-50" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+        <input id="sessionSearch" placeholder="Search sessions…" class="w-full h-8 pl-8 pr-3 rounded-lg text-[12px] outline-none" style="background:var(--bg-2); border:1px solid var(--bg-4); color:var(--fg-0)" />
+      </div>
+    </div>
+
+    <!-- session list -->
+    <div class="flex-1 overflow-auto px-2 pb-2 space-y-4">
+      <div>
+        <div class="label px-2 py-1.5 flex items-center justify-between">
+          <span>Active</span><span class="font-mono normal-case tracking-normal text-[10px] px-1.5 py-0.5 rounded" style="background:var(--accent-soft); color:var(--accent); border:1px solid var(--accent-ring)">1 running</span>
+        </div>
+        <div id="sessionListActive" class="space-y-1"></div>
+      </div>
+      <div>
+        <div class="label px-2 py-1.5">Recent</div>
+        <div id="sessionListRecent" class="space-y-1"></div>
+      </div>
+      <div>
+        <div class="label px-2 py-1.5">Runs</div>
+        <div class="px-2 py-2 rounded-lg text-[11px] leading-relaxed" style="background:var(--bg-2); border:1px solid var(--bg-4); color:var(--fg-2)">
+          <div class="flex items-center justify-between"><span>Today</span><span style="color:var(--fg-0)">3 runs · $0.042 · 18.4k tok</span></div>
+          <div class="mt-1.5 h-1 rounded-full overflow-hidden flex" style="background:var(--bg-4)">
+            <span style="width:62%; background:var(--success)"></span><span style="width:28%; background:var(--warning)"></span><span style="width:10%; background:var(--bg-4)"></span>
+          </div>
+          <div class="mt-1 flex gap-2 font-mono text-[10px]"><span>✓ 2 finished</span><span>◷ 1 limit</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- bottom -->
+    <div class="p-3 border-t hairline space-y-2">
+      <div class="flex items-center gap-2 text-[11px] px-2 py-1.5 rounded-lg" style="background:var(--bg-2); border:1px solid var(--bg-4)">
+        <span class="w-2 h-2 rounded-full animate-pulse" style="background:var(--success); box-shadow: 0 0 6px var(--success)"></span>
+        <span style="color:var(--fg-1)">sandbox: on</span>
+        <span class="ml-auto font-mono text-[10px]" style="color:var(--fg-2)">python:3.12-slim · no net</span>
+      </div>
+      <div class="flex gap-2">
+        <button class="flex-1 h-7 rounded-lg text-[11px] font-medium flex items-center justify-center gap-1.5" style="background:var(--bg-2); border:1px solid var(--bg-4); color:var(--fg-1)">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z"/><path d="M12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z"/><path d="M12 14v4"/></svg> Settings
+        </button>
+        <button class="flex-1 h-7 rounded-lg text-[11px] font-medium" style="background:var(--bg-2); border:1px solid var(--bg-4); color:var(--fg-1)">Docs</button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ── Main ─────────────────────────────────────────────────────── -->
+  <main class="flex-1 flex flex-col min-w-0" style="background:var(--bg-0)">
+    <!-- session header -->
+    <div class="h-12 shrink-0 flex items-center gap-3 px-4 border-b hairline" style="background:var(--bg-0)">
+      <div class="flex items-center gap-3 min-w-0 flex-1">
+        <div class="w-8 h-8 rounded-lg flex items-center justify-center text-[13px] font-semibold shrink-0" style="background:var(--accent-soft); color:var(--accent); border:1px solid var(--accent-ring)">◈</div>
+        <div class="min-w-0">
+          <div class="flex items-center gap-2">
+            <h1 id="sessionTitle" class="text-[13px] font-semibold truncate">Refactor auth middleware → add session forking</h1>
+            <span class="hidden sm:inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full font-medium" style="background:var(--info-soft); color:var(--info); border:1px solid var(--info-ring)">● streaming</span>
+          </div>
+          <div class="flex items-center gap-2 text-[11px] font-mono" style="color:var(--fg-2)">
+            <span id="sessionDir" class="truncate">./workspace · build · llama-3.3-70b</span>
+            <span class="hidden sm:inline w-px h-3" style="background:var(--bg-4)"></span>
+            <span class="hidden sm:inline">turn <b id="turnCount" style="color:var(--fg-0)">3</b>/10</span>
+          </div>
+        </div>
+      </div>
+      <div class="hidden lg:flex items-center gap-1.5 shrink-0">
+        <button class="h-7 px-2.5 rounded-lg text-[11px] font-medium flex items-center gap-1.5" style="background:var(--bg-2); border:1px solid var(--bg-4); color:var(--fg-1)">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 11v6"/><path d="M19 14h6"/></svg> Fork
+        </button>
+        <button class="h-7 px-2.5 rounded-lg text-[11px] font-medium" style="background:var(--bg-2); border:1px solid var(--bg-4); color:var(--fg-1)">Checkpoints</button>
+        <button class="h-7 px-2.5 rounded-lg text-[11px] font-medium flex items-center gap-1.5" style="background:var(--bg-2); border:1px solid var(--bg-4); color:var(--fg-1)">⋯</button>
+      </div>
+      <button id="mobileMenu" class="md:hidden h-8 w-8 grid place-items-center rounded-lg" style="background:var(--bg-2); border:1px solid var(--bg-4)">☰</button>
+    </div>
+
+    <!-- transcript -->
+    <div id="transcript" class="flex-1 overflow-auto">
+      <div class="mx-auto w-full max-w-[760px] px-4 sm:px-6 py-6 space-y-6">
+
+        <!-- Turn 1 -->
+        <section class="turn relative">
+          <div class="turn-line"></div>
+          <!-- user -->
+          <div class="flex gap-3">
+            <div class="w-7 h-7 rounded-full grid place-items-center text-[11px] font-semibold shrink-0 mt-0.5" style="background:var(--bg-2); border:1px solid var(--bg-4); color:var(--fg-1)">you</div>
+            <div class="flex-1 min-w-0">
+              <div class="text-[13px] leading-relaxed" style="color:var(--fg-0)">Refactor the auth middleware to use the new session store. Keep the existing tests green — add a `session.fork` path and make sure permissions still gate correctly. Work in <span class="font-mono text-[12px] px-1 py-0.5 rounded" style="background:var(--bg-2); border:1px solid var(--bg-4)">./workspace</span>.</div>
+              <div class="mt-1 text-[11px] font-mono" style="color:var(--fg-3)">09:41 · session sess_8f3a · working_directory ./workspace</div>
+            </div>
+          </div>
+          <!-- assistant text -->
+          <div class="flex gap-3 mt-4">
+            <div class="w-7 h-7 rounded-lg grid place-items-center text-[11px] font-semibold shrink-0" style="background:var(--accent); color:white">◈</div>
+            <div class="flex-1 min-w-0">
+              <div class="text-[13px] leading-relaxed" style="color:var(--fg-1)">Got it — I'll inspect the current middleware, plan the store swap, and keep the permission gate intact. Starting with a read of the session and permission modules.</div>
+              <div class="mt-3 flex flex-wrap gap-1.5">
+                <span class="inline-flex items-center gap-1.5 text-[11px] px-2 py-1 rounded-full font-medium" style="background:var(--bg-2); border:1px solid var(--bg-4); color:var(--fg-2)"><span class="w-1.5 h-1.5 rounded-full" style="background:var(--info)"></span> 2 tool calls · parallel</span>
+                <span class="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-full font-mono" style="background:var(--bg-2); border:1px solid var(--bg-4); color:var(--fg-2)">evt 12–15 · turn 1</span>
+              </div>
+              <!-- tool group -->
+              <div class="mt-3 grid gap-2">
+                <!-- tool card: read -->
+                <div class="group rounded-xl overflow-hidden" style="background:var(--bg-2); border:1px solid var(--bg-4)">
+                  <button class="tool-toggle w-full flex items-center gap-2.5 px-3 py-2.5 text-left hover:opacity-95">
+                    <span class="w-7 h-7 rounded-lg grid place-items-center shrink-0" style="background:var(--success-soft); border:1px solid var(--success-ring); color:var(--success)">✓</span>
+                    <div class="min-w-0 flex-1">
+                      <div class="text-[12px] font-medium flex items-center gap-2"><span class="font-mono">filesystem_read_file</span><span class="text-[10px] px-1.5 py-0.5 rounded font-medium" style="background:var(--success-soft); color:var(--success); border:1px solid var(--success-ring)">completed · 18ms</span></div>
+                      <div class="text-[11px] font-mono truncate" style="color:var(--fg-2)">path: "src/middleware/auth.ts" · 312 lines</div>
+                    </div>
+                    <span class="text-[11px] font-mono shrink-0" style="color:var(--fg-3)">342 tok</span>
+                    <svg class="w-3.5 h-3.5 shrink-0 transition" style="color:var(--fg-3)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+                  </button>
+                  <div class="tool-body px-3 pb-3">
+                    <pre class="mt-2 p-3 rounded-lg text-[11px] leading-relaxed overflow-auto max-h-48" style="background:var(--code-bg); border:1px solid var(--code-border); color:var(--fg-1)"><code>// src/middleware/auth.ts — 312 lines
+export function authMiddleware(req, res, next) {
+  const token = req.headers.authorization?.split(" ")[1];
+  if (!token) return res.status(401).end();
+  // TODO: swap to session store
+  next();
+}</code></pre>
+                    <div class="mt-2 flex gap-1.5 text-[10px] font-mono"><span class="px-1.5 py-0.5 rounded" style="background:var(--bg-3); border:1px solid var(--bg-4); color:var(--fg-2)">truncated: no</span><span class="px-1.5 py-0.5 rounded" style="background:var(--bg-3); border:1px solid var(--bg-4); color:var(--fg-2)">raw 1.2 KB</span></div>
+                  </div>
+                </div>
+                <!-- tool card: read 2 -->
+                <div class="rounded-xl overflow-hidden" style="background:var(--bg-2); border:1px solid var(--bg-4)">
+                  <button class="tool-toggle w-full flex items-center gap-2.5 px-3 py-2.5 text-left">
+                    <span class="w-7 h-7 rounded-lg grid place-items-center shrink-0" style="background:var(--success-soft); border:1px solid var(--success-ring); color:var(--success)">✓</span>
+                    <div class="min-w-0 flex-1">
+                      <div class="text-[12px] font-medium flex items-center gap-2"><span class="font-mono">filesystem_read_file</span><span class="text-[10px] px-1.5 py-0.5 rounded font-medium" style="background:var(--success-soft); color:var(--success); border:1px solid var(--success-ring)">completed · 9ms</span></div>
+                      <div class="text-[11px] font-mono truncate" style="color:var(--fg-2)">path: "src/store/session.ts" · 88 lines · rule: read_only → allow</div>
+                    </div>
+                    <span class="text-[11px] font-mono" style="color:var(--fg-3)">188 tok</span>
+                    <svg class="w-3.5 h-3.5" style="color:var(--fg-3)" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+                  </button>
+                  <div class="tool-body hidden px-3 pb-3"><pre class="p-3 rounded-lg text-[11px]" style="background:var(--code-bg); border:1px solid var(--code-border)">…</pre></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Turn 2 — includes reasoning + plan tool -->
+        <section class="turn relative">
+          <div class="turn-line"></div>
+          <div class="flex gap-3">
+            <div class="w-7 h-7 rounded-lg grid place-items-center text-[11px] font-semibold shrink-0" style="background:var(--accent); color:white">◈</div>
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-2">
+                <span class="text-[11px] font-semibold tracking-wide uppercase" style="color:var(--fg-2)">Reasoning</span>
+                <button id="reasoningToggle" class="text-[11px] px-1.5 py-0.5 rounded font-medium" style="background:var(--bg-2); border:1px solid var(--bg-4); color:var(--fg-2)">show · 412 tok</button>
+              </div>
+              <div id="reasoningBody" class="hidden mt-2 p-3 rounded-xl text-[12px] leading-relaxed" style="background:var(--bg-1); border:1px solid var(--bg-4); color:var(--fg-1)">
+                The session store is already behind a Database ABC — swapping the middleware to use it is low-risk if I keep the allowlist check. I should write a plan first so the permission gate and tests stay visible, then do the edit with an anchor patch so the diff is reviewable.
+              </div>
+              <div class="mt-3 text-[13px] leading-relaxed" style="color:var(--fg-1)">I'll draft a short plan and checkpoint before editing — then make the surgical change.</div>
+
+              <div class="mt-3 grid gap-2">
+                <!-- plan tool -->
+                <div class="rounded-xl overflow-hidden" style="background:var(--bg-2); border:1px solid var(--bg-4)">
+                  <div class="flex items-center gap-2.5 px-3 py-2.5">
+                    <span class="w-7 h-7 rounded-lg grid place-items-center shrink-0" style="background:var(--info-soft); border:1px solid var(--info-ring); color:var(--info)">≡</span>
+                    <div class="min-w-0 flex-1">
+                      <div class="text-[12px] font-medium font-mono">plan</div>
+                      <div class="text-[11px]" style="color:var(--fg-2)">4 steps · checklist in transcript</div>
+                    </div>
+                    <span class="text-[10px] px-1.5 py-0.5 rounded font-medium" style="background:var(--info-soft); color:var(--info); border:1px solid var(--info-ring)">completed</span>
+                  </div>
+                  <div class="mx-3 mb-3 p-3 rounded-lg text-[12px] leading-relaxed space-y-1.5" style="background:var(--code-bg); border:1px solid var(--code-border)">
+                    <label class="flex gap-2"><input type="checkbox" checked disabled> <span>1. Read auth middleware + session store</span><span class="ml-auto text-[10px] px-1 py-0.5 rounded" style="background:var(--success-soft); color:var(--success)">done</span></label>
+                    <label class="flex gap-2"><input type="checkbox" checked disabled> <span>2. Checkpoint workspace</span><span class="ml-auto text-[10px] px-1 py-0.5 rounded" style="background:var(--success-soft); color:var(--success)">done</span></label>
+                    <label class="flex gap-2"><input type="checkbox"> <span>3. Anchor-edit middleware to use session store + fork path</span></label>
+                    <label class="flex gap-2"><input type="checkbox"> <span>4. Verify with tests + permission gate</span></label>
+                  </div>
+                </div>
+                <!-- checkpoint -->
+                <div class="rounded-xl flex items-center gap-2.5 px-3 py-2.5" style="background:var(--bg-2); border:1px solid var(--bg-4)">
+                  <span class="w-7 h-7 rounded-lg grid place-items-center shrink-0" style="background:var(--bg-3); border:1px solid var(--bg-4); color:var(--fg-1)">◑</span>
+                  <div class="min-w-0 flex-1">
+                    <div class="text-[12px] font-medium">checkpoint <span class="font-mono">cp_9f2a</span></div>
+                    <div class="text-[11px] font-mono" style="color:var(--fg-2)">filesystem snapshot · 1.4 MB · rewind available</div>
+                  </div>
+                  <button class="text-[11px] font-medium px-2 py-1 rounded-lg" style="background:var(--bg-3); border:1px solid var(--bg-4); color:var(--fg-1)">Rewind</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Turn 3 — permission-gated edit (the hero interaction) -->
+        <section class="turn relative">
+          <div class="flex gap-3">
+            <div class="w-7 h-7 rounded-lg grid place-items-center text-[11px] font-semibold shrink-0 animate-pulse" style="background:var(--warning); color:black">◈</div>
+            <div class="flex-1 min-w-0">
+              <div class="text-[13px] leading-relaxed" style="color:var(--fg-1)">Attempting the surgical edit — this needs approval. The preview shows the exact anchor and diff, not a description.</div>
+
+              <!-- permission sheet — inline, blocking -->
+              <div id="permissionSheet" class="mt-3 rounded-xl overflow-hidden" style="background:var(--bg-1); border:1px solid var(--warning-ring); box-shadow: var(--shadow-md)">
+                <div class="px-4 py-3 flex items-start gap-3" style="border-bottom:1px solid var(--bg-4)">
+                  <span class="w-8 h-8 rounded-lg grid place-items-center shrink-0 mt-0.5" style="background:var(--warning-soft); border:1px solid var(--warning-ring); color:var(--warning)">⚠</span>
+                  <div class="min-w-0 flex-1">
+                    <div class="text-[12px] font-semibold flex items-center gap-2">Permission required <span class="text-[10px] px-1.5 py-0.5 rounded font-medium" style="background:var(--warning-soft); color:var(--warning); border:1px solid var(--warning-ring)">ASK · rule: mutating + unrecognised → ask</span></div>
+                    <div class="text-[12px] font-mono mt-1" style="color:var(--fg-1)">filesystem_write_file <span style="color:var(--fg-2)">·</span> src/middleware/auth.ts</div>
+                    <div class="text-[11px] mt-1" style="color:var(--fg-2)">Capability: destructive · reaches_paths · not read_only → deny-by-default floor. Session grants: none.</div>
+                  </div>
+                  <span class="hidden sm:inline text-[10px] font-mono px-2 py-1 rounded" style="background:var(--bg-2); border:1px solid var(--bg-4); color:var(--fg-2)">call_7a2f · evt 22</span>
+                </div>
+
+                <!-- preview: unified diff -->
+                <div class="px-4 py-3">
+                  <div class="label mb-2 flex items-center gap-2">Preview — unified diff <span class="normal-case tracking-normal font-mono text-[10px] font-medium px-1.5 py-0.5 rounded" style="background:var(--bg-2); border:1px solid var(--bg-4); color:var(--fg-2)">anchor: "export function authMiddleware"</span></div>
+                  <pre class="p-3 rounded-lg text-[11px] leading-relaxed overflow-auto font-mono" style="background:var(--code-bg); border:1px solid var(--code-border)"><code><span style="color:var(--fg-2)">@@ authMiddleware — anchor edit</span>
+<span style="background:var(--diff-del); border-left:2px solid var(--diff-del-border); display:block; padding-left:6px">-  if (!token) return res.status(401).end();</span>
+<span style="background:var(--diff-add); border-left:2px solid var(--diff-add-border); display:block; padding-left:6px">+  const session = await sessionStore.load(token);</span>
+<span style="background:var(--diff-add); border-left:2px solid var(--diff-add-border); display:block; padding-left:6px">+  if (!session) return res.status(401).json({ error: "invalid session" });</span>
+<span style="background:var(--diff-add); border-left:2px solid var(--diff-add-border); display:block; padding-left:6px">+  if (session.forkedFrom) req.forkedFrom = session.forkedFrom;</span>
+   next();</code></pre>
+                  <div class="mt-3 flex flex-wrap gap-2 text-[11px]">
+                    <span class="px-2 py-1 rounded-full font-mono" style="background:var(--bg-2); border:1px solid var(--bg-4); color:var(--fg-2)">in sandbox container</span>
+                    <span class="px-2 py-1 rounded-full" style="background:var(--bg-2); border:1px solid var(--bg-4); color:var(--fg-2)">path confined to <span class="font-mono">./workspace</span></span>
+                  </div>
+                </div>
+
+                <!-- decision -->
+                <div class="px-4 py-3 flex flex-wrap items-center gap-2" style="background:var(--bg-2); border-top:1px solid var(--bg-4)">
+                  <div class="flex items-center gap-2 mr-auto">
+                    <label class="text-[11px] flex items-center gap-1.5" style="color:var(--fg-2)"><input type="radio" name="duration" value="once" checked> Once</label>
+                    <label class="text-[11px] flex items-center gap-1.5" style="color:var(--fg-2)"><input type="radio" name="duration" value="session"> Session</label>
+                    <label class="text-[11px] flex items-center gap-1.5" style="color:var(--fg-2)"><input type="radio" name="duration" value="always"> Always</label>
+                    <span class="hidden sm:inline text-[11px] font-mono ml-2 px-2 py-1 rounded" style="background:var(--bg-3); border:1px solid var(--bg-4); color:var(--fg-2)">scope: ./workspace/src/**</span>
+                  </div>
+                  <button id="denyBtn" class="h-8 px-4 rounded-lg text-[13px] font-medium" style="background:var(--bg-3); border:1px solid var(--bg-4); color:var(--fg-1)">Deny</button>
+                  <button id="allowBtn" class="h-8 px-4 rounded-lg text-[13px] font-semibold hover:opacity-95 active:scale-[0.99] transition" style="background:var(--accent); color:white; box-shadow: var(--shadow-sm)">Allow & continue</button>
+                </div>
+                <div id="permissionHint" class="hidden px-4 py-2 text-[11px] flex items-center gap-2" style="background:var(--success-soft); border-top:1px solid var(--success-ring); color:var(--success)">
+                  <span>✓</span> Allowed — resuming turn 3. The edit will run in the sandbox and stream back as a tool result.
+                </div>
+              </div>
+
+              <!-- after approval, tool result appears (hidden until allowed) -->
+              <div id="postPermissionResult" class="hidden mt-3 rounded-xl overflow-hidden" style="background:var(--bg-2); border:1px solid var(--bg-4)">
+                <div class="flex items-center gap-2.5 px-3 py-2.5">
+                  <span class="w-7 h-7 rounded-lg grid place-items-center shrink-0" style="background:var(--success-soft); border:1px solid var(--success-ring); color:var(--success)">✓</span>
+                  <div class="min-w-0 flex-1">
+                    <div class="text-[12px] font-medium font-mono">filesystem_write_file</div>
+                    <div class="text-[11px] font-mono truncate" style="color:var(--fg-2)">src/middleware/auth.ts · anchor matched · 3 lines changed · 11ms</div>
+                  </div>
+                  <span class="text-[10px] px-1.5 py-0.5 rounded font-medium" style="background:var(--success-soft); color:var(--success); border:1px solid var(--success-ring)">completed · in sandbox</span>
+                </div>
+              </div>
+
+              <!-- streaming assistant text (demo) -->
+              <div id="streamingDemo" class="hidden mt-4 flex gap-3">
+                <div class="w-7 h-7 rounded-lg grid place-items-center text-[11px] font-semibold shrink-0" style="background:var(--accent); color:white">◈</div>
+                <div class="flex-1 min-w-0">
+                  <div id="streamText" class="text-[13px] leading-relaxed" style="color:var(--fg-1)"></div>
+                  <div class="mt-2 flex gap-1.5">
+                    <span class="inline-flex items-center gap-1 text-[11px] px-2 py-1 rounded-full font-medium animate-pulse" style="background:var(--info-soft); color:var(--info); border:1px solid var(--info-ring)">● streaming · text.delta</span>
+                    <button id="cancelBtn" class="text-[11px] px-2 py-1 rounded-full font-medium" style="background:var(--bg-2); border:1px solid var(--bg-4); color:var(--fg-2)">Cancel run</button>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </section>
+
+        <!-- Run receipt — appears on RUN_FINISHED -->
+        <section id="runReceipt" class="hidden rounded-xl overflow-hidden" style="background:var(--bg-1); border:1px solid var(--bg-4); box-shadow: var(--shadow-sm)">
+          <div class="px-4 py-3 flex items-center gap-3" style="border-bottom:1px solid var(--bg-4)">
+            <span class="w-8 h-8 rounded-lg grid place-items-center" style="background:var(--success-soft); border:1px solid var(--success-ring); color:var(--success)">✓</span>
+            <div>
+              <div class="text-[12px] font-semibold">Run finished <span class="font-mono font-normal" style="color:var(--fg-2)">· run_8f3a1c · FINISHED</span></div>
+              <div class="text-[11px] font-mono" style="color:var(--fg-2)">model llama-3.3-70b · 3 turns · 1.8s wall · 0 retries · 0 fallbacks</div>
+            </div>
+            <span class="ml-auto text-[11px] font-mono px-2 py-1 rounded" style="background:var(--bg-2); border:1px solid var(--bg-4); color:var(--fg-2)">evt 28 · seq replayable</span>
+          </div>
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-px p-px" style="background:var(--bg-4)">
+            <div class="p-3" style="background:var(--bg-1)"><div class="label">Cost</div><div class="text-[16px] font-semibold">$0.0042</div><div class="text-[11px] font-mono" style="color:var(--fg-2)">in 1,240 · out 860</div></div>
+            <div class="p-3" style="background:var(--bg-1)"><div class="label">Tokens</div><div class="text-[16px] font-semibold">2,512 <span class="text-[11px] font-normal" style="color:var(--fg-2)">· 312 cached</span></div><div class="text-[11px] font-mono" style="color:var(--fg-2)">reasoning 412</div></div>
+            <div class="p-3" style="background:var(--bg-1)"><div class="label">Duration</div><div class="text-[16px] font-semibold">1.8s</div><div class="text-[11px] font-mono" style="color:var(--fg-2)">model 1.1s · tools 0.4s</div></div>
+            <div class="p-3" style="background:var(--bg-1)"><div class="label">Turns</div><div class="text-[16px] font-semibold">3 / 10</div><div class="text-[11px] font-mono" style="color:var(--fg-2)">budget ok</div></div>
+          </div>
+          <div class="px-4 py-2.5 flex items-center gap-2 text-[11px] font-mono" style="color:var(--fg-2); background:var(--bg-2)">
+            <span>final_text: "Middleware refactored — session store wired, fork path added, permission gate preserved. Tests pass."</span>
+          </div>
+        </section>
+
+        <!-- Fork affordance -->
+        <div class="flex items-center gap-2 text-[11px]" style="color:var(--fg-2)">
+          <span class="h-px flex-1" style="background:var(--bg-4)"></span>
+          <button class="px-2.5 py-1 rounded-full font-medium flex items-center gap-1.5" style="background:var(--bg-2); border:1px solid var(--bg-4); color:var(--fg-2)">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 3h5v5"/><path d="M4 20 21 3"/><path d="M21 16v5h-5"/><path d="M15 15 21 21"/><path d="M4 4 9 9"/></svg> Fork this session to try an alternative
+          </button>
+          <span class="h-px flex-1" style="background:var(--bg-4)"></span>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ── Composer ─────────────────────────────────────────────── -->
+    <div class="shrink-0 border-t hairline p-3 sm:p-4" style="background:var(--bg-1)">
+      <div class="mx-auto max-w-[760px]">
+        <!-- limits bar -->
+        <div class="flex flex-wrap items-center gap-1.5 mb-3 text-[11px]">
+          <span class="label">Limits</span>
+          <span class="inline-flex items-center gap-1 px-2 py-1 rounded-full font-mono" style="background:var(--bg-2); border:1px solid var(--bg-4); color:var(--fg-2)">max_turns 10</span>
+          <span class="inline-flex items-center gap-1 px-2 py-1 rounded-full font-mono" style="background:var(--bg-2); border:1px solid var(--bg-4); color:var(--fg-2)">max_cost $0.05</span>
+          <span class="inline-flex items-center gap-1 px-2 py-1 rounded-full font-mono" style="background:var(--bg-2); border:1px solid var(--bg-4); color:var(--fg-2)">max_tokens 200k</span>
+          <label class="ml-auto inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full font-medium cursor-pointer" style="background:var(--bg-2); border:1px solid var(--bg-4); color:var(--fg-2)">
+            <input id="planMode" type="checkbox" class="accent-violet-600"> Plan mode
+            <span class="text-[10px] font-mono px-1 py-0.5 rounded" style="background:var(--warning-soft); color:var(--warning); border:1px solid var(--warning-ring)">read-only gate</span>
+          </label>
+          <select class="h-6 px-2 rounded-full font-mono text-[11px] outline-none" style="background:var(--bg-2); border:1px solid var(--bg-4); color:var(--fg-2)">
+            <option>reasoning: default</option><option>low</option><option>medium</option><option>high</option>
+          </select>
+        </div>
+        <!-- input -->
+        <div class="rounded-xl overflow-hidden" style="background:var(--bg-2); border:1px solid var(--bg-4); box-shadow: var(--shadow-sm)">
+          <textarea id="composerInput" rows="3" placeholder="Describe the next goal…  (⌘Enter to send, / for skills)" class="w-full bg-transparent px-4 py-3 text-[13px] leading-relaxed outline-none resize-none placeholder:text-[13px]" style="color:var(--fg-0)"></textarea>
+          <div class="flex items-center gap-2 px-3 py-2.5" style="border-top:1px solid var(--bg-4); background:var(--bg-1)">
+            <button class="h-7 px-2.5 rounded-lg text-[11px] font-medium flex items-center gap-1.5" style="background:var(--bg-2); border:1px solid var(--bg-4); color:var(--fg-2)">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5Z"/></svg> Skills
+              <span class="hidden sm:inline font-mono text-[10px] px-1 py-0.5 rounded" style="background:var(--bg-3); border:1px solid var(--bg-4)">5 available</span>
+            </button>
+            <span class="hidden sm:inline text-[11px] font-mono" style="color:var(--fg-3)">AGENT.md + 3 memories in prompt</span>
+            <div class="ml-auto flex items-center gap-2">
+              <span class="hidden sm:inline text-[11px] font-mono" style="color:var(--fg-3)">groq · llama-3.3-70b</span>
+              <button id="sendBtn" class="h-8 px-4 rounded-lg text-[13px] font-semibold flex items-center gap-2 hover:opacity-95 active:scale-[0.99] transition" style="background:var(--accent); color:white; box-shadow: var(--shadow-sm)">
+                Send <span class="hidden sm:inline font-mono text-[11px] opacity-80">⌘↵</span>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="mt-2 flex items-center gap-2 text-[11px] font-mono" style="color:var(--fg-3)">
+          <span>SSE streaming · Last-Event-ID resume · fork keeps messages, new event stream</span>
+          <span class="ml-auto hidden sm:inline">Press <span class="px-1 py-0.5 rounded font-mono" style="background:var(--bg-2); border:1px solid var(--bg-4)">?</span> for shortcuts</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- status bar -->
+    <div class="h-6 shrink-0 flex items-center gap-3 px-3 text-[11px] font-mono border-t hairline" style="background:var(--bg-1); color:var(--fg-2)">
+      <span class="hidden sm:inline-flex items-center gap-1.5"><span class="w-1.5 h-1.5 rounded-full" style="background:var(--success)"></span> native · AgentService</span>
+      <span class="hidden sm:inline w-px h-3" style="background:var(--bg-4)"></span>
+      <span>Postgres <span style="color:var(--success)">●</span> localhost:5433</span>
+      <span class="hidden sm:inline w-px h-3" style="background:var(--bg-4)"></span>
+      <span class="hidden md:inline">trace .agent-traces/run_8f3a1c.json</span>
+      <span class="ml-auto">tokens 2,512 · $0.0042 · 1.8s</span>
+    </div>
+
+  </main>
+</div>
+
+<!-- ── Toast ────────────────────────────────────────────────────────── -->
+<div id="toast" class="fixed bottom-8 left-1/2 -translate-x-1/2 hidden px-4 py-2.5 rounded-xl text-[12px] font-medium flex items-center gap-2" style="background:var(--bg-2); border:1px solid var(--bg-4); color:var(--fg-0); box-shadow: var(--shadow-lg)">
+  <span id="toastText">—</span>
+</div>
+
+<script>
+// ——— sessions ———
+const sessions = [
+  { id:'sess_8f3a', title:'Refactor auth middleware → add session forking', dir:'./workspace', agent:'build', model:'llama-3.3-70b', active:true, badge:'streaming', meta:'turn 3 · now' },
+  { id:'sess_71b2', title:'Add Qdrant knowledge base for docs', dir:'./workspace', agent:'build', model:'llama-3.3-70b', active:false, badge:'finished', meta:'2 runs · $0.018 · yesterday' },
+  { id:'sess_9c1e', title:'Debug flaky compaction test', dir:'./workspace', agent:'build', model:'qwen3.5:4b', active:false, badge:'limit', meta:'max_turns · 10 turns' },
+  { id:'sess_4f00', title:'Set up sandbox image + pool', dir:'./workspace', agent:'build', model:'llama-3.3-70b', active:false, badge:'finished', meta:'finished · $0.006' },
+];
+const recent = sessions.slice(1);
+function renderSessions(filter='') {
+  const q = filter.toLowerCase();
+  const match = s => !q || (s.title+s.dir+s.id).toLowerCase().includes(q);
+  const activeEl = document.getElementById('sessionListActive');
+  const recentEl = document.getElementById('sessionListRecent');
+  activeEl.innerHTML = sessions.filter(s=>s.active).filter(match).map(s=>sessionRow(s,true)).join('') || emptyRow();
+  recentEl.innerHTML = recent.filter(match).map(s=>sessionRow(s,false)).join('') || emptyRow();
+}
+function sessionRow(s, isActive) {
+  const dot = s.badge==='streaming' ? 'var(--info)' : s.badge==='finished' ? 'var(--success)' : 'var(--warning)';
+  const badgeStyle = s.badge==='streaming'
+    ? 'background:var(--info-soft); color:var(--info); border:1px solid var(--info-ring)'
+    : s.badge==='finished' ? 'background:var(--success-soft); color:var(--success); border:1px solid var(--success-ring)'
+    : 'background:var(--warning-soft); color:var(--warning); border:1px solid var(--warning-ring)';
+  return `<button class="w-full text-left px-2.5 py-2 rounded-lg flex gap-2.5 items-start hover:opacity-90" style="${isActive?'background:var(--bg-2); border:1px solid var(--bg-4)':'border:1px solid transparent'}">
+    <span class="w-2 h-2 rounded-full mt-1.5 shrink-0" style="background:${dot}"></span>
+    <span class="min-w-0 flex-1">
+      <span class="text-[12px] font-medium leading-tight line-clamp-2" style="color:var(--fg-0)">${s.title}</span>
+      <span class="text-[11px] font-mono" style="color:var(--fg-2)">${s.meta} · ${s.id}</span>
+    </span>
+    <span class="text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0" style="${badgeStyle}">${s.badge}</span>
+  </button>`;
+}
+function emptyRow(){ return `<div class="text-[11px] px-2 py-2" style="color:var(--fg-3)">No matches.</div>`; }
+renderSessions();
+document.getElementById('sessionSearch').addEventListener('input', e=>renderSessions(e.target.value));
+
+// ——— interactions ———
+const toast = document.getElementById('toast');
+function showToast(msg){
+  document.getElementById('toastText').textContent = msg;
+  toast.classList.remove('hidden');
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(()=>toast.classList.add('hidden'), 2200);
+}
+
+// tool cards collapse
+document.querySelectorAll('.tool-toggle').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    const body = btn.nextElementSibling;
+    if(!body || !body.classList.contains('tool-body')) return;
+    body.classList.toggle('hidden');
+    const chev = btn.querySelector('svg:last-of-type');
+    if(chev) chev.style.transform = body.classList.contains('hidden') ? '' : 'rotate(180deg)';
+  });
+});
+
+// reasoning toggle
+document.getElementById('reasoningToggle')?.addEventListener('click', function(){
+  const b = document.getElementById('reasoningBody');
+  b.classList.toggle('hidden');
+  this.textContent = b.classList.contains('hidden') ? 'show · 412 tok' : 'hide · 412 tok';
+});
+
+// permission allow/deny
+const allowBtn = document.getElementById('allowBtn');
+const denyBtn = document.getElementById('denyBtn');
+const hint = document.getElementById('permissionHint');
+const post = document.getElementById('postPermissionResult');
+const streamingDemo = document.getElementById('streamingDemo');
+const streamText = document.getElementById('streamText');
+const receipt = document.getElementById('runReceipt');
+
+allowBtn?.addEventListener('click', ()=>{
+  const duration = document.querySelector('input[name="duration"]:checked')?.value || 'once';
+  hint.classList.remove('hidden');
+  hint.innerHTML = `<span>✓</span> Allowed (${duration}) — edit ran in sandbox. Streaming resumed.`;
+  allowBtn.disabled = true; denyBtn.disabled = true;
+  allowBtn.style.opacity = '0.6';
+  // reveal tool result + streaming
+  setTimeout(()=>{ post.classList.remove('hidden'); post.scrollIntoView({behavior:'smooth', block:'nearest'}); }, 450);
+  setTimeout(()=>{ streamingDemo.classList.remove('hidden'); typeStream("Edit applied — anchor matched cleanly. Now wiring the `session.fork` path and running the tests to confirm the permission gate still holds. Next: `filesystem_read_file` on the test suite, then `terminal_run_command` with `uv run pytest` inside the sandbox.", streamText, ()=>{ receipt.classList.remove('hidden'); receipt.scrollIntoView({behavior:'smooth'}); document.getElementById('turnCount').textContent='4'; showToast('Run finished — receipt updated · $0.0042 · 2,512 tokens'); }); }, 900);
+});
+
+denyBtn?.addEventListener('click', ()=>{
+  hint.classList.remove('hidden');
+  hint.style.background = 'var(--danger-soft)';
+  hint.style.borderTopColor = 'var(--danger-ring)';
+  hint.style.color = 'var(--danger)';
+  hint.innerHTML = `<span>✕</span> Denied — tool returned observation, model will adapt on next turn (no replan).`;
+  allowBtn.disabled = true; denyBtn.disabled = true;
+  showToast('Denied — returned as observation to the model');
+});
+
+function typeStream(text, el, done){
+  el.textContent = '';
+  el.classList.add('caret');
+  let i=0;
+  const t = setInterval(()=>{
+    el.textContent = text.slice(0, ++i);
+    if(i>=text.length){ clearInterval(t); el.classList.remove('caret'); done&&done(); }
+  }, 12);
+  // auto-scroll transcript
+  const scroller = document.getElementById('transcript');
+  const iv = setInterval(()=>{ scroller.scrollTop = scroller.scrollHeight; if(i>=text.length) clearInterval(iv); }, 60);
+}
+document.getElementById('cancelBtn')?.addEventListener('click', ()=>{
+  streamText.textContent += '  — cancelled by user. Partial RunRecord returned.';
+  showToast('Run cancelled — partial result preserved');
+});
+
+// composer
+const composer = document.getElementById('composerInput');
+const sendBtn = document.getElementById('sendBtn');
+function send(){
+  const v = composer.value.trim();
+  if(!v) return;
+  showToast('POST /sessions/sess_8f3a/messages → SSE stream (wire to packages/api to go live)');
+  composer.value='';
+}
+sendBtn?.addEventListener('click', send);
+composer?.addEventListener('keydown', e=>{
+  if((e.metaKey||e.ctrlKey) && e.key==='Enter') send();
+});
+
+// plan mode toggle affects composer border
+document.getElementById('planMode')?.addEventListener('change', e=>{
+  const wrap = composer.closest('div.rounded-xl');
+  if(e.target.checked){
+    wrap.style.borderColor = 'var(--warning-ring)';
+    wrap.style.boxShadow = '0 0 0 3px var(--warning-soft)';
+    showToast('Plan mode — read-only gate on. Mutating tools will be denied.');
+  } else {
+    wrap.style.borderColor = 'var(--bg-4)';
+    wrap.style.boxShadow = 'var(--shadow-sm)';
+  }
+});
+
+// theme
+document.getElementById('themeToggle')?.addEventListener('click', ()=>{
+  const isLight = document.documentElement.getAttribute('data-theme')==='light';
+  if(isLight) document.documentElement.removeAttribute('data-theme');
+  else document.documentElement.setAttribute('data-theme','light');
+});
+
+// new session
+document.getElementById('newSessionBtn')?.addEventListener('click', ()=> showToast('POST /sessions {agent:"build", working_directory:"./workspace"} → new session'));
+
+// keyboard: ? help
+document.addEventListener('keydown', e=>{
+  if(e.key==='?' && !e.metaKey && !e.ctrlKey && document.activeElement?.tagName!=='INPUT' && document.activeElement?.tagName!=='TEXTAREA'){
+    showToast('Shortcuts: ⌘N new · ⌘K palette · ⌘↵ send · / skills · Esc close sheet');
+  }
+});
+</script>
+</body>
+</html>
