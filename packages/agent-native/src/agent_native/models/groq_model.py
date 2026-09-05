@@ -89,17 +89,24 @@ class Groq:
             )
         except (TypeError, ValueError):
             parameters = ()
-        if any(
-            parameter.name == "stream_options"
-            or parameter.kind is inspect.Parameter.VAR_KEYWORD
-            for parameter in parameters
-        ):
+        accepts_kwargs = any(
+            parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in parameters
+        )
+        accepted_names = {parameter.name for parameter in parameters}
+        if "stream_options" in accepted_names or accepts_kwargs:
             request["stream_options"] = {"include_usage": True}
         if tools:
             request["tools"] = tools
         effort = kwargs.get("reasoning_effort")
         if effort:
             request["reasoning_effort"] = effort
+        timeout = kwargs.get("timeout_seconds")
+        if timeout is not None:
+            request["timeout"] = timeout
+        if not accepts_kwargs and accepted_names:
+            request = {
+                key: value for key, value in request.items() if key in accepted_names
+            }
 
         response = await create(**request)
         finish_reason = "stop"

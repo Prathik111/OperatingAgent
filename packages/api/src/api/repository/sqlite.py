@@ -17,6 +17,7 @@ import asyncio
 import itertools
 import pickle
 import sqlite3
+from datetime import UTC
 from pathlib import Path
 
 from common.agent import AgentRunResult, AgentTask
@@ -89,6 +90,13 @@ class SQLiteTaskRepository(InMemoryTaskRepository):
             value = state.get(field)
             if isinstance(value, dict):
                 setattr(self, field, value)
+        # Older pickles may contain naive UTC timestamps. Normalize them before
+        # any ordering/comparison in the in-memory implementation.
+        for thread in self._threads.values():
+            if thread.created_at.tzinfo is None:
+                thread.created_at = thread.created_at.replace(tzinfo=UTC)
+            if thread.updated_at.tzinfo is None:
+                thread.updated_at = thread.updated_at.replace(tzinfo=UTC)
         max_order = max(
             (getattr(run, "order", -1) for run in self._runs.values()),
             default=-1,

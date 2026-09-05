@@ -62,12 +62,18 @@ class Ollama:
     def __init__(self, host: str | None = None) -> None:
         self.host = host or os.getenv("OLLAMA_HOST", "http://localhost:11434")
         self._client: Any = None
+        self._client_timeout: float | None = None
 
-    def _get_client(self) -> Any:
-        if self._client is None:
+    def _get_client(self, timeout_seconds: float | None = None) -> Any:
+        timeout = float(timeout_seconds) if timeout_seconds is not None else None
+        if self._client is None or self._client_timeout != timeout:
             from ollama import AsyncClient
 
-            self._client = AsyncClient(host=self.host)
+            kwargs = {"host": self.host}
+            if timeout is not None:
+                kwargs["timeout"] = timeout
+            self._client = AsyncClient(**kwargs)
+            self._client_timeout = timeout
         return self._client
 
     async def stream(
@@ -91,7 +97,12 @@ class Ollama:
         }
         if tools:
             request["tools"] = tools
-        response = await self._get_client().chat(**request)
+        # The Ollama SDK applies timeout through its underlying httpx client,
+        # not as a chat() keyword. Build a client with the configured timeout
+        # for this request so it cannot be silently ignored.
+        timeout = kwargs.get("timeout_seconds")
+        client = self._get_client(timeout)
+        response = await client.chat(**request)
         finish_reason = "stop"
         index = 0
         async for chunk in response:

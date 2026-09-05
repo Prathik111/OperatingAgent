@@ -77,6 +77,10 @@ class InMemoryTaskRepository:
                 updated_at=created_at,
             )
         else:
+            if thread.updated_at.tzinfo is None:
+                thread.updated_at = thread.updated_at.replace(tzinfo=UTC)
+            if thread.created_at.tzinfo is None:
+                thread.created_at = thread.created_at.replace(tzinfo=UTC)
             thread.updated_at = max(thread.updated_at, created_at)
         self._task_status.setdefault(task.id, TaskStatus.PLANNING)
 

@@ -35,7 +35,17 @@ async def get_native_settings(runtime: NativeRuntimeDep) -> dict[str, Any]:
         except (KeyError, AttributeError):
             provider = ""
     provider = normalize_provider(provider)
-    downloaded = await provider_models(provider, None) if provider == "ollama" else []
+    provider_client = None
+    try:
+        provider_client = runtime.models.get_provider(config.model) if config else None
+    except (KeyError, AttributeError):
+        pass
+    configured_host = getattr(provider_client, "host", None) or getattr(
+        provider_client, "base_url", None
+    )
+    downloaded = (
+        await provider_models(provider, configured_host) if provider == "ollama" else []
+    )
     models = list(runtime.models.list_model_names())
     for name in downloaded:
         if name not in models:
@@ -44,6 +54,7 @@ async def get_native_settings(runtime: NativeRuntimeDep) -> dict[str, Any]:
         "track": "native",
         "model": getattr(config, "model", "") if config else "",
         "provider": provider,
+        "base_url": configured_host,
         "models": models,
         "default_model": default_model(provider, downloaded or None),
         "temperature": getattr(config, "temperature", 0.0),
@@ -74,15 +85,37 @@ async def update_native_settings(
     body: RuntimeLLMSettings,
     runtime: NativeRuntimeDep,
 ) -> dict[str, Any]:
-    provider = normalize_provider(body.provider)
+    agents = list(getattr(runtime, "agents", {}).values())
+    current = agents[0] if agents else None
+    current_provider = ""
+    current_client = None
+    if current:
+        try:
+            current_provider = runtime.models.get(current.model).provider
+            current_client = runtime.models.get_provider(current.model)
+        except (KeyError, AttributeError):
+            pass
+    provider = normalize_provider(body.provider or current_provider)
     if provider not in _NATIVE_PROVIDERS:
         raise HTTPException(
             status_code=422,
             detail=f"unsupported native provider {provider!r}; expected one of {', '.join(_NATIVE_PROVIDERS)}",
         )
-    base_url = clean_base_url(provider, normalize_base_url(body.base_url))
+    old_base_url = getattr(current_client, "host", None) or getattr(
+        current_client, "base_url", None
+    )
+    base_url = clean_base_url(
+        provider,
+        normalize_base_url(body.base_url)
+        if "base_url" in body.model_fields_set
+        else old_base_url,
+    )
     downloaded = await provider_models(provider, base_url) if provider == "ollama" else []
-    model = resolve_model(provider, normalize_model(body.model), downloaded or None)
+    model = resolve_model(
+        provider,
+        normalize_model(body.model) if body.model is not None else getattr(current, "model", ""),
+        downloaded or None,
+    )
     if not model:
         raise HTTPException(status_code=422, detail=f"no default model for provider {provider!r}; set model explicitly")
     if provider == "ollama":
@@ -101,25 +134,43 @@ async def update_native_settings(
             provider=provider,
             model=model,
             base_url=base_url,
-            temperature=body.temperature,
-            top_p=body.top_p,
-            max_tokens=body.max_tokens,
-            timeout_seconds=body.timeout_seconds,
+            temperature=(
+                body.temperature
+                if body.temperature is not None
+                else getattr(current, "temperature", 0.0)
+            ),
+            top_p=(
+                body.top_p
+                if body.top_p is not None
+                else getattr(current, "top_p", 1.0)
+            ),
+            max_tokens=(
+                body.max_tokens
+                if "max_tokens" in body.model_fields_set
+                else getattr(current, "max_output_tokens", None)
+            ),
+            timeout_seconds=(
+                body.timeout_seconds
+                if body.timeout_seconds is not None
+                else getattr(current, "timeout_seconds", 60)
+            ),
         )
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     for name in downloaded:
         if name not in models:
             models.append(name)
+    effective = runtime.config_for("build")
     return {
         "track": "native",
         "provider": provider,
         "model": model,
+        "base_url": base_url,
         "models": models,
         "default_model": default_model(provider, downloaded or None),
-        "temperature": body.temperature,
-        "top_p": body.top_p,
-        "max_tokens": body.max_tokens,
-        "timeout_seconds": body.timeout_seconds,
+        "temperature": effective.temperature,
+        "top_p": effective.top_p,
+        "max_tokens": effective.max_output_tokens,
+        "timeout_seconds": effective.timeout_seconds,
         "applies_to": "new runs",
     }

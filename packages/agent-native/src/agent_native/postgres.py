@@ -314,7 +314,7 @@ class PostgresDatabase(Database):
                 VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb, $7, $8)
                 ON CONFLICT (id) DO NOTHING
                 """,
-                _uuid_for("message", message.id),
+                    message.storage_id or str(_uuid_for("message", message.id)),
                 message.session_id,
                 message.role.value,
                 json.dumps([_part_to_json(p) for p in message.parts]),
@@ -332,7 +332,7 @@ class PostgresDatabase(Database):
                 VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb, $7)
                 ON CONFLICT (id) DO NOTHING
                 """,
-                _uuid_for("message", message.id),
+                    message.storage_id or str(_uuid_for("message", message.id)),
                 message.session_id,
                 message.role.value,
                 json.dumps([_part_to_json(p) for p in message.parts]),
@@ -344,7 +344,7 @@ class PostgresDatabase(Database):
     async def load_conversation(self, session_id: str) -> Conversation:
         try:
             rows = await self._fetch(
-                "SELECT COALESCE(native_message_id, id::text) AS id, thread_id AS session_id, role, parts, model, usage, created_at "
+                "SELECT id::text AS storage_id, COALESCE(native_message_id, id::text) AS id, thread_id AS session_id, role, parts, model, usage, created_at "
                 "FROM conversation_messages WHERE thread_id = $1 ORDER BY ordinal",
                 session_id,
             )
@@ -352,7 +352,7 @@ class PostgresDatabase(Database):
             if "native_message_id" not in str(exc):
                 raise
             rows = await self._fetch(
-                "SELECT id::text AS id, thread_id AS session_id, role, parts, model, usage, created_at "
+                "SELECT id::text AS storage_id, id::text AS id, thread_id AS session_id, role, parts, model, usage, created_at "
                 "FROM conversation_messages WHERE thread_id = $1 ORDER BY ordinal",
                 session_id,
             )
@@ -697,6 +697,7 @@ def _row_to_message(row: Any) -> Message:
     usage_data = _load_json(row["usage"], None)
     return Message(
         id=row["id"],
+        storage_id=row.get("storage_id") if hasattr(row, "get") else None,
         session_id=row["session_id"],
         role=Role(row["role"]),
         parts=[_part_from_json(p) for p in _load_json(row["parts"], [])],

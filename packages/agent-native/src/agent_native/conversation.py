@@ -186,6 +186,10 @@ class Message:
     usage: Usage | None = None
     id: str = field(default_factory=_new_id)
     created_at: datetime = field(default_factory=_now)
+    # Database storage UUID for rows loaded from the legacy Postgres schema.
+    # Keeping it separate lets save-load-save preserve the native id without
+    # deriving a second UUID from an already persisted storage id.
+    storage_id: str | None = field(default=None, repr=False, compare=False)
 
     # -- reading helpers -------------------------------------------------
     def text(self) -> str:

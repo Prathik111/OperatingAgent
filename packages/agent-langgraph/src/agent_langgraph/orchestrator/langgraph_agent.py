@@ -147,15 +147,18 @@ class LangGraphAgent(IAgentOrchestrator):
     def _build_context(
         self,
         task: AgentTask,
+        config: AgentConfig,
+        model_provider: ModelProviderLike,
+        prompt_manager: PromptManagerLike,
         on_event: Callable[[AgentEvent], Awaitable[None] | None] | None = None,
     ) -> AgentContext:
         return AgentContext(
-            model_provider=self._model_provider,
+            model_provider=model_provider,
             tool_registry=self._tool_registry,
             risk_classifier=self._risk_classifier,
-            prompt_manager=self._prompt_manager,
+            prompt_manager=prompt_manager,
             tracer=self._tracer,
-            config=self.config,
+            config=config,
             approval_handler=self._approval_handler,
             task_id=task.id,
             event_sink=on_event,
@@ -168,7 +171,9 @@ class LangGraphAgent(IAgentOrchestrator):
             or None,
         )
 
-    def _invocation_config(self, task: AgentTask) -> dict[str, Any]:
+    def _invocation_config(
+        self, task: AgentTask, config: AgentConfig | None = None
+    ) -> dict[str, Any]:
         """Build the LangChain config, including all Langfuse trace attributes.
 
         - ``run_name`` becomes the trace name, so traces are filterable by
@@ -179,17 +184,18 @@ class LangGraphAgent(IAgentOrchestrator):
           (taken from task metadata when the caller supplies it).
         - ``langfuse_tags`` allow per-track / per-feature dashboards.
         """
+        config = config or self.config
         handler = self._tracer.callback_handler()
 
         tags = [f"track:{task.track.value}"]
-        tags.extend(f"{key}:{value}" for key, value in self.config.metadata.tags.items())
+        tags.extend(f"{key}:{value}" for key, value in config.metadata.tags.items())
         feature = task.metadata.get("feature")
         if feature:
             tags.append(f"feature:{feature}")
 
         metadata: dict[str, Any] = {
             str(key): _langfuse_metadata_value(value)
-            for key, value in self.config.metadata.custom.items()
+            for key, value in config.metadata.custom.items()
             if value is not None
         }
         metadata.update({
@@ -216,13 +222,13 @@ class LangGraphAgent(IAgentOrchestrator):
                 "thread_id": task.thread_id,
                 "checkpoint_ns": (
                     task.resume_checkpoint_namespace
-                    or self.config.checkpoint.namespace
+                    or config.checkpoint.namespace
                 ),
             },
             "callbacks": [handler] if handler is not None else [],
             "run_name": f"agent-run:{task.track.value}",
             "metadata": metadata,
-            "recursion_limit": self.config.execution.max_iterations * 4,
+            "recursion_limit": config.execution.max_iterations * 4,
         }
         if task.resume_checkpoint_id:
             invocation["configurable"]["checkpoint_id"] = task.resume_checkpoint_id
@@ -242,7 +248,14 @@ class LangGraphAgent(IAgentOrchestrator):
         serverless invocations) don't drop buffered spans.
         """
         graph = await self._compile()
-        invocation = self._invocation_config(task)
+        # Capture all configuration-dependent dependencies together. A later
+        # reconfigure() may replace these fields, but this invocation must use
+        # one coherent provider/prompt/config snapshot from start to finish.
+        async with self._compile_lock:
+            config = self.config
+            model_provider = self._model_provider
+            prompt_manager = self._prompt_manager
+            invocation = self._invocation_config(task, config)
         handler = next(iter(invocation["callbacks"]), None)
 
         started = time.perf_counter()
@@ -276,8 +289,10 @@ class LangGraphAgent(IAgentOrchestrator):
                             "status": None,
                         }
                     )
-            context = self._build_context(task, on_event)
-            if self.config.execution.stream:
+            context = self._build_context(
+                task, config, model_provider, prompt_manager, on_event
+            )
+            if config.execution.stream:
                 async for state in graph.astream(
                     graph_input,
                     config=invocation,

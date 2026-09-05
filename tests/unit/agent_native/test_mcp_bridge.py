@@ -10,6 +10,7 @@ present.
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 from agent_native.config import AgentConfig
 from agent_native.conversation import Session, ToolCall
@@ -302,6 +303,34 @@ def test_real_gateway_accepts_and_confines_the_workspace_root(tmp_path):
 
 async def test_close_without_connect_is_safe():
     await MCPToolProvider().close()  # no connection open; must not raise
+
+
+async def test_workspace_client_resolution_keeps_mcp_calls_in_session_root(tmp_path):
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    first_client = FakeClient(result=FakeCallResult(content=[FakeText("first")]))
+    second_client = FakeClient(result=FakeCallResult(content=[FakeText("second")]))
+    provider = MCPToolProvider()
+    provider._clients = {
+        str(first.resolve()): first_client,
+        str(second.resolve()): second_client,
+    }
+    tool = MCPTool(
+        first_client,
+        FakeSpec("filesystem_read_file"),
+        client_resolver=provider._client_for_context,
+    )
+
+    context = SimpleNamespace(
+        session=SimpleNamespace(working_directory=str(second)),
+    )
+    result = await tool.execute({"path": "file.txt"}, context)
+
+    assert result.success and result.output == "second"
+    assert first_client.calls == []
+    assert second_client.calls == [("filesystem_read_file", {"path": "file.txt"})]
 
 
 async def test_import_client_guides_when_fastmcp_missing():

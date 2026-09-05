@@ -149,8 +149,29 @@ class ToolRegistry:
     ) -> str | None:
         if not self._sandbox.enabled:
             return None
+        category = self._category(request.tool_name)
+        if category is None:
+            return None
+        # In-process MCP adapters already own their server-side workspace fence.
+        # Only an explicitly selected workspace needs client-side path checking;
+        # an actual terminal command still needs a sandbox workspace to mount.
+        configured_workspace = self._sandbox.workspace != Path("./workspace")
+        if workspace is None and (
+            (category != "terminal" and not configured_workspace)
+            or (category == "terminal" and not request.arguments.get("command"))
+        ):
+            return None
 
-        root = Path(workspace).expanduser().resolve() if workspace else self._sandbox.workspace.resolve()
+        try:
+            root = (
+                Path(workspace).expanduser().resolve()
+                if workspace
+                else self._sandbox.workspace.expanduser().resolve()
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            return f"sandbox workspace is invalid: {exc}"
+        if not root.is_dir():
+            return f"sandbox workspace does not exist: {root}"
         for key, value in self._walk_arguments(request.arguments):
             if key.lower() not in self._PATH_KEYS:
                 continue
@@ -203,9 +224,19 @@ class ToolRegistry:
                 image=self._sandbox.image or DEFAULT_IMAGE,
                 network=False,
             )
-        root = Path(workspace).expanduser().resolve() if workspace else self._sandbox.workspace.expanduser().resolve()
         try:
+            root = (
+                Path(workspace).expanduser().resolve()
+                if workspace
+                else self._sandbox.workspace.expanduser().resolve()
+            )
             runner = await self._sandbox_pool.get("langgraph", str(root))
+        except (OSError, RuntimeError, ValueError) as exc:
+            return ToolCallResult(
+                success=False,
+                output=None,
+                error=f"sandbox workspace is invalid: {exc}",
+            )
         except Exception as exc:  # noqa: BLE001 - optional sandbox boundary
             return ToolCallResult(
                 success=False,

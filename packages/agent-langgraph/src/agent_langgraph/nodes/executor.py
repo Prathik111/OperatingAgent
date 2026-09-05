@@ -114,6 +114,14 @@ async def ExecutorNode(state: AgentState, runtime: Runtime[AgentContext]) -> dic
     risk = _needs_approval(ctx, step)
     threshold = _RISK_ORDER.get(RiskLevel(ctx.config.behaviour.risk_threshold), 1)
     if ctx.config.behaviour.require_human_approval and _RISK_ORDER[risk] >= threshold:
+        log.info(
+            "approval gate entered task_id=%s step=%s tool=%s risk=%s threshold=%s",
+            ctx.task_id,
+            step.id,
+            step.tool_name,
+            risk.value,
+            RiskLevel(ctx.config.behaviour.risk_threshold).value,
+        )
         if not ctx.config.execution.enable_interrupts:
             approved = False
             reason = "approval required but interrupts are disabled"
@@ -152,14 +160,28 @@ async def ExecutorNode(state: AgentState, runtime: Runtime[AgentContext]) -> dic
             )
 
         if not approved:
+            log.warning(
+                "approval rejected task_id=%s step=%s tool=%s; ending run without replanning",
+                ctx.task_id,
+                step.id,
+                step.tool_name,
+            )
             return {
                 "plan": _with_step(plan, index,
                                    status=RunStatus.FAILED,
                                    output=f"human rejected {step.tool_name}: {reason}"),
                 "last_error": f"human rejected {step.tool_name}: {reason}",
+                # The error text lets the router terminate this deliberate
+                # rejection without inflating the ordinary retry counter.
                 "retry_count": state.get("retry_count", 0) + 1,
                 "status": TaskStatus.EXECUTING,
             }
+        log.info(
+            "approval accepted task_id=%s step=%s tool=%s",
+            ctx.task_id,
+            step.id,
+            step.tool_name,
+        )
 
     # --- Invoke with retry ----------------------------------------------
     try:
