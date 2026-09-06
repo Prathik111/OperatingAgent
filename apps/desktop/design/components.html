@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>OperatingAgent — Component Gallery</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<link rel="stylesheet" href="./tokens.css" />
+<style>body{font-family:var(--font-sans); background:var(--bg-0); color:var(--fg-0)} .hairline{border-color:var(--bg-4)}</style>
+</head>
+<body class="antialiased">
+<div class="max-w-[860px] mx-auto px-6 py-10 space-y-10">
+
+  <header class="space-y-2">
+    <div class="label">Design system</div>
+    <h1 class="text-[22px] font-semibold tracking-tight">Component gallery</h1>
+    <p class="text-[13px] leading-relaxed max-w-[60ch]" style="color:var(--fg-1)">Isolated states for tool cards, permissions, receipts, and empty states. Every card here is a state the transcript can be in — the same components the live app streams over SSE.</p>
+    <div class="flex gap-2 pt-2">
+      <a href="./index.html" class="h-7 px-3 rounded-lg text-[12px] font-medium inline-flex items-center gap-1.5" style="background:var(--accent); color:white">← Back to prototype</a>
+      <a href="./tokens.css" class="h-7 px-3 rounded-lg text-[12px] font-medium inline-flex items-center" style="background:var(--bg-2); border:1px solid var(--bg-4); color:var(--fg-1)">tokens.css</a>
+    </div>
+  </header>
+
+  <!-- Tool card states -->
+  <section class="space-y-4">
+    <h2 class="text-[13px] font-semibold">Tool cards — states</h2>
+    <p class="text-[12px]" style="color:var(--fg-2)">One card = one <span class="font-mono">ToolCallPart</span> lifecycle. The transcript carries both request and result in one object, so a client mutates the card in place through PENDING → AWAITING_PERMISSION → RUNNING → COMPLETED/ERROR/DENIED.</p>
+
+    <div class="grid gap-3">
+      <!-- pending -->
+      <div class="rounded-xl p-3 flex items-center gap-3" style="background:var(--bg-2); border:1px solid var(--bg-4)">
+        <span class="w-7 h-7 rounded-lg grid place-items-center shrink-0" style="background:var(--bg-3); border:1px solid var(--bg-4); color:var(--fg-2)">⋯</span>
+        <div><div class="text-[12px] font-mono font-medium">filesystem_write_file · PENDING</div><div class="text-[11px] font-mono" style="color:var(--fg-2)">queued — not yet through the gate</div></div>
+        <span class="ml-auto text-[10px] px-1.5 py-0.5 rounded font-medium" style="background:var(--bg-3); border:1px solid var(--bg-4); color:var(--fg-2)">pending</span>
+      </div>
+      <!-- awaiting permission -->
+      <div class="rounded-xl p-3 flex items-center gap-3" style="background:var(--bg-2); border:1px solid var(--warning-ring)">
+        <span class="w-7 h-7 rounded-lg grid place-items-center shrink-0" style="background:var(--warning-soft); border:1px solid var(--warning-ring); color:var(--warning)">⚠</span>
+        <div><div class="text-[12px] font-mono font-medium">terminal_run_command · AWAITING_PERMISSION</div><div class="text-[11px]" style="color:var(--fg-2)">ASK · mutating + unrecognised → ask · preview: <span class="font-mono">uv run pytest -q</span></div></div>
+        <span class="ml-auto text-[10px] px-1.5 py-0.5 rounded font-medium" style="background:var(--warning-soft); color:var(--warning); border:1px solid var(--warning-ring)">needs approval</span>
+      </div>
+      <!-- running -->
+      <div class="rounded-xl p-3 flex items-center gap-3" style="background:var(--bg-2); border:1px solid var(--info-ring)">
+        <span class="w-7 h-7 rounded-lg grid place-items-center shrink-0 animate-pulse" style="background:var(--info-soft); border:1px solid var(--info-ring); color:var(--info)">●</span>
+        <div><div class="text-[12px] font-mono font-medium">filesystem_read_file · RUNNING</div><div class="text-[11px] font-mono" style="color:var(--fg-2)">path: "src/store/session.ts" · 1.2s elapsed · timeout 120s</div></div>
+        <span class="ml-auto text-[10px] px-1.5 py-0.5 rounded font-medium" style="background:var(--info-soft); color:var(--info); border:1px solid var(--info-ring)">running</span>
+      </div>
+      <!-- completed -->
+      <div class="rounded-xl p-3 flex items-center gap-3" style="background:var(--bg-2); border:1px solid var(--bg-4)">
+        <span class="w-7 h-7 rounded-lg grid place-items-center shrink-0" style="background:var(--success-soft); border:1px solid var(--success-ring); color:var(--success)">✓</span>
+        <div><div class="text-[12px] font-mono font-medium">filesystem_read_file · COMPLETED</div><div class="text-[11px] font-mono" style="color:var(--fg-2)">18ms · 312 lines · 342 tokens · in sandbox container</div></div>
+        <span class="ml-auto text-[10px] px-1.5 py-0.5 rounded font-medium" style="background:var(--success-soft); color:var(--success); border:1px solid var(--success-ring)">completed</span>
+      </div>
+      <!-- error -->
+      <div class="rounded-xl p-3 flex items-center gap-3" style="background:var(--bg-2); border:1px solid var(--danger-ring)">
+        <span class="w-7 h-7 rounded-lg grid place-items-center shrink-0" style="background:var(--danger-soft); border:1px solid var(--danger-ring); color:var(--danger)">✕</span>
+        <div><div class="text-[12px] font-mono font-medium">filesystem_read_file · ERROR</div><div class="text-[11px] font-mono" style="color:var(--fg-2)">ENOENT — path outside working_directory · returned as observation</div></div>
+        <span class="ml-auto text-[10px] px-1.5 py-0.5 rounded font-medium" style="background:var(--danger-soft); color:var(--danger); border:1px solid var(--danger-ring)">error</span>
+      </div>
+      <!-- denied -->
+      <div class="rounded-xl p-3 flex items-center gap-3" style="background:var(--bg-2); border:1px solid var(--danger-ring)">
+        <span class="w-7 h-7 rounded-lg grid place-items-center shrink-0" style="background:var(--bg-3); border:1px solid var(--bg-4); color:var(--fg-2)">⊘</span>
+        <div><div class="text-[12px] font-mono font-medium">filesystem_write_file · DENIED</div><div class="text-[11px]" style="color:var(--fg-2)">Denied by user: write_file(/etc/hosts). Do not retry; try a path under ./workspace.</div></div>
+        <span class="ml-auto text-[10px] px-1.5 py-0.5 rounded font-medium" style="background:var(--danger-soft); color:var(--danger); border:1px solid var(--danger-ring)">denied</span>
+      </div>
+      <!-- timed out -->
+      <div class="rounded-xl p-3 flex items-center gap-3" style="background:var(--bg-2); border:1px solid var(--warning-ring)">
+        <span class="w-7 h-7 rounded-lg grid place-items-center shrink-0" style="background:var(--warning-soft); border:1px solid var(--warning-ring); color:var(--warning)">◷</span>
+        <div><div class="text-[12px] font-mono font-medium">terminal_run_command · TIMED_OUT</div><div class="text-[11px] font-mono" style="color:var(--fg-2)">Timed out after 120s — suggest narrower call</div></div>
+        <span class="ml-auto text-[10px] px-1.5 py-0.5 rounded font-medium" style="background:var(--warning-soft); color:var(--warning); border:1px solid var(--warning-ring)">timed out</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Permission sheet variants -->
+  <section class="space-y-4">
+    <h2 class="text-[13px] font-semibold">Permission — variants</h2>
+    <div class="grid gap-3">
+      <div class="rounded-xl overflow-hidden" style="background:var(--bg-1); border:1px solid var(--warning-ring)">
+        <div class="px-4 py-2.5 text-[11px] font-semibold" style="border-bottom:1px solid var(--bg-4)">Edit with diff preview (filesystem_write_file)</div>
+        <pre class="m-3 p-3 rounded-lg text-[11px] font-mono overflow-auto" style="background:var(--code-bg); border:1px solid var(--code-border)"><span style="background:var(--diff-del)">- old line</span>
+<span style="background:var(--diff-add)">+ new line — anchor: "export function authMiddleware"</span></pre>
+      </div>
+      <div class="rounded-xl overflow-hidden" style="background:var(--bg-1); border:1px solid var(--warning-ring)">
+        <div class="px-4 py-2.5 text-[11px] font-semibold" style="border-bottom:1px solid var(--bg-4)">Shell command preview (terminal_run_command)</div>
+        <pre class="m-3 p-3 rounded-lg text-[11px] font-mono" style="background:var(--code-bg); border:1px solid var(--code-border)">$ uv run pytest -q
+<span style="color:var(--fg-2)"># in sandbox container · /workspace · no network</span></pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- Receipt -->
+  <section class="space-y-4">
+    <h2 class="text-[13px] font-semibold">Run receipt</h2>
+    <div class="rounded-xl overflow-hidden" style="background:var(--bg-1); border:1px solid var(--bg-4)">
+      <div class="px-4 py-3 flex items-center gap-3" style="border-bottom:1px solid var(--bg-4)">
+        <span class="w-7 h-7 rounded-lg grid place-items-center" style="background:var(--success-soft); border:1px solid var(--success-ring); color:var(--success)">✓</span>
+        <div><div class="text-[12px] font-semibold">FINISHED</div><div class="text-[11px] font-mono" style="color:var(--fg-2)">run_8f3a1c · llama-3.3-70b · 3 turns</div></div>
+        <span class="ml-auto text-[10px] px-2 py-1 rounded font-mono" style="background:var(--bg-2); border:1px solid var(--bg-4); color:var(--fg-2)">LIMIT_REACHED → max_cost · CANCELLED · ERROR</span>
+      </div>
+      <div class="grid grid-cols-4 gap-px p-px" style="background:var(--bg-4)">
+        <div class="p-3" style="background:var(--bg-1)"><div class="label">Cost</div><div class="text-[15px] font-semibold">$0.0042</div></div>
+        <div class="p-3" style="background:var(--bg-1)"><div class="label">Tokens</div><div class="text-[15px] font-semibold">2,512</div></div>
+        <div class="p-3" style="background:var(--bg-1)"><div class="label">Turns</div><div class="text-[15px] font-semibold">3 / 10</div></div>
+        <div class="p-3" style="background:var(--bg-1)"><div class="label">Duration</div><div class="text-[15px] font-semibold">1.8s</div></div>
+      </div>
+    </div>
+    <div class="rounded-xl p-3 flex items-center gap-3" style="background:var(--warning-soft); border:1px solid var(--warning-ring)">
+      <span class="w-7 h-7 rounded-lg grid place-items-center" style="background:var(--bg-2); border:1px solid var(--warning-ring); color:var(--warning)">◷</span>
+      <div><div class="text-[12px] font-semibold" style="color:var(--warning)">LIMIT_REACHED — max_cost</div><div class="text-[11px] font-mono" style="color:var(--fg-2)">Budget ceiling hit between turns · partial RunRecord returned with stop_reason</div></div>
+    </div>
+  </section>
+
+  <!-- Empty states -->
+  <section class="space-y-4">
+    <h2 class="text-[13px] font-semibold">Empty states</h2>
+    <div class="grid sm:grid-cols-2 gap-3">
+      <div class="rounded-xl p-8 text-center" style="background:var(--bg-1); border:1px solid var(--bg-4)">
+        <div class="w-10 h-10 rounded-xl mx-auto grid place-items-center mb-3" style="background:var(--bg-2); border:1px solid var(--bg-4); color:var(--fg-2)">◈</div>
+        <div class="text-[13px] font-medium">No sessions yet</div><div class="text-[12px] mt-1" style="color:var(--fg-2)">Create one to start — pick a working directory and an agent.</div>
+      </div>
+      <div class="rounded-xl p-8 text-center" style="background:var(--bg-1); border:1px solid var(--bg-4)">
+        <div class="w-10 h-10 rounded-xl mx-auto grid place-items-center mb-3" style="background:var(--bg-2); border:1px solid var(--bg-4); color:var(--fg-2)">↻</div>
+        <div class="text-[13px] font-medium">No events yet</div><div class="text-[12px] mt-1" style="color:var(--fg-2)">Send a prompt to start the loop. Events will stream here as SSE.</div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="pt-6 border-t hairline text-[11px] font-mono" style="color:var(--fg-3)">
+    Tokens: Inter 400/500/600 · Mono: JetBrains Mono · Accent violet #7c5cf0 · Radius 6–12 · Motion 120–180ms ease-out
+  </footer>
+
+</div>
+</body>
+</html>
