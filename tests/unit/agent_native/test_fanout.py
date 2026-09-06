@@ -89,9 +89,7 @@ def _last_user_text(messages: list) -> str:
     return ""
 
 
-# ---------------------------------------------------------------------------
 # Stand-in providers whose timing and behaviour the test owns
-# ---------------------------------------------------------------------------
 class _SleepyAnswer:
     """A helper's model that sleeps, then answers with its own job echoed back.
 
@@ -169,9 +167,7 @@ class _NoopTool(Tool):
         return ToolResult(True, output="ok")
 
 
-# ---------------------------------------------------------------------------
 # Wiring: a runtime whose only helper is one worker on a scripted model
-# ---------------------------------------------------------------------------
 def _model(name: str, provider: str) -> Model:
     return Model(provider=provider, model_id=name, context_size=100_000)
 
@@ -222,9 +218,7 @@ def _context(
     )
 
 
-# ---------------------------------------------------------------------------
 # The plan's verify, in four parts
-# ---------------------------------------------------------------------------
 async def test_fan_out_runs_children_concurrently() -> None:
     """Five jobs run at once: the wall clock is about one child, not five, and the
     overlap high-water mark reaches the full width."""
@@ -311,9 +305,7 @@ async def test_per_child_turn_cap_prevents_a_runaway() -> None:
     assert result.output.count("ran out of turns") == 3
 
 
-# ---------------------------------------------------------------------------
 # The edges: validation, the unchanged single-delegate path, and anti-recursion
-# ---------------------------------------------------------------------------
 async def test_validation_rejects_bad_jobs() -> None:
     """Bad `jobs` are refused with a message that says how to fix it, and nothing
     runs. An over-wide wave is refused whole, never silently truncated."""
@@ -369,9 +361,7 @@ async def test_a_helper_cannot_fan_out_or_delegate() -> None:
     assert "noop" in allowed                       # an ordinary tool is untouched
 
 
-# ---------------------------------------------------------------------------
 # A plain-stdlib runner, so this file verifies on a box without pytest.
-# ---------------------------------------------------------------------------
 def _main() -> int:
     tests = [
         test_fan_out_runs_children_concurrently,

@@ -35,9 +35,7 @@ def _verified_step(step_id: int = 1, output: str = "found something", **override
     return make_step(step_id, **fields)
 
 
-# ---------------------------------------------------------------------------
 # investigate -> remediate : opt-in follow-up, with findings to act on
-# ---------------------------------------------------------------------------
 
 
 def test_investigate_with_findings_and_opt_in_advances_to_remediate() -> None:
@@ -70,9 +68,7 @@ def test_investigate_harvests_only_the_new_findings() -> None:
     assert delta["findings"][0].step_id == 1
 
 
-# ---------------------------------------------------------------------------
 # investigate -> complete : plan satisfied the goal, or nothing to act on
-# ---------------------------------------------------------------------------
 
 
 def test_investigate_without_opt_in_completes_directly() -> None:
@@ -106,9 +102,7 @@ def test_investigate_opt_in_but_no_findings_completes() -> None:
     assert delta["status"] is TaskStatus.RESPONDING
 
 
-# ---------------------------------------------------------------------------
 # _harvest : only trustworthy steps become findings
-# ---------------------------------------------------------------------------
 
 
 def test_harvest_skips_unverified_incomplete_and_empty_steps() -> None:
@@ -129,9 +123,7 @@ def test_harvest_skips_unverified_incomplete_and_empty_steps() -> None:
     assert delta["findings"][0].source_tool == "echo_tool"
 
 
-# ---------------------------------------------------------------------------
 # remediate -> complete : follow-up applied, always terminates
-# ---------------------------------------------------------------------------
 
 
 def test_remediate_always_completes() -> None:
@@ -149,9 +141,7 @@ def test_remediate_always_completes() -> None:
     assert "messages" not in delta
 
 
-# ---------------------------------------------------------------------------
 # defaults / defensiveness
-# ---------------------------------------------------------------------------
 
 
 def test_missing_phase_defaults_to_investigate() -> None:

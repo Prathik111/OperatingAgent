@@ -27,9 +27,7 @@ def registry_for(server) -> ToolRegistry:
     return ToolRegistry(MCPAdapter(server))
 
 
-# ---------------------------------------------------------------------------
 # file-server — real filesystem, confined to the pinned temp root
-# ---------------------------------------------------------------------------
 
 
 async def test_file_server_round_trips_a_write_then_read(file_server_root: Path) -> None:
@@ -73,9 +71,7 @@ async def test_file_server_refuses_to_escape_its_root() -> None:
     assert result.error
 
 
-# ---------------------------------------------------------------------------
 # search-server — in-memory, so entirely deterministic
-# ---------------------------------------------------------------------------
 
 
 async def test_search_server_indexes_then_finds_a_document() -> None:
@@ -102,9 +98,7 @@ async def test_search_server_indexes_then_finds_a_document() -> None:
     assert "fox" in str(found.output)
 
 
-# ---------------------------------------------------------------------------
 # terminal-server — the allowlist is the safety boundary
-# ---------------------------------------------------------------------------
 
 
 async def test_terminal_server_lists_processes() -> None:
@@ -131,9 +125,7 @@ async def test_terminal_server_rejects_a_command_outside_the_allowlist() -> None
     assert result.error
 
 
-# ---------------------------------------------------------------------------
 # git-server — needs the real git binary
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git binary not available")

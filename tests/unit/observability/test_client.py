@@ -73,9 +73,7 @@ def patch_langfuse(monkeypatch: pytest.MonkeyPatch) -> type[FakeLangfuse]:
     return FakeLangfuse
 
 
-# ---------------------------------------------------------------------------
 # init_tracing
-# ---------------------------------------------------------------------------
 
 
 def test_init_disabled_returns_none() -> None:
@@ -129,9 +127,7 @@ def test_init_reads_env_when_no_settings_passed(
     assert FakeLangfuse.instances[0].kwargs["public_key"] == "pk-lf-env"
 
 
-# ---------------------------------------------------------------------------
 # get_client
-# ---------------------------------------------------------------------------
 
 
 def test_get_client_lazily_initialises(patch_langfuse: type[FakeLangfuse]) -> None:
@@ -146,9 +142,7 @@ def test_get_client_returns_existing_after_init(patch_langfuse: type[FakeLangfus
     assert client_module.get_client() is created
 
 
-# ---------------------------------------------------------------------------
 # get_callback_handler
-# ---------------------------------------------------------------------------
 
 
 def test_callback_handler_none_when_disabled() -> None:
@@ -179,9 +173,7 @@ def test_callback_handler_none_when_creation_fails(
     assert client_module.get_callback_handler() is None
 
 
-# ---------------------------------------------------------------------------
 # flush / shutdown
-# ---------------------------------------------------------------------------
 
 
 def test_flush_and_shutdown_delegate_to_client(patch_langfuse: type[FakeLangfuse]) -> None:

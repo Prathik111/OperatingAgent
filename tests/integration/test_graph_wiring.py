@@ -66,9 +66,7 @@ def make_task(**overrides: Any) -> AgentTask:
     return AgentTask(**fields)
 
 
-# ---------------------------------------------------------------------------
 # Topology
-# ---------------------------------------------------------------------------
 
 
 def test_unconditional_edges_are_wired() -> None:
@@ -112,9 +110,7 @@ async def test_compiled_graph_runs_to_completion() -> None:
     assert all(step.verified for step in final_state["plan"].steps)
 
 
-# ---------------------------------------------------------------------------
 # Invocation config (the Langfuse trace attributes)
-# ---------------------------------------------------------------------------
 
 
 def test_invocation_config_builds_trace_attributes() -> None:
@@ -159,9 +155,7 @@ def test_recursion_limit_scales_with_iteration_budget() -> None:
     assert agent._invocation_config(make_task())["recursion_limit"] == 5 * 4
 
 
-# ---------------------------------------------------------------------------
 # Compile caching
-# ---------------------------------------------------------------------------
 
 
 async def test_graph_is_compiled_once_and_reused() -> None:

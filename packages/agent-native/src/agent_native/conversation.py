@@ -30,9 +30,7 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-# ---------------------------------------------------------------------------
 # Small vocabularies
-# ---------------------------------------------------------------------------
 class Role(str, Enum):
     """Who a message came from."""
 
@@ -63,9 +61,7 @@ class ToolCallStatus(str, Enum):
     ERROR = "error"
 
 
-# ---------------------------------------------------------------------------
 # The pieces a message is made of
-# ---------------------------------------------------------------------------
 class MessagePart:
     """Base for the things a message can contain. Not used directly."""
 
@@ -172,9 +168,7 @@ class Usage:
         return self.input_tokens + self.output_tokens
 
 
-# ---------------------------------------------------------------------------
 # A message
-# ---------------------------------------------------------------------------
 @dataclass
 class Message:
     """One entry in the conversation. Made of one or more parts."""
@@ -267,9 +261,7 @@ def tool_result_message(session_id: str, result: ToolCall) -> Message:
     return Message(role=Role.TOOL, session_id=session_id, parts=[result])
 
 
-# ---------------------------------------------------------------------------
 # The session and the conversation
-# ---------------------------------------------------------------------------
 @dataclass
 class Session:
     """A single working thread: an agent, a folder to work in, a title."""

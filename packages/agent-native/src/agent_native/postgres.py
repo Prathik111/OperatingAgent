@@ -614,9 +614,7 @@ class PostgresDatabase(Database):
         )
 
 
-# ---------------------------------------------------------------------------
 # Turning messages into JSON and back
-# ---------------------------------------------------------------------------
 def _part_to_json(part: Any) -> dict:
     """One message part as a plain dict. `kind` is what tells them apart on the way back."""
     if isinstance(part, Text):

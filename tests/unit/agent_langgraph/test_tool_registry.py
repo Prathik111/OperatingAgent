@@ -99,3 +99,31 @@ async def test_registry_confines_filesystem_paths_to_workspace(tmp_path) -> None
     assert blocked_root.success is False
     assert "escapes" in (blocked.error or "")
     assert [request.arguments for request in adapter.received] == [{"path": "ok.txt"}]
+
+
+async def test_registry_confines_uncategorized_tool_paths(tmp_path) -> None:
+    adapter = FakeAdapter()
+    registry = ToolRegistry(
+        adapter,
+        sandbox=SandboxConfig(enabled=True, workspace=tmp_path),
+    )
+
+    allowed = await registry.call_by_name("custom_read", {"path": "ok.txt"})
+    blocked = await registry.call_by_name("custom_read", {"path": "../escape.txt"})
+
+    assert allowed.success is True
+    assert blocked.success is False
+    assert "escapes" in (blocked.error or "")
+
+
+async def test_registry_allows_uncategorized_paths_for_explicitly_isolated_adapter(tmp_path) -> None:
+    adapter = FakeAdapter()
+    adapter.workspace_isolated = True
+    registry = ToolRegistry(
+        adapter,
+        sandbox=SandboxConfig(enabled=True, workspace=tmp_path),
+    )
+
+    result = await registry.call_by_name("custom_read", {"path": "../outside.txt"})
+
+    assert result.success is True

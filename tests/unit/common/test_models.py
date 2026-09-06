@@ -29,9 +29,7 @@ from common.exceptions import (
 from common.interfaces import IAgentOrchestrator, IMCPClient
 from common.tools import ToolCallRequest, ToolCallResult, ToolInfo, ToolSchema
 
-# ---------------------------------------------------------------------------
 # tools
-# ---------------------------------------------------------------------------
 
 
 def test_tool_call_result_error_defaults_none() -> None:
@@ -58,9 +56,7 @@ def test_tool_dataclasses_are_mutable_slotted() -> None:
         request.undeclared = 1  # type: ignore[attr-defined]
 
 
-# ---------------------------------------------------------------------------
 # agent
-# ---------------------------------------------------------------------------
 
 
 def test_agent_task_defaults() -> None:
@@ -89,9 +85,7 @@ def test_agent_run_result_defaults() -> None:
     assert result.metadata == {}
 
 
-# ---------------------------------------------------------------------------
 # events
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -104,9 +98,7 @@ def test_event_subclasses_carry_type_and_payload(event_cls: type[AgentEvent]) ->
     assert event.payload == {"k": 1}
 
 
-# ---------------------------------------------------------------------------
 # exceptions
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -119,9 +111,7 @@ def test_exception_hierarchy(exc_cls: type[Exception]) -> None:
         raise exc_cls("boom")
 
 
-# ---------------------------------------------------------------------------
 # interfaces (runtime-checkable structural typing)
-# ---------------------------------------------------------------------------
 
 
 class _Orchestrator:

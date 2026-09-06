@@ -150,13 +150,25 @@ class ToolRegistry:
         if not self._sandbox.enabled:
             return None
         category = self._category(request.tool_name)
-        if category is None:
+        has_path_arguments = any(
+            key.lower() in self._PATH_KEYS
+            for key, _value in self._walk_arguments(request.arguments)
+        )
+        server_isolated = bool(
+            getattr(self._mcp, "workspace_isolated", False)
+            or getattr(self._mcp, "server_side_workspace_isolated", False)
+        )
+        # Unknown MCP tools are not trusted merely because they have no mapped
+        # category. Their path arguments still cross the same workspace boundary
+        # unless the adapter explicitly guarantees server-side isolation.
+        unclassified_paths = category is None and has_path_arguments and not server_isolated
+        if category is None and not unclassified_paths:
             return None
-        # In-process MCP adapters already own their server-side workspace fence.
-        # Only an explicitly selected workspace needs client-side path checking;
-        # an actual terminal command still needs a sandbox workspace to mount.
+        # Mapped tools preserve their existing category rules: an explicitly
+        # selected workspace is checked client-side, while terminal commands
+        # still need a sandbox workspace to mount.
         configured_workspace = self._sandbox.workspace != Path("./workspace")
-        if workspace is None and (
+        if not unclassified_paths and workspace is None and (
             (category != "terminal" and not configured_workspace)
             or (category == "terminal" and not request.arguments.get("command"))
         ):

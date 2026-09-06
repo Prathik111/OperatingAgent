@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from agent_langgraph.graph.state import AgentPlan
+from agent_langgraph.graph.state import AgentPlan, PlanStep
 from agent_langgraph.nodes.planner import PlannerNode, planner_function
 from common.enums import TaskStatus
 from common.exceptions import PlanningException
@@ -103,3 +103,22 @@ async def test_planner_forwards_prior_messages(agent_config) -> None:
     messages = model.structured_handles[0].invocations[0]
     assert messages[1] is prior[0]
     assert "my goal" in messages[-1].content
+
+
+async def test_planner_drops_no_tool_synthesis_steps(agent_config) -> None:
+    """Final prose/artifacts belong to the responder, not the executor."""
+    model = StubModel(
+        plan=AgentPlan(
+            summary="inspect and summarise",
+            reasoning="the model added a synthesis step",
+            steps=[
+                PlanStep(id=1, description="inspect status", tool_name="git_status"),
+                PlanStep(id=2, description="suggest a commit message"),
+            ],
+        )
+    )
+    runtime = build_runtime(build_context(agent_config, model=model))
+
+    plan = await planner_function("check status and give a commit message", [], runtime)
+
+    assert [step.tool_name for step in plan.steps] == ["git_status"]

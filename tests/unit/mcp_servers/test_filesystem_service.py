@@ -18,9 +18,7 @@ def service(workspace):
     return FileSystemService(root=workspace)
 
 
-# ---------------------------------------------------------------------------
 # Path confinement (the security boundary)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.regression
@@ -46,9 +44,7 @@ def test_nested_relative_path_inside_root_is_allowed(service) -> None:
     assert result["bytes"] == 2
 
 
-# ---------------------------------------------------------------------------
 # Read / write
-# ---------------------------------------------------------------------------
 
 
 def test_write_then_read_roundtrip(service) -> None:
@@ -81,9 +77,7 @@ def test_read_directory_as_file_raises(service) -> None:
         service.read_file("adir")
 
 
-# ---------------------------------------------------------------------------
 # Delete / copy / move / rename
-# ---------------------------------------------------------------------------
 
 
 def test_delete_file(service) -> None:
@@ -129,9 +123,7 @@ def test_rename_file_delegates_to_move(service) -> None:
     assert service.read_file("new.txt")["content"] == "data"
 
 
-# ---------------------------------------------------------------------------
 # Directories
-# ---------------------------------------------------------------------------
 
 
 def test_list_directory_lists_entries(service) -> None:
@@ -171,9 +163,7 @@ def test_delete_nonempty_directory_recursive(service) -> None:
     assert service.exists("box")["exists"] is False
 
 
-# ---------------------------------------------------------------------------
 # Metadata / existence / search
-# ---------------------------------------------------------------------------
 
 
 def test_exists_reports_type(service) -> None:
@@ -205,9 +195,7 @@ def test_search_files_matches_by_name(service) -> None:
     assert [m["name"] for m in matches] == ["report_final.txt"]
 
 
-# ---------------------------------------------------------------------------
 # watch_directory (async)
-# ---------------------------------------------------------------------------
 
 
 async def test_watch_directory_returns_snapshots(service) -> None:

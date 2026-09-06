@@ -422,9 +422,7 @@ class AgentService:
         return await self.runtime.database.load_conversation(session_id)
 
 
-# ---------------------------------------------------------------------------
 # Rebuilding a run's receipt from what was logged, for resume
-# ---------------------------------------------------------------------------
 def _latest_run_id(events: list) -> str:
     """The id of the most recent run any event belongs to.
 

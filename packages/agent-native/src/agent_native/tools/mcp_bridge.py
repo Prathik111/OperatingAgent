@@ -62,9 +62,7 @@ _SANDBOX_NOTE = (
 )
 
 
-# ---------------------------------------------------------------------------
 # One MCP tool, wearing the agent's Tool coat
-# ---------------------------------------------------------------------------
 class MCPTool(Tool):
     """A single tool exposed by the gateway, made to look like any other Tool.
 
@@ -149,9 +147,7 @@ class MCPTool(Tool):
         return str(command).strip() or None
 
 
-# ---------------------------------------------------------------------------
 # The connection to the gateway
-# ---------------------------------------------------------------------------
 class MCPToolProvider:
     """Opens in-memory gateway links and lends out workspace-aware tools.
 
@@ -168,6 +164,7 @@ class MCPToolProvider:
         self._client: Any = None
         self._clients: dict[str, Any] = {}
         self._connect_lock = asyncio.Lock()
+        self._shutdown = False
 
     async def connect(self, root: str | None = None) -> list:
         """Open the connection and return one MCPTool per gateway tool.
@@ -180,6 +177,8 @@ class MCPToolProvider:
         """
         resolved = str(Path(root).expanduser().resolve()) if root else str(Path.cwd().resolve())
         async with self._connect_lock:
+            if self._shutdown:
+                raise RuntimeError("MCP tool provider is shut down")
             if resolved in self._clients:
                 return []
 
@@ -212,14 +211,16 @@ class MCPToolProvider:
 
     async def close(self) -> None:
         """End the connection. Safe to call more than once."""
-        clients, self._clients = self._clients, {}
-        self._client = None
-        for client in clients.values():
-            try:
-                await client.__aexit__(None, None, None)
-            except Exception:
-                # Best-effort teardown: if it's already closed there's nothing to do.
-                pass
+        async with self._connect_lock:
+            self._shutdown = True
+            clients, self._clients = self._clients, {}
+            self._client = None
+            for client in clients.values():
+                try:
+                    await client.__aexit__(None, None, None)
+                except Exception:
+                    # Best-effort teardown: if it's already closed there's nothing to do.
+                    pass
 
     def _client_for_context(self, context: Any) -> Any | None:
         """Resolve the MCP connection from the active native session."""
@@ -230,9 +231,9 @@ class MCPToolProvider:
                 root = str(Path(working_directory).expanduser().resolve())
             except (OSError, RuntimeError, ValueError):
                 return None
-            client = self._clients.get(root)
-            if client is not None:
-                return client
+            # A session with an explicit workspace must never silently borrow a
+            # client attached to another workspace.
+            return self._clients.get(root)
         # A direct MCPTool test or a single-root runtime can use the only client
         # even when no session context is available.
         if len(self._clients) == 1:
@@ -264,9 +265,7 @@ def _import_client() -> Any:
     return Client
 
 
-# ---------------------------------------------------------------------------
 # Permissions: infer honest flags from the tool's name
-# ---------------------------------------------------------------------------
 # Filesystem tools that only look.
 _FS_READS = {
     "read_file",
@@ -358,9 +357,7 @@ def _infer_permissions(name: str) -> ToolPermissions:
     return ToolPermissions()
 
 
-# ---------------------------------------------------------------------------
 # Shape helpers: MCP replies -> ToolResult, tolerant of version differences
-# ---------------------------------------------------------------------------
 def _spec_field(spec: Any, name: str, default: Any = None) -> Any:
     """Read a field off a tool spec, whether it's an object or a dict."""
     if spec is None:

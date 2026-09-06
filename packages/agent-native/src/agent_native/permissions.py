@@ -36,9 +36,7 @@ from typing import Any
 from .events import EventType
 
 
-# ---------------------------------------------------------------------------
 # Verdicts
-# ---------------------------------------------------------------------------
 class PermissionDecision(str, Enum):
     ALLOW = "allow"
     ASK = "ask"
@@ -58,9 +56,7 @@ class Decision:
     rule: str = ""
 
 
-# ---------------------------------------------------------------------------
 # Policies
-# ---------------------------------------------------------------------------
 class Policy(ABC):
     """Looks at one tool call and returns a verdict."""
 
@@ -309,9 +305,7 @@ class PolicyChain(Policy):
         return strictest
 
 
-# ---------------------------------------------------------------------------
 # Grants: remembering the user's answer
-# ---------------------------------------------------------------------------
 class PermissionDuration(str, Enum):
     ONCE = "once"        # just this call
     SESSION = "session"  # the rest of this session
@@ -408,9 +402,7 @@ class PermissionStore:
         await self._db.save_permission(grant)
 
 
-# ---------------------------------------------------------------------------
 # The request and the manager
-# ---------------------------------------------------------------------------
 @dataclass
 class PermissionRequest:
     """Exactly what the user is being asked to approve."""

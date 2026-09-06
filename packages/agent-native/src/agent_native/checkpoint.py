@@ -38,9 +38,7 @@ from .config import SKIPPED_NAMES
 from .hooks import HookContext, HookPoint
 
 
-# ---------------------------------------------------------------------------
 # The snapshot / mirror primitives
-# ---------------------------------------------------------------------------
 def _iter_files(root: str, skip: str | None = None):
     """Yield the path (relative to root) of every regular file under root.
 
@@ -133,9 +131,7 @@ def _mirror(src: str, dst: str) -> None:
                 pass  # not empty (a skipped symlink, say); leave it rather than fail
 
 
-# ---------------------------------------------------------------------------
 # A checkpoint and the store that holds them
-# ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class Checkpoint:
     """A single snapshot: which folder, where its copy lives, and when it was taken."""
@@ -273,9 +269,7 @@ def default_base_for(working_directory: str) -> str:
     return os.path.join(os.path.expanduser("~"), ".agent_native", "checkpoints", slug)
 
 
-# ---------------------------------------------------------------------------
 # The step-16 wiring: snapshot before a batch of edits
-# ---------------------------------------------------------------------------
 class AutoCheckpointer:
     """Snapshots the working folder before the first mutating tool of each run.
 

@@ -33,9 +33,7 @@ from common.tools import ToolCallResult, ToolInfo, ToolSchema
 from langchain_core.messages import AIMessage
 from langgraph.runtime import Runtime
 
-# ---------------------------------------------------------------------------
 # Config
-# ---------------------------------------------------------------------------
 
 
 def build_agent_config(
@@ -110,9 +108,7 @@ def build_agent_config(
     )
 
 
-# ---------------------------------------------------------------------------
 # Stub dependencies
-# ---------------------------------------------------------------------------
 
 
 DEFAULT_PLAN = AgentPlan(
@@ -270,9 +266,7 @@ def make_tool_info(name: str, description: str = "", risk_level: str = "safe") -
     )
 
 
-# ---------------------------------------------------------------------------
 # Context / runtime
-# ---------------------------------------------------------------------------
 
 
 def build_context(
@@ -314,9 +308,7 @@ def build_runtime(context: AgentContext) -> Runtime[AgentContext]:
     return Runtime(context=context)
 
 
-# ---------------------------------------------------------------------------
 # State helpers
-# ---------------------------------------------------------------------------
 
 
 def make_plan(*steps: PlanStep, summary: str = "plan summary",

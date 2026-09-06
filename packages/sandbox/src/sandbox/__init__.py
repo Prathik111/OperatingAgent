@@ -155,7 +155,10 @@ class ContainerPool:
             existing = self._runners.get(key)
             if existing is not None:
                 return existing
-            if not await self.available():
+            # ``available()`` only probes the Docker daemon. A successful daemon
+            # probe must not overwrite a previous image-readiness failure before
+            # docker run is attempted; probe() checks both conditions together.
+            if not await self.probe():
                 return None
             name = f"operating-agent-{uuid4().hex[:12]}"
             args = [

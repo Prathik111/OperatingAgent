@@ -134,11 +134,35 @@ async def planner_function(
             f"planner failed with provider {ctx.config.llm.provider}: {exc}"
         ) from exc
 
+    validated_plan = plan if isinstance(plan, AgentPlan) else AgentPlan.model_validate(plan)
+    validated_plan = _remove_synthesis_steps(validated_plan)
+
     log.info(
         "plan generated with provider %s for phase %s",
         ctx.config.llm.provider, phase.value,
     )
-    return plan if isinstance(plan, AgentPlan) else AgentPlan.model_validate(plan)
+    return validated_plan
+
+
+def _remove_synthesis_steps(plan: AgentPlan) -> AgentPlan:
+    """Keep planning executable and leave synthesis to the responder.
+
+    The planner occasionally returns a final no-tool step such as "suggest a
+    commit message". The executor cannot perform that step; treating its
+    description as output makes an instruction look like an observation in the
+    transcript. The responder already has the goal and tool results, so it is
+    the correct place to produce the requested prose or artifact.
+    """
+    executable = [step for step in plan.steps if step.tool_name]
+    dropped = len(plan.steps) - len(executable)
+    if dropped:
+        log.warning(
+            "planner returned %d non-executable synthesis step(s); "
+            "delegating synthesis to responder",
+            dropped,
+        )
+        plan = plan.model_copy(update={"steps": executable})
+    return plan
 
 
 async def PlannerNode(state: AgentState, runtime: Runtime[AgentContext]) -> dict:

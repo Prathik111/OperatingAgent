@@ -86,9 +86,7 @@ def _image_wire(text: str = "look") -> list:
     return [{"role": "user", "content": content}]
 
 
-# ---------------------------------------------------------------------------
 # Stand-in providers whose behaviour the test owns
-# ---------------------------------------------------------------------------
 class _VisionEcho:
     """A vision-capable stand-in: it reads the image off the wire and answers with
     something derived from it, which is how the test knows the media *reached* it
@@ -145,9 +143,7 @@ class _GatingTextModel:
         return 0
 
 
-# ---------------------------------------------------------------------------
 # Tiny doubles for the loop wiring (same shape as the routing tests use)
-# ---------------------------------------------------------------------------
 class _AllowAll(Policy):
     def check(self, context: Any, definition: Any, arguments: dict) -> Decision:
         return Decision(PermissionDecision.ALLOW, reason="allow-all")
@@ -182,9 +178,7 @@ def _context(session: Session, config: AgentConfig) -> RunContext:
     )
 
 
-# ---------------------------------------------------------------------------
 # media_part: how bytes become a carryable, serializable part
-# ---------------------------------------------------------------------------
 async def test_media_part_encodes_bytes() -> None:
     part = media_part(_PNG)
     assert part.is_image is True
@@ -204,9 +198,7 @@ async def test_document_media_is_not_an_image() -> None:
     assert part.is_image is False
 
 
-# ---------------------------------------------------------------------------
 # The message factory: text, media, or both
-# ---------------------------------------------------------------------------
 async def test_user_message_carries_text_and_media() -> None:
     msg = user_message("s", "look", media=[media_part(_PNG)])
     assert msg.role == Role.USER
@@ -220,9 +212,7 @@ async def test_media_only_user_message_has_no_empty_text_part() -> None:
     assert [p.part_type for p in msg.parts] == [PartType.MEDIA]
 
 
-# ---------------------------------------------------------------------------
 # render: a plain string when text-only, a typed list only when media is present
-# ---------------------------------------------------------------------------
 async def test_render_text_only_user_is_still_a_plain_string() -> None:
     """The backward-compatibility guard: no media -> content is the string it
     always was, which test_conversation.test_render_native_shape also asserts."""
@@ -280,9 +270,7 @@ async def test_estimate_tokens_counts_an_image() -> None:
     assert delta == _MEDIA_TOKEN_ESTIMATE
 
 
-# ---------------------------------------------------------------------------
 # The Ollama translation: OpenAI content-list -> plain text + an `images` field
-# ---------------------------------------------------------------------------
 async def test_ollama_splits_an_image_into_the_images_field() -> None:
     wire = [{"role": "system", "content": "sys"}] + _image_wire("look")
     out = _to_ollama_messages(wire)
@@ -304,9 +292,7 @@ async def test_data_url_prefix_is_stripped() -> None:
     assert _data_url_to_base64("") == ""
 
 
-# ---------------------------------------------------------------------------
 # Detecting media on the wire, and the one gate
-# ---------------------------------------------------------------------------
 async def test_wire_has_media_detects_an_image_url() -> None:
     assert wire_has_media(_image_wire()) is True
 
@@ -335,9 +321,7 @@ async def test_require_vision_support_allows_a_vision_model_and_plain_text() -> 
     require_vision_support([{"role": "user", "content": "hi"}], _model("t", "p"))
 
 
-# ---------------------------------------------------------------------------
 # The real adapters refuse media on a text-only model - offline, before any client
-# ---------------------------------------------------------------------------
 async def _first_step_error(agen) -> str:
     """Drive an async-generator stream one step and return the error it raised."""
     message = ""
@@ -377,9 +361,7 @@ async def test_ollama_adapter_refuses_media_on_a_text_only_model() -> None:
     assert "vision" in message.lower()
 
 
-# ---------------------------------------------------------------------------
 # The plan's verify, end to end
-# ---------------------------------------------------------------------------
 async def test_vision_model_gets_a_grounded_answer() -> None:
     """Half one: an image reaches a vision-capable model and the answer is
     grounded in it (the model names the media type it actually received)."""
@@ -430,9 +412,7 @@ async def test_text_only_model_reports_unsupported_rather_than_crashing() -> Non
     assert gate.calls == 1                        # fired once; permanent error, so no retry
 
 
-# ---------------------------------------------------------------------------
 # A plain-stdlib runner, so this file verifies on a box without pytest.
-# ---------------------------------------------------------------------------
 def _main() -> int:
     tests = [
         test_media_part_encodes_bytes,

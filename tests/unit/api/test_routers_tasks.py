@@ -36,8 +36,8 @@ async def test_get_task_reflects_completed_run(client, task_service):
     resp = await client.get(f"/tasks/{task_id}")
     assert resp.status_code == 200
     assert resp.json()["status"] == "completed"
-    assert resp.json()["output"] == "done"
     assert resp.json()["final_message"] == "done"
+    assert "output" not in resp.json()
     assert resp.json()["run_id"]
 
 
@@ -93,3 +93,4 @@ async def test_get_thread_scoped_task_is_returned_with_final_message(client, tas
     assert response.status_code == 200
     assert response.json()["thread_id"] == thread_id
     assert response.json()["final_message"] == "done"
+    assert "output" not in response.json()

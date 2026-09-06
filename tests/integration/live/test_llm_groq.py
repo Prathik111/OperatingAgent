@@ -27,9 +27,7 @@ from tests.support.langgraph import (
 )
 from tests.support.live import InlinePromptManager, build_live_config, groq_model
 
-# ---------------------------------------------------------------------------
 # The provider itself
-# ---------------------------------------------------------------------------
 
 
 def test_model_provider_builds_a_real_groq_model() -> None:
@@ -46,9 +44,7 @@ async def test_real_model_answers_a_plain_prompt() -> None:
     assert message.content.strip()
 
 
-# ---------------------------------------------------------------------------
 # Structured output — the capability the planner and verifier depend on
-# ---------------------------------------------------------------------------
 
 
 async def test_real_model_produces_a_valid_agent_plan() -> None:
@@ -84,9 +80,7 @@ async def test_real_model_produces_a_structured_verdict() -> None:
     assert verdict.success is True, "an obviously-correct step should verify"
 
 
-# ---------------------------------------------------------------------------
 # Nodes driven by the real model
-# ---------------------------------------------------------------------------
 
 
 async def test_planner_node_against_real_model_offers_real_tools() -> None:

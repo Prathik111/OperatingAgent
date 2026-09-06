@@ -100,9 +100,7 @@ def _tool_results(conv: Conversation) -> list:
     return [c for m in conv.messages if m.role == Role.TOOL for c in m.tool_calls()]
 
 
-# ---------------------------------------------------------------------------
 # At the loop: the conversation tail decides what resume does
-# ---------------------------------------------------------------------------
 async def test_a_pending_tool_call_is_finished_and_run_once() -> None:
     """A turn asked for a tool and died before the result was saved.
 
@@ -215,9 +213,7 @@ async def test_a_saved_final_answer_is_not_regenerated() -> None:
     assert events[-1].run_id == "run_kept"
 
 
-# ---------------------------------------------------------------------------
 # Through the service: reattach, and the finished-run no-op
-# ---------------------------------------------------------------------------
 async def test_resume_reattaches_and_finishes_the_run() -> None:
     """A crashed run, all messages on disk, is carried to a finish under its own id."""
     db = MemoryDatabase()
@@ -309,9 +305,7 @@ def provider_requests(loop: AgentLoop) -> list:
     return loop._models.get_provider(loop._models.get("scripted-1")).requests
 
 
-# ---------------------------------------------------------------------------
 # A plain-stdlib runner, so this file verifies on a box without pytest.
-# ---------------------------------------------------------------------------
 def _main() -> int:
     tests = [
         test_a_pending_tool_call_is_finished_and_run_once,

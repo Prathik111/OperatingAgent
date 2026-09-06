@@ -28,11 +28,11 @@ async def test_lists_threads_and_tasks_for_one_thread(client, task_service):
         first.json()["id"],
     ]
     assert [task["status"] for task in tasks] == ["completed", "completed"]
-    assert [task["output"] for task in tasks] == ["done", "done"]
+    assert [task["final_message"] for task in tasks] == ["done", "done"]
 
     nested = await client.get(f"/threads/{thread_id}/tasks/{first.json()['id']}")
     assert nested.status_code == 200
-    assert nested.json()["output"] == "done"
+    assert nested.json()["final_message"] == "done"
 
     mismatch = await client.get(
         f"/threads/other-thread/tasks/{first.json()['id']}"

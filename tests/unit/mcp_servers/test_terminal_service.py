@@ -23,9 +23,7 @@ def service() -> TerminalService:
     return TerminalService(allowed_commands=ALLOWED)
 
 
-# ---------------------------------------------------------------------------
 # _executable_name — normalising argv[0] to a comparable name
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -42,9 +40,7 @@ def test_executable_name(argument: str, expected: str) -> None:
     assert _executable_name(argument) == expected
 
 
-# ---------------------------------------------------------------------------
 # _authorize — the allowlist gate
-# ---------------------------------------------------------------------------
 
 
 def test_allowlisted_command_authorizes(service: TerminalService) -> None:
@@ -89,9 +85,7 @@ def test_non_allowlisted_executable_is_rejected(service: TerminalService, comman
         service._authorize(command)
 
 
-# ---------------------------------------------------------------------------
 # Allowlist sourcing from the environment
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.regression

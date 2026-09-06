@@ -17,9 +17,7 @@ def service() -> SearchService:
     return SearchService()
 
 
-# ---------------------------------------------------------------------------
 # Indexing / listing
-# ---------------------------------------------------------------------------
 
 
 def test_index_documents_reports_count(service: SearchService) -> None:
@@ -44,9 +42,7 @@ def test_reindexing_replaces_previous_documents(service: SearchService) -> None:
     assert len(service.search("docs", "new")["matches"]) == 1
 
 
-# ---------------------------------------------------------------------------
 # Search
-# ---------------------------------------------------------------------------
 
 
 def test_search_matches_substring_case_insensitively(service: SearchService) -> None:
@@ -66,9 +62,7 @@ def test_search_missing_index_raises_key_error(service: SearchService) -> None:
         service.search("nope", "anything")
 
 
-# ---------------------------------------------------------------------------
 # Deep-copy isolation
-# ---------------------------------------------------------------------------
 
 
 def test_mutating_source_after_index_does_not_change_index(service: SearchService) -> None:

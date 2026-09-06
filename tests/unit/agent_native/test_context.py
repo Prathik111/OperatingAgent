@@ -118,7 +118,6 @@ async def test_split_never_breaks_a_tool_pair():
     assert recent_roles.count("tool") == 1
 
 
-# ---------------------------------------------------------------------------
 # The better summary: the model writes it, the template catches the fall
 #
 # `compact()` above is a template - honest, deterministic, and a *list* of what
@@ -127,7 +126,6 @@ async def test_split_never_breaks_a_tool_pair():
 # the good path: it's that every way the model call can go wrong still ends in a
 # compacted conversation, because compaction runs exactly when the next request
 # would otherwise be too long to send.
-# ---------------------------------------------------------------------------
 def _failed_build_messages() -> list:
     call = ToolCall(
         id="c1", name="terminal_run_command", arguments={"command": "make"},

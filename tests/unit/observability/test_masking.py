@@ -13,9 +13,7 @@ from observability.masking import mask, mask_otel_spans
 REDACTED = "[REDACTED]"
 
 
-# ---------------------------------------------------------------------------
 # Key-based redaction
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.regression
@@ -36,9 +34,7 @@ def test_non_sensitive_keys_are_preserved() -> None:
     assert mask(data=data) == data
 
 
-# ---------------------------------------------------------------------------
 # Value-pattern redaction
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.regression
@@ -70,9 +66,7 @@ def test_ordinary_strings_pass_through() -> None:
     assert mask(data="just a normal message") == "just a normal message"
 
 
-# ---------------------------------------------------------------------------
 # Email / PII redaction
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.regression
@@ -89,9 +83,7 @@ def test_email_embedded_in_free_text_is_replaced_in_place() -> None:
     assert masked.startswith("ping me at ") and masked.endswith(" anytime")
 
 
-# ---------------------------------------------------------------------------
 # Recursion & container handling
-# ---------------------------------------------------------------------------
 
 
 def test_nested_structures_are_masked_recursively() -> None:
@@ -125,9 +117,7 @@ def test_non_string_dict_keys_are_handled() -> None:
     assert mask(data={1: "value", 2: "other"}) == {1: "value", 2: "other"}
 
 
-# ---------------------------------------------------------------------------
 # Never-raises contract
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.regression
@@ -154,9 +144,7 @@ def test_mask_accepts_extra_kwargs() -> None:
     assert mask(data="plain", extra="ignored", another=1) == "plain"
 
 
-# ---------------------------------------------------------------------------
 # Export-stage OpenTelemetry span masking (mask_otel_spans)
-# ---------------------------------------------------------------------------
 
 
 class _FakeSpan:

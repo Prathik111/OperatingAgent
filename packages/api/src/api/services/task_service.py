@@ -109,10 +109,11 @@ class TaskService:
                 resolved_thread_id, asyncio.Lock()
             )
         await lifecycle_lock.acquire()
+        if resolved_thread_id in self._active_thread_ids:
+            lifecycle_lock.release()
+            raise TaskAlreadyRunning(resolved_thread_id)
+        self._active_thread_ids.add(resolved_thread_id)
         try:
-            if resolved_thread_id in self._active_thread_ids:
-                raise TaskAlreadyRunning(resolved_thread_id)
-            self._active_thread_ids.add(resolved_thread_id)
             continuing_thread = False
             existing_tasks: list[tuple[AgentTask, RunStatus | None]] = []
             if thread_id is not None:

@@ -56,9 +56,7 @@ def _service(db: MemoryDatabase, provider: ScriptedProvider) -> AgentService:
     return AgentService(runtime)
 
 
-# ---------------------------------------------------------------------------
 # fork: history is copied, the source is untouched
-# ---------------------------------------------------------------------------
 async def test_fork_copies_history_into_an_independent_session() -> None:
     """The fork begins knowing everything the source knew, under new ids."""
     db = MemoryDatabase()
@@ -100,9 +98,7 @@ async def test_forking_a_missing_session_is_a_clean_error() -> None:
     assert raised
 
 
-# ---------------------------------------------------------------------------
 # The headline promise: forked sessions have independent event streams
-# ---------------------------------------------------------------------------
 async def test_forked_sessions_have_independent_event_streams() -> None:
     """Fork a session, diverge the two, confirm each has its own event stream.
 
@@ -142,9 +138,7 @@ async def test_forked_sessions_have_independent_event_streams() -> None:
     assert (await db.load_events(fork.id, 0))[-1].sequence == b_tip  # the fork was untouched
 
 
-# ---------------------------------------------------------------------------
 # delete: everything under the session goes; the global notes/grants stay
-# ---------------------------------------------------------------------------
 async def test_delete_removes_a_session_and_its_data_but_spares_global_notes() -> None:
     """Delete takes the session, messages, events, runs, and its own grants/notes.
 
@@ -194,9 +188,7 @@ async def test_delete_removes_a_session_and_its_data_but_spares_global_notes() -
     assert await service.delete_session(session.id) is False
 
 
-# ---------------------------------------------------------------------------
 # The CLI surface drives the same service, offline
-# ---------------------------------------------------------------------------
 async def test_sessions_cli_list_fork_delete() -> None:
     """`sessions list|fork|delete` against an open store, no argparse, no Postgres.
 
@@ -275,9 +267,7 @@ def test_render_sessions_table_folds_the_last_receipt_onto_each_line() -> None:
     assert " - " in f" {no_run} "        # the no-run row shows a dash for its last run
 
 
-# ---------------------------------------------------------------------------
 # A plain-stdlib runner, so this file verifies on a box without pytest.
-# ---------------------------------------------------------------------------
 def _main() -> int:
     async_tests = [
         test_fork_copies_history_into_an_independent_session,

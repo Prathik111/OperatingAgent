@@ -76,9 +76,7 @@ from file_server.services.filesystem_service import FileSystemService
 from file_server.tools.edit_file import register_edit_file
 
 
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
 def _service(root: str) -> FileSystemService:
     return FileSystemService(root=Path(root).resolve())
 
@@ -139,9 +137,7 @@ def _raises(fn, exc) -> Exception | None:
     return None
 
 
-# ---------------------------------------------------------------------------
 # The service: the plan's verify and the fail-safe neighbours
-# ---------------------------------------------------------------------------
 def test_surgical_edit_changes_only_the_target_region() -> None:
     # The plan's verify, half one: a large file, one region changed, the rest
     # left byte-for-byte. Proven two ways - the whole file equals the original
@@ -285,9 +281,7 @@ def test_return_payload_reports_replacements_and_byte_sizes() -> None:
         assert result["encoding"] == "utf-8"
 
 
-# ---------------------------------------------------------------------------
 # The tool wrapper: its input validation forwards to the service
-# ---------------------------------------------------------------------------
 def test_wrapper_forwards_a_valid_edit_to_the_service() -> None:
     # The real wrapper, driven without FastMCP, does the edit through the service.
     with tempfile.TemporaryDirectory() as root:
@@ -308,9 +302,7 @@ def test_wrapper_rejects_empty_path_and_anchor() -> None:
     assert _raises(lambda: edit(path="f.txt", old_string="", new_string="b"), ValueError) is not None
 
 
-# ---------------------------------------------------------------------------
 # A plain-stdlib runner, so this file verifies on a box without pytest.
-# ---------------------------------------------------------------------------
 def _main() -> int:
     tests = [
         test_surgical_edit_changes_only_the_target_region,
