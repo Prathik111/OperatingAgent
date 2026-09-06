@@ -17,12 +17,28 @@ jobs:
   checks:
     name: Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: operating_agent
+          POSTGRES_PASSWORD: operating_agent_dev
+          POSTGRES_DB: operating_agent
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U operating_agent -d operating_agent"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.12", "3.13"]
     env:
       COVERAGE_FILE: .coverage-ci
+      DATABASE_URL: postgresql://operating_agent:operating_agent_dev@127.0.0.1:5432/operating_agent
+      OPERATING_AGENT_POSTGRES_DSN: postgresql://operating_agent:operating_agent_dev@127.0.0.1:5432/operating_agent
 
     steps:
       - name: Check out repository
@@ -43,6 +59,25 @@ jobs:
 
       - name: Compile packages
         run: uv run python -m compileall -q packages
+
+      - name: Initialize PostgreSQL schema
+        run: |
+          docker run --rm --network host \
+            -v "$GITHUB_WORKSPACE/infra/docker/postgres:/schema:ro" \
+            -e PGPASSWORD=operating_agent_dev \
+            postgres:16-alpine \
+            psql --host 127.0.0.1 --port 5432 --username operating_agent --dbname operating_agent \
+            -v ON_ERROR_STOP=1 \
+            -f /schema/schema.sql
+          for migration in 002_native_conversation.sql 003_import_legacy_agent_native.sql 004_schema_hardening.sql 005_native_message_id.sql; do
+            docker run --rm --network host \
+              -v "$GITHUB_WORKSPACE/infra/docker/postgres:/schema:ro" \
+              -e PGPASSWORD=operating_agent_dev \
+              postgres:16-alpine \
+              psql --host 127.0.0.1 --port 5432 --username operating_agent --dbname operating_agent \
+              -v ON_ERROR_STOP=1 \
+              -f "/schema/migrations/$migration"
+          done
 
       - name: Tests with coverage
         run: uv run pytest --cov=packages --cov-report=term-missing --cov-report=xml:coverage-ci.xml --cov-fail-under=80
