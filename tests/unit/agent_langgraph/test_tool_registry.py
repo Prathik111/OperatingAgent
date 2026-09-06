@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from agent_langgraph.runtime.tool_registry import ToolRegistry
 from common.config import SandboxConfig, ToolPermissionConfig
-from common.tools import ToolCallRequest, ToolCallResult
+from common.tools import ToolCallRequest, ToolCallResult, ToolInfo, ToolSchema
 
 from tests.support.langgraph import make_tool_info
 
@@ -127,3 +127,93 @@ async def test_registry_allows_uncategorized_paths_for_explicitly_isolated_adapt
     result = await registry.call_by_name("custom_read", {"path": "../outside.txt"})
 
     assert result.success is True
+
+
+async def test_registry_expands_user_paths_before_workspace_validation(tmp_path) -> None:
+    adapter = FakeAdapter()
+    registry = ToolRegistry(
+        adapter,
+        sandbox=SandboxConfig(enabled=True, workspace=tmp_path),
+    )
+
+    result = await registry.call_by_name("custom_read", {"path": "~/.ssh/id_rsa"})
+
+    assert result.success is False
+    assert "escapes" in (result.error or "")
+    assert adapter.received == []
+
+
+async def test_registry_uses_schema_path_fields_for_uncategorized_tools(tmp_path) -> None:
+    tool = ToolInfo(
+        name="custom_command",
+        description="custom command",
+        schema=ToolSchema(
+            input_schema={
+                "type": "object",
+                "properties": {"cwd": {"type": "string"}},
+            },
+            output_schema={},
+        ),
+    )
+    adapter = FakeAdapter(tools=[tool])
+    registry = ToolRegistry(
+        adapter,
+        sandbox=SandboxConfig(enabled=True, workspace=tmp_path),
+    )
+
+    result = await registry.call_by_name(
+        "custom_command", {"cwd": "../outside"}
+    )
+
+    assert result.success is False
+    assert "escapes" in (result.error or "")
+    assert adapter.received == []
+
+
+async def test_registry_uses_explicit_tool_path_field_policy(tmp_path) -> None:
+    adapter = FakeAdapter()
+    registry = ToolRegistry(
+        adapter,
+        sandbox=SandboxConfig(enabled=True, workspace=tmp_path),
+        tool_path_fields={"custom_open": {"location"}},
+    )
+
+    result = await registry.call_by_name(
+        "custom_open", {"location": "../outside.txt"}
+    )
+
+    assert result.success is False
+    assert "escapes" in (result.error or "")
+    assert adapter.received == []
+
+
+async def test_registry_uses_array_item_path_format(tmp_path) -> None:
+    tool = ToolInfo(
+        name="custom_batch",
+        description="custom batch operation",
+        schema=ToolSchema(
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "targets": {
+                        "type": "array",
+                        "items": {"type": "string", "format": "path"},
+                    }
+                },
+            },
+            output_schema={},
+        ),
+    )
+    adapter = FakeAdapter(tools=[tool])
+    registry = ToolRegistry(
+        adapter,
+        sandbox=SandboxConfig(enabled=True, workspace=tmp_path),
+    )
+
+    result = await registry.call_by_name(
+        "custom_batch", {"targets": ["inside.txt", "../outside.txt"]}
+    )
+
+    assert result.success is False
+    assert "escapes" in (result.error or "")
+    assert adapter.received == []
