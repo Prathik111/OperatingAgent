@@ -108,26 +108,39 @@ async def ResponderNode(state: AgentState, runtime: Runtime[AgentContext]) -> di
     try:
         system_prompt = ctx.prompt_manager.responder()
         model = ctx.model_provider.get_model()
-        outcome = "succeeded" if succeeded else "failed"
-        context_block = (
-            f"Original goal:\n{goal}\n\n"
-            f"The run {outcome}. Final-phase execution transcript:\n{transcript}\n"
-        )
-        if findings_block:
-            context_block += (
-                f"\nObservations accumulated across all phases:{findings_block}\n"
+        direct_answer = succeeded and not (plan and plan.steps) and not findings
+        if direct_answer:
+            # An empty plan is intentional for greetings, factual questions, and
+            # other requests that need no external action. Ask the responder to
+            # answer the goal itself instead of turning the absence of tools into
+            # a misleading execution report.
+            request = (
+                f"Original user request:\n{goal}\n\n"
+                "Answer the user's request directly and concisely. No external "
+                "actions were needed, so do not mention planning, steps, tools, "
+                "or an execution transcript."
+            )
+        else:
+            outcome = "succeeded" if succeeded else "failed"
+            context_block = (
+                f"Original goal:\n{goal}\n\n"
+                f"The run {outcome}. Final-phase execution transcript:\n{transcript}\n"
+            )
+            if findings_block:
+                context_block += (
+                    f"\nObservations accumulated across all phases:{findings_block}\n"
+                )
+            request = context_block + "\n" + (
+                "Write a concise final answer for the user based on the results "
+                "above. Report what was found and what was done about it."
+                if succeeded
+                else
+                f"Explain honestly what was attempted and why it did not complete "
+                f"(reason: {last_error}). Do not fabricate success."
             )
         response = await model.ainvoke([
             SystemMessage(content=system_prompt),
-            HumanMessage(content=(
-                context_block
-                + "\n"
-                + ("Write a concise final answer for the user based on the results "
-                   "above. Report what was found and what was done about it."
-                   if succeeded else
-                   f"Explain honestly what was attempted and why it did not complete "
-                   f"(reason: {last_error}). Do not fabricate success.")
-            )),
+            HumanMessage(content=request),
         ])
         answer = response.content if isinstance(response.content, str) else str(response.content)
         if not answer.strip():

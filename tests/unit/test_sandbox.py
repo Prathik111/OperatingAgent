@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
+from agent_native.tools.base import ToolResult
 from sandbox import ContainerPool
 
 
@@ -54,6 +55,28 @@ async def test_invalid_workspace_does_not_start_a_container(monkeypatch, tmp_pat
     assert await pool.get("session", str(tmp_path / "missing")) is None
     assert not called
     assert "workspace does not exist" in pool.reason
+
+
+async def test_native_command_fails_closed_when_docker_is_unavailable(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("sandbox.shutil.which", lambda _name: None)
+    pool = ContainerPool()
+
+    class _Tool:
+        @staticmethod
+        def sandbox_command(_arguments):
+            return "echo unrestricted"
+
+    class _Session:
+        id = "session"
+        working_directory = str(tmp_path)
+
+    class _Context:
+        session = _Session()
+
+    result = await pool.run(_Tool(), {}, _Context(), 1)
+    assert isinstance(result, ToolResult)
+    assert result.success is False
+    assert "Docker CLI is not installed" in result.error
 
 
 async def test_get_mounts_workspace_and_close_releases_container(monkeypatch, tmp_path) -> None:

@@ -174,8 +174,13 @@ async def test_native_permission_endpoints_list_get_and_resolve(native_client) -
         arguments={"path": "notes/today.md"},
         preview="write notes/today.md",
         reason="mutating tool",
+        session_id="session-1",
     )
-    service.pending_permissions = lambda: [request]
+    service.pending_permissions = lambda session_id="": [
+        pending
+        for pending in [request]
+        if not session_id or pending.session_id == session_id
+    ]
     resolved: dict = {}
 
     async def resolve_permission(call_id, allowed, duration, scope):

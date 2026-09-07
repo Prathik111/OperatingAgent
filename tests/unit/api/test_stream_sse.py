@@ -27,6 +27,19 @@ async def test_sse_replays_history_and_terminates(client, repository, broker):
     assert "event: state" in body
     assert "event: finished" in body
 
+    scoped = await client.get("/threads/th/tasks/t-sse/events")
+    assert scoped.status_code == 200
+    assert "event: state" in scoped.text
+
+
+async def test_sse_rejects_a_task_from_another_thread(client, repository):
+    task = AgentTask(id="t-scoped", goal="g", thread_id="th-a", track=AgentTrack.NATIVE)
+    await repository.save_task(task)
+
+    response = await client.get("/threads/th-b/tasks/t-scoped/events")
+
+    assert response.status_code == 404
+
 
 async def test_sse_unknown_task_is_404(client):
     resp = await client.get("/tasks/nope/events")

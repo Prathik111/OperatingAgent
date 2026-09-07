@@ -75,7 +75,6 @@ export interface TaskResponse {
   workspace: string | null;
   track: AgentTrack;
   status: string | null;
-  output: string | null;
   final_message: string | null;
   error: string | null;
   run_id: string | null;

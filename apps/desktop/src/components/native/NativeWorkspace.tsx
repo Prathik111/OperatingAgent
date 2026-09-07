@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { nativeApi } from "../../lib/api";
+import { nativeApi, readSSEStream } from "../../lib/api";
 import type { EventResponse, PermissionResponse, RunResponse, SessionResponse } from "../../lib/types";
+import { loadSettings, saveSettings } from "../SettingsModal";
 import { Card, Label } from "../layout/Shell";
 
 function useNativeHealth() {
@@ -26,11 +27,40 @@ export function NativeWorkspace() {
   const [runs, setRuns] = useState<RunResponse[]>([]);
   const [permissions, setPermissions] = useState<PermissionResponse[]>([]);
   const [composer, setComposer] = useState("");
-  const [limits, setLimits] = useState({ max_turns: 10, max_cost_usd: 0.05, plan_mode: false, reasoning_effort: "" });
+  const [limits, setLimits] = useState(() => {
+    const settings = loadSettings();
+    return {
+      max_turns: Number(settings.maxTurns) || 10,
+      max_cost_usd: Number(settings.maxCost) || 0.05,
+      plan_mode: false,
+      reasoning_effort: "",
+    };
+  });
   const [sending, setSending] = useState(false);
   const [streamLog, setStreamLog] = useState<string[]>([]);
   const [newTitle, setNewTitle] = useState("");
-  const [newWorkspace, setNewWorkspace] = useState(".");
+  const [newWorkspace, setNewWorkspace] = useState(() => loadSettings().workspace || ".");
+  useEffect(() => {
+    const onSettings = (event: Event) => {
+      const settings = (event as CustomEvent<ReturnType<typeof loadSettings>>).detail;
+      const next = settings?.workspace;
+      if (typeof next === "string" && next.trim()) {
+        setNewWorkspace(next);
+        setLimits((current) => ({
+          ...current,
+          max_turns: Number(settings.maxTurns) || 10,
+          max_cost_usd: Number(settings.maxCost) || 0.05,
+        }));
+        setSelected(null);
+        setDetail(null);
+        setConversation(null);
+        setEvents([]);
+        setRuns([]);
+      }
+    };
+    window.addEventListener("operating-agent:settings", onSettings);
+    return () => window.removeEventListener("operating-agent:settings", onSettings);
+  }, []);
   const [newAgent, setNewAgent] = useState("build");
   const [forkTitle, setForkTitle] = useState("");
   const [activeTab, setActiveTab] = useState<"conversation" | "events" | "runs" | "permissions">("conversation");
@@ -38,14 +68,14 @@ export function NativeWorkspace() {
 
   const refreshSessions = useCallback(async () => {
     try {
-      const list = await nativeApi.listSessions({ limit: 100 });
+      const list = await nativeApi.listSessions({ workspace: newWorkspace, limit: 100 });
       setSessions(list);
       setSessionsErr(null);
       if (!selected && list[0]) setSelected(list[0].id);
     } catch (e) {
       setSessionsErr((e as Error).message);
     }
-  }, [selected]);
+  }, [newWorkspace, selected]);
 
   const refreshDetail = useCallback(async (id: string) => {
     try {
@@ -76,12 +106,6 @@ export function NativeWorkspace() {
   useEffect(() => {
     if (selected) refreshDetail(selected);
   }, [selected, refreshDetail]);
-
-  // poll permissions globally too
-  useEffect(() => {
-    const t = setInterval(() => nativeApi.listPermissions().then(setPermissions).catch(() => {}), 2500);
-    return () => clearInterval(t);
-  }, []);
 
   const onCreate = async () => {
     try {
@@ -139,23 +163,9 @@ export function NativeWorkspace() {
         const t = await res.text().catch(() => "");
         throw new Error(`${res.status} ${res.statusText} ${t.slice(0, 300)}`);
       }
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = "";
-      const onChunk = (chunk: string) => {
-        buf += chunk;
-        const frames = buf.split("\n\n");
-        buf = frames.pop() || "";
-        for (const f of frames) {
-          if (f.trim()) setStreamLog((prev) => [...prev.slice(-200), f.trim()]);
-        }
-      };
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        onChunk(decoder.decode(value, { stream: true }));
-      }
-      if (buf.trim()) setStreamLog((prev) => [...prev, buf.trim()]);
+      await readSSEStream(res.body, (event) => {
+        setStreamLog((prev) => [...prev.slice(-200), `${event.event}: ${event.data}`]);
+      });
       setComposer("");
       if (selected) refreshDetail(selected);
     } catch (e) {
@@ -215,7 +225,7 @@ export function NativeWorkspace() {
           <div className="grid gap-2">
             <input value={newTitle} onChange={(e) => setNewTitle(e.target.value)} placeholder="Title (optional)" className="h-8 px-2 rounded-lg text-[12px] outline-none" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)", color: "var(--fg-0)" }} />
             <div className="flex gap-2">
-              <input value={newWorkspace} onChange={(e) => setNewWorkspace(e.target.value)} placeholder="workspace" className="flex-1 h-8 px-2 rounded-lg text-[12px] font-mono outline-none" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)", color: "var(--fg-0)" }} />
+              <input value={newWorkspace} onChange={(e) => { const next = e.target.value; setNewWorkspace(next); saveSettings({ ...loadSettings(), workspace: next || "." }); }} placeholder="workspace" className="flex-1 h-8 px-2 rounded-lg text-[12px] font-mono outline-none" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)", color: "var(--fg-0)" }} />
               <input value={newAgent} onChange={(e) => setNewAgent(e.target.value)} placeholder="agent" className="w-20 h-8 px-2 rounded-lg text-[12px] outline-none" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)", color: "var(--fg-0)" }} />
             </div>
             <button onClick={onCreate} className="btn-grad h-8 rounded-lg text-[12px] font-medium" style={{ color: "white", border: "1px solid transparent" }}>

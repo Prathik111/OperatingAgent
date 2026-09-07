@@ -9,10 +9,9 @@ reads when it decides whether to just allow the call or stop and ask.
 `ExecutionMode` is the one that matters most for safety: DIRECT runs inside the
 agent, HOST_PROCESS runs in a child process with the user's full privileges, and
 SANDBOX runs locked in a container. The MCP tools (reached in-memory) run DIRECT,
-except a shell command, which is marked SANDBOX - so it runs in a container when
-the machine has Docker, and in a child process with the old allowlist when it
-doesn't. Either way the policy always asks first: a container stops a command from
-reaching the rest of the machine, not from wrecking the user's own project.
+except a shell command, which is marked SANDBOX and therefore requires a working
+Docker sandbox when the API config enables sandboxing. A configured sandbox mounts
+only the selected workspace at `/workspace` and has networking disabled.
 """
 
 from __future__ import annotations

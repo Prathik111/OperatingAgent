@@ -86,9 +86,9 @@ class AgentRuntime:
         )
         self.permission_store = PermissionStore(self.database)
         self.permissions = PermissionManager(self.permission_store, self.events)
-        # Where shell commands run. None means "in this process, like everything
-        # else" - the caller decides, because starting containers is the caller's
-        # cost to accept (see tools/sandbox.py).
+        # Where sandbox-marked shell commands run. An explicitly disabled sandbox
+        # leaves legacy direct-tool behavior available to CLI callers; the API
+        # desktop path enables it by default and fails closed when Docker is absent.
         self.sandbox = sandbox
         self.tool_manager = ToolManager(
             self.tools, self.policy, self.permissions, sandbox=sandbox
@@ -408,9 +408,9 @@ class AgentService:
         """
         await self.runtime.permissions.resolve(call_id, allowed, duration, scope)
 
-    def pending_permissions(self) -> list:
+    def pending_permissions(self, session_id: str = "") -> list:
         """Permission prompts currently waiting on the user."""
-        return self.runtime.permissions.pending()
+        return self.runtime.permissions.pending(session_id)
 
     async def subscribe(self, session_id: str, from_sequence: int = 0):
         """Stream a session's events, catching up from `from_sequence` first."""

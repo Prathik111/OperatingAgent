@@ -20,11 +20,25 @@ class GitService:
     #: Upper bound applied to caller-supplied commit counts.
     MAX_LOG_COUNT = 1000
 
-    def __init__(self, logger: logging.Logger | None = None) -> None:
+    def __init__(self, logger: logging.Logger | None = None, *, root: str | Path | None = None) -> None:
         self.logger = logger or LOGGER
+        self.root = Path(root).expanduser().resolve() if root else None
+        if self.root is not None and not self.root.is_dir():
+            raise ValueError(f"git workspace does not exist: {self.root}")
+
+    def _repository(self, repository: str) -> Path:
+        candidate = Path(repository).expanduser()
+        if not candidate.is_absolute():
+            candidate = (self.root or Path.cwd()) / candidate
+        resolved = candidate.resolve()
+        if self.root is not None and not resolved.is_relative_to(self.root):
+            raise PermissionError(f"git repository escapes workspace: {resolved}")
+        if not resolved.is_dir():
+            raise NotADirectoryError(f"git repository does not exist: {resolved}")
+        return resolved
 
     def _run(self, repository: str, *args: str) -> str:
-        repository_path = Path(repository).expanduser().resolve()
+        repository_path = self._repository(repository)
         result = subprocess.run(
             ["git", *args],
             cwd=repository_path,

@@ -51,6 +51,9 @@ async def test_responder_trivial_empty_plan_succeeds(agent_config) -> None:
     state = make_state(plan=make_plan(), last_error=None)
     delta = await run_responder(agent_config, state, model=model)
     assert delta["status"] is TaskStatus.COMPLETED
+    request = model.invocations[0][1].content.lower()
+    assert "original user request:" in request
+    assert "execution completed successfully" not in request
 
 
 # Failure paths — the responder must never dress a failure up as success

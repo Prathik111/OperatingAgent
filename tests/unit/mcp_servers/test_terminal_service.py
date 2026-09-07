@@ -96,3 +96,17 @@ def test_default_allowlist_comes_from_environment() -> None:
     service = TerminalService()
     assert "echo" in service.allowed_commands
     assert "rm" not in service.allowed_commands
+
+
+@pytest.mark.regression
+def test_workspace_root_is_used_for_commands(tmp_path) -> None:
+    service = TerminalService(allowed_commands=frozenset({"pwd"}), root=tmp_path)
+    payload = service.run_command("pwd")
+    assert str(tmp_path) in payload["stdout"] or str(tmp_path) in payload["cwd"]
+
+
+@pytest.mark.regression
+def test_workspace_root_rejects_an_outside_cwd(tmp_path) -> None:
+    service = TerminalService(allowed_commands=frozenset({"pwd"}), root=tmp_path)
+    with pytest.raises(PermissionError):
+        service.run_command("pwd", cwd=str(tmp_path.parent))

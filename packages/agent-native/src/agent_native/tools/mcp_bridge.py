@@ -26,9 +26,9 @@ do its job. And every failure the gateway reports comes back as a failed
 
 Those flags are also where the shell tool gets marked `SANDBOX`, which is how it
 ends up running inside a container instead of in this process (see
-`tools/sandbox.py`). Nothing else about this module changes for that: the tool
-still describes itself the same way, and if there's no container to be had, the
-call comes back here and runs through the gateway as it always did.
+`tools/sandbox.py`). If the configured sandbox cannot be created, the call
+returns a failed result instead of falling through to an unrestricted host
+process.
 """
 
 from __future__ import annotations
@@ -56,9 +56,9 @@ _SANDBOX_NOTE = (
     "\n\nThis usually runs in a locked container: the project folder is the working "
     "directory (mounted at /workspace), there is no network, and nothing outside the "
     "project folder and /tmp is writable. Use paths relative to the project folder - "
-    "an absolute path from the user's machine won't exist in there. On a machine "
-    "without Docker it falls back to running on the user's machine, where only a "
-    "short list of inspection commands is permitted."
+    "an absolute path from the user's machine won't exist in there. If Docker or "
+    "the sandbox image is unavailable, the command fails instead of running on the "
+    "host."
 )
 
 
@@ -334,9 +334,8 @@ def _infer_permissions(name: str) -> ToolPermissions:
         if rest == "list_processes":
             return ToolPermissions(read_only=True)
         # run_command is a real shell. Marked SANDBOX so the manager routes it into
-        # the session's container; on a machine without Docker that routing falls
-        # through and it runs as a child process here instead, still behind the
-        # terminal server's allowlist. The prompt happens either way.
+        # the session's container. An unavailable configured sandbox is a failed
+        # tool result, never an implicit host-process fallback.
         return ToolPermissions(
             destructive=True,
             reaches_paths=True,

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { taskApi } from "../../lib/api";
+import { sseSubscribe, taskApi } from "../../lib/api";
 import type { ApprovalResponse, HealthResponse, TaskResponse, ThreadEventResponse, ThreadResponse } from "../../lib/types";
+import { loadSettings, saveSettings } from "../SettingsModal";
 import { Card, Label } from "../layout/Shell";
 
 function useHealth() {
@@ -23,7 +24,21 @@ export function LangGraphWorkspace() {
   const [approvals, setApprovals] = useState<ApprovalResponse[]>([]);
   const [goal, setGoal] = useState("");
   const [track, setTrack] = useState<"native" | "langgraph">("langgraph");
-  const [workspace, setWorkspace] = useState(".");
+  const [workspace, setWorkspace] = useState(() => loadSettings().workspace || ".");
+  useEffect(() => {
+    const onSettings = (event: Event) => {
+      const next = (event as CustomEvent<{ workspace?: string }>).detail?.workspace;
+      if (typeof next === "string" && next.trim() && next !== workspace) {
+        setWorkspace(next);
+        setSelectedThread(null);
+        setSelectedTask(null);
+        setTasks([]);
+        setThreadEvents([]);
+      }
+    };
+    window.addEventListener("operating-agent:settings", onSettings);
+    return () => window.removeEventListener("operating-agent:settings", onSettings);
+  }, [workspace]);
   const [streamLog, setStreamLog] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState<"tasks" | "events" | "approvals" | "stream">("tasks");
 
@@ -42,18 +57,20 @@ export function LangGraphWorkspace() {
     try {
       const list = await taskApi.listThreadTasks(tid, { limit: 100 });
       setTasks(list);
+      if (list[0]?.workspace && list[0].workspace !== workspace) {
+        setWorkspace(list[0].workspace);
+        saveSettings({ ...loadSettings(), workspace: list[0].workspace });
+      }
       if (!selectedTask && list[0]) setSelectedTask(list[0].id);
       const ev = await taskApi.listThreadEvents(tid).catch(() => [] as ThreadEventResponse[]);
       setThreadEvents(ev);
     } catch {
       // ignore
     }
-  }, [selectedTask]);
+  }, [selectedTask, workspace]);
 
   useEffect(() => {
     refreshThreads();
-    const t = setInterval(() => taskApi.listApprovals().then(setApprovals).catch(() => {}), 2500);
-    return () => clearInterval(t);
   }, [refreshThreads]);
 
   useEffect(() => {
@@ -61,11 +78,35 @@ export function LangGraphWorkspace() {
   }, [selectedThread, refreshTasks]);
 
   useEffect(() => {
-    if (selectedThread) {
-      const id = setInterval(() => refreshTasks(selectedThread), 3000);
-      return () => clearInterval(id);
-    }
-  }, [selectedThread, refreshTasks]);
+    if (!selectedThread || !tasks.some((task) => ["created", "pending", "running"].includes(task.status || ""))) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      await refreshTasks(selectedThread);
+      if (!stopped) timer = setTimeout(poll, 3000);
+    };
+    timer = setTimeout(poll, 3000);
+    return () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [selectedThread, tasks, refreshTasks]);
+
+  useEffect(() => {
+    if (!selectedThread || (!tasks.some((task) => ["created", "pending", "running"].includes(task.status || "")) && approvals.length === 0)) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      const next = await taskApi.listApprovals().catch(() => null);
+      if (!stopped && next) setApprovals(next.filter((approval) => tasks.some((task) => task.id === approval.task_id)));
+      if (!stopped) timer = setTimeout(poll, 2500);
+    };
+    timer = setTimeout(poll, 2500);
+    return () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [selectedThread, tasks, approvals.length]);
 
   const onCreateTask = async (threadId?: string) => {
     if (!goal.trim()) return;
@@ -96,9 +137,8 @@ export function LangGraphWorkspace() {
     }
     try {
       // try thread-scoped first if we have a thread
-      const t = selectedThread
-        ? await taskApi.resumeThreadTask(selectedThread, selectedTask, { resume_value: parsed })
-        : await taskApi.resumeTask(selectedTask, { resume_value: parsed });
+      if (!selectedThread) return;
+      const t = await taskApi.resumeTask(selectedThread, selectedTask, { resume_value: parsed });
       setStreamLog((prev) => [...prev, `POST resume → ${t.id} status=${t.status}`]);
       if (selectedThread) refreshTasks(selectedThread);
     } catch (e) {
@@ -117,21 +157,23 @@ export function LangGraphWorkspace() {
   };
 
   const openSSE = () => {
-    if (!selectedTask) return;
-    const url = taskApi.streamEventsUrl(selectedTask);
-    const es = new EventSource(url);
-    setStreamLog((prev) => [...prev, `GET ${url} — SSE open`]);
-    es.onmessage = (e) => setStreamLog((prev) => [...prev.slice(-200), `sse: ${e.data.slice(0, 300)}`]);
-    es.onerror = () => {
+    if (!selectedTask || !selectedThread) return;
+    const url = taskApi.streamEventsUrl(selectedThread, selectedTask);
+    let closeStream = () => {};
+    closeStream = sseSubscribe(url, (event) => {
+      setStreamLog((prev) => [...prev.slice(-200), `${event.event}: ${event.data.slice(0, 300)}`]);
+      if (event.event === "finished" || event.event === "error") closeStream();
+    }, () => {
       setStreamLog((prev) => [...prev, "sse error/closed"]);
-      es.close();
-    };
-    setTimeout(() => es.close(), 30000);
+      closeStream();
+    });
+    setStreamLog((prev) => [...prev, `GET ${url} — SSE open`]);
+    setTimeout(closeStream, 30000);
   };
 
   const openWS = () => {
-    if (!selectedTask) return;
-    const url = taskApi.wsStreamUrl(selectedTask);
+    if (!selectedTask || !selectedThread) return;
+    const url = taskApi.wsStreamUrl(selectedThread, selectedTask);
     setStreamLog((prev) => [...prev, `WS ${url} — opening`]);
     try {
       const ws = new WebSocket(url);
@@ -165,7 +207,7 @@ export function LangGraphWorkspace() {
                 <option value="langgraph">langgraph</option>
                 <option value="native">native</option>
               </select>
-              <input value={workspace} onChange={(e) => setWorkspace(e.target.value)} placeholder="workspace" className="flex-1 h-8 px-2 rounded-lg text-[11px] font-mono outline-none" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)" }} />
+              <input value={workspace} onChange={(e) => { const next = e.target.value; setWorkspace(next); saveSettings({ ...loadSettings(), workspace: next || "." }); }} placeholder="workspace" className="flex-1 h-8 px-2 rounded-lg text-[11px] font-mono outline-none" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)" }} />
             </div>
             <div className="flex gap-2">
               <button onClick={() => onCreateTask()} className="btn-grad flex-1 h-8 rounded-lg text-[11px] font-medium" style={{ color: "white", border: "1px solid transparent" }}>POST /tasks</button>
@@ -197,8 +239,8 @@ export function LangGraphWorkspace() {
               <div className="text-[11px] font-mono" style={{ color: "var(--fg-2)" }}>{selectedThread} · {tasks.length} tasks · <span style={{ color: "var(--fg-1)" }}>{tasks.find((t) => t.id === selectedTask)?.goal?.slice(0, 60) || "—"}</span></div>
               <div className="ml-auto flex gap-1.5">
                 <button onClick={onResume} disabled={!selectedTask} className="h-7 px-2.5 rounded-lg text-[11px] font-medium disabled:opacity-50" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)" }}>POST resume</button>
-                <button onClick={openSSE} disabled={!selectedTask} className="h-7 px-2.5 rounded-lg text-[11px] font-medium disabled:opacity-50" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)" }}>SSE /tasks/{"{id}"}/events</button>
-                <button onClick={openWS} disabled={!selectedTask} className="h-7 px-2.5 rounded-lg text-[11px] font-medium disabled:opacity-50" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)" }}>WS /ws/tasks/{"{id}"}</button>
+                <button onClick={openSSE} disabled={!selectedTask || !selectedThread} className="h-7 px-2.5 rounded-lg text-[11px] font-medium disabled:opacity-50" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)" }}>SSE /threads/{"{thread}"}/tasks/{"{id}"}/events</button>
+                <button onClick={openWS} disabled={!selectedTask || !selectedThread} className="h-7 px-2.5 rounded-lg text-[11px] font-medium disabled:opacity-50" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)" }}>WS /ws/threads/{"{thread}"}/tasks/{"{id}"}</button>
               </div>
             </div>
 
@@ -226,7 +268,7 @@ export function LangGraphWorkspace() {
                         <span className="ml-auto text-[10px] font-mono" style={{ color: "var(--fg-3)" }}>{t.id.slice(0, 8)} · {t.run_id?.slice(0, 8) || "no run"}</span>
                       </div>
                       <div className="text-[12px] font-medium mt-1">{t.goal}</div>
-                      <div className="text-[11px] font-mono truncate" style={{ color: "var(--fg-2)" }}>{t.output || t.error || t.final_message || "—"} {t.trace_id ? `· trace ${t.trace_id.slice(0, 8)}` : ""}</div>
+                      <div className="text-[11px] font-mono truncate" style={{ color: "var(--fg-2)" }}>{t.final_message || t.error || "—"} {t.trace_id ? `· trace ${t.trace_id.slice(0, 8)}` : ""}</div>
                       <div className="text-[10px] font-mono mt-1" style={{ color: "var(--fg-3)" }}>{new Date(t.created_at).toLocaleString()} · {t.workspace || ""}</div>
                     </button>
                   ))}
@@ -275,7 +317,7 @@ export function LangGraphWorkspace() {
                   <Card className="p-3">
                     <pre className="text-[11px] font-mono whitespace-pre-wrap break-words max-h-[520px] overflow-auto" style={{ color: "var(--fg-1)" }}>{streamLog.length ? streamLog.join("\n") : "No stream yet — open SSE or WS for the selected task."}</pre>
                   </Card>
-                  <div className="text-[11px] font-mono" style={{ color: "var(--fg-3)" }}>GET /tasks/{"{id}"}/events (SSE) · WS /ws/tasks/{"{id}"} — same EventBroker topic, defensive serialization</div>
+                  <div className="text-[11px] font-mono" style={{ color: "var(--fg-3)" }}>GET /threads/{"{thread}"}/tasks/{"{id}"}/events (SSE) · WS /ws/threads/{"{thread}"}/tasks/{"{id}"} — same EventBroker topic, defensive serialization</div>
                 </div>
               )}
             </div>

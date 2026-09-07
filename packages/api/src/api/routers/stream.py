@@ -12,18 +12,13 @@ from __future__ import annotations
 from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 from sse_starlette.sse import EventSourceResponse
 
-from ..errors import TaskNotFound
+from ..errors import TaskNotFound, TaskNotInThread
 from ..serialization import event_to_dict, event_to_sse
 
 router = APIRouter(tags=["stream"])
 
 
-@router.get("/tasks/{task_id}/events")
-async def stream_events(
-    task_id: str,
-    request: Request,
-) -> EventSourceResponse:
-    """Server-Sent Events stream of a task's run events."""
+async def _task_event_response(task_id: str, request: Request) -> EventSourceResponse:
     service = request.app.state.task_service
     # Validate before EventSourceResponse sends HTTP headers; errors raised from
     # its body iterator cannot be converted into a 404 after response start.
@@ -36,20 +31,51 @@ async def stream_events(
     return EventSourceResponse(event_source(), ping=15)
 
 
-@router.websocket("/ws/tasks/{task_id}")
-async def stream_ws(websocket: WebSocket, task_id: str) -> None:
-    """WebSocket stream of the same run events; closes with 4404 if unknown."""
+@router.get("/threads/{thread_id}/tasks/{task_id}/events")
+async def stream_thread_task_events(
+    thread_id: str,
+    task_id: str,
+    request: Request,
+) -> EventSourceResponse:
+    """Stream a task only when it belongs to the requested thread."""
+    await request.app.state.task_service.get_task_in_thread(thread_id, task_id)
+    return await _task_event_response(task_id, request)
+
+
+@router.get("/tasks/{task_id}/events", include_in_schema=False)
+async def stream_events(task_id: str, request: Request) -> EventSourceResponse:
+    """Compatibility stream for older clients."""
+    await request.app.state.task_service.get_task(task_id)
+    return await _task_event_response(task_id, request)
+
+
+async def _stream_ws(websocket: WebSocket, task_id: str) -> None:
+    """WebSocket stream of one task's run events."""
     service = websocket.app.state.task_service
-
-    try:
-        await service.get_task(task_id)
-    except TaskNotFound:
-        await websocket.close(code=4404)
-        return
-
     await websocket.accept()
     try:
         async for event in service.stream_task(task_id):
             await websocket.send_json(event_to_dict(event))
     except WebSocketDisconnect:
         pass
+
+
+@router.websocket("/ws/threads/{thread_id}/tasks/{task_id}")
+async def stream_thread_ws(websocket: WebSocket, thread_id: str, task_id: str) -> None:
+    try:
+        await websocket.app.state.task_service.get_task_in_thread(thread_id, task_id)
+    except (TaskNotFound, TaskNotInThread):
+        await websocket.close(code=4404)
+        return
+    await _stream_ws(websocket, task_id)
+
+
+@router.websocket("/ws/tasks/{task_id}")
+async def stream_ws(websocket: WebSocket, task_id: str) -> None:
+    """Compatibility WebSocket stream for older clients."""
+    try:
+        await websocket.app.state.task_service.get_task(task_id)
+    except TaskNotFound:
+        await websocket.close(code=4404)
+        return
+    await _stream_ws(websocket, task_id)

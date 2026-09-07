@@ -244,11 +244,11 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                         sandbox_ready = await native_sandbox.probe()
                         log.info(
                             "Native sandbox %s: %s",
-                            "available" if sandbox_ready else "unavailable; host fallback remains enabled",
+                            "available" if sandbox_ready else "unavailable; terminal commands will fail closed",
                             native_sandbox.status_line(),
                         )
                     except Exception as exc:  # noqa: BLE001 - sandbox is optional
-                        log.warning("Native sandbox probe failed; host fallback remains enabled: %s", exc)
+                        log.warning("Native sandbox probe failed; terminal commands will fail closed: %s", exc)
                 native_runtime = AgentRuntime(
                     database=native_db,
                     agents=[native_config],

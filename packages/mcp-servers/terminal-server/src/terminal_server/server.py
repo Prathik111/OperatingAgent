@@ -27,14 +27,6 @@ RUN_COMMAND_ENV_VAR: Final[str] = "TERMINAL_SERVER_ENABLE_RUN_COMMAND"
 
 LOGGER: Final[logging.Logger] = logging.getLogger(__name__)
 
-mcp = FastMCP(
-    name="terminal-server",
-    version=VERSION,
-    mask_error_details=True,
-)
-
-terminal_service = TerminalService()
-
 
 def _run_command_enabled() -> bool:
     """Whether the command-execution tool should be exposed at all."""
@@ -42,27 +34,37 @@ def _run_command_enabled() -> bool:
     return os.environ.get(RUN_COMMAND_ENV_VAR, "1").strip().lower() not in {"0", "false", "no"}
 
 
+def build_terminal_server(root: str | None = None) -> FastMCP:
+    """Build a terminal server confined to ``root`` when supplied."""
+    server = FastMCP(
+        name="terminal-server",
+        version=VERSION,
+        mask_error_details=True,
+    )
+    service = TerminalService(root=root)
+    if _run_command_enabled():
+        register_run_command(server, service)
+    register_list_processes(server, service)
+
+    @server.tool
+    def health() -> dict:
+        return {"status": "healthy", "server": "terminal-server", "version": VERSION}
+
+    server._operating_agent_terminal_service = service  # pyright: ignore[reportAttributeAccessIssue]
+    return server
+
+
+mcp = build_terminal_server()
+terminal_service = mcp._operating_agent_terminal_service  # pyright: ignore[reportAttributeAccessIssue]
+
+
 if _run_command_enabled():
-    register_run_command(mcp, terminal_service)
     LOGGER.info(
         "run_command registered with allowlist=%s",
         ", ".join(sorted(terminal_service.allowed_commands)),
     )
 else:
     LOGGER.warning("run_command disabled via %s", RUN_COMMAND_ENV_VAR)
-
-register_list_processes(mcp, terminal_service)
-
-
-@mcp.tool
-def health() -> dict:
-    """Health endpoint."""
-    return {
-        "status": "healthy",
-        "server": "terminal-server",
-        "version": VERSION,
-    }
-
 
 if __name__ == "__main__":
     mcp.run()

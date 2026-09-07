@@ -107,8 +107,8 @@ class ContainerPool:
         """Check whether Docker can host sandbox containers.
 
         This is the startup-facing name used by the native CLI. A probe never
-        raises for an unavailable Docker installation; callers can decide
-        whether to fall back to the host or fail closed.
+        raises for an unavailable Docker installation; callers can report the
+        failure or fail closed without attempting host execution.
         """
         if not await self.available():
             return False
@@ -216,14 +216,13 @@ class ContainerPool:
         workspace = str(getattr(session, "working_directory", ".") or ".")
         runner = await self.get(session_id, workspace)
         if runner is None:
-            if self.reason.startswith(("workspace does not exist", "invalid workspace")):
-                try:
-                    from agent_native.tools.base import ToolResult
+            try:
+                from agent_native.tools.base import ToolResult
 
-                    return ToolResult(False, error=f"sandbox unavailable: {self.reason}")
-                except ImportError:
-                    return None
-            return None
+                reason = self.reason or "Docker sandbox is unavailable"
+                return ToolResult(False, error=f"sandbox unavailable: {reason}")
+            except ImportError:
+                return None
         result = await runner.run(sandbox_command, timeout=timeout)
         try:
             from agent_native.tools.base import ToolResult

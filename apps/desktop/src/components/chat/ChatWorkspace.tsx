@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { nativeApi, taskApi } from "../../lib/api";
+import { nativeApi, readSSEStream, sseSubscribe, taskApi } from "../../lib/api";
 import type { EventResponse, PermissionResponse, SessionResponse, ThreadResponse } from "../../lib/types";
+import { loadSettings, saveSettings } from "../SettingsModal";
 import { AlertDialog, ConfirmDialog, PromptDialog } from "../Modal";
 import { AnalyticsView } from "./AnalyticsView";
 import { EventTimeline } from "./EventTimeline";
@@ -20,6 +21,29 @@ type ChatMessage = {
   thinking?: string;
   streaming?: boolean;
 };
+
+const ACTIVE_TASK_STATUSES = new Set(["created", "pending", "running"]);
+const TERMINAL_TASK_STATUSES = new Set(["completed", "failed", "interrupted"]);
+
+function assistantTextFromState(payload: unknown): string {
+  if (!payload || typeof payload !== "object") return "";
+  const messages = (payload as Record<string, unknown>).messages;
+  if (!Array.isArray(messages)) return "";
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!message || typeof message !== "object") continue;
+    const value = message as Record<string, unknown>;
+    const type = String(value.type || "").toLowerCase();
+    const data = value.data;
+    const content = data && typeof data === "object"
+      ? (data as Record<string, unknown>).content
+      : value.content;
+    if ((type === "ai" || type === "aimessage" || type === "assistant") && typeof content === "string" && content.trim()) {
+      return content;
+    }
+  }
+  return "";
+}
 
 type DialogState =
   | { kind: "rename"; current: string }
@@ -121,10 +145,40 @@ export function ChatWorkspace({
   const [dialog, setDialog] = useState<DialogState>(null);
   const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  const [workspace, setWorkspace] = useState(".");
+  const [workspace, setWorkspace] = useState(() => loadSettings().workspace || ".");
   const [titleOverrides, setTitleOverrides] = useState<Record<string, string>>(loadTitleOverrides);
   const listRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  const refreshGenerationRef = useRef(0);
+
+  useEffect(() => {
+    const onSettings = (event: Event) => {
+      const next = (event as CustomEvent<{ workspace?: string }>).detail?.workspace;
+      if (typeof next === "string" && next.trim() && next !== workspace) {
+        setWorkspace(next);
+        setSelected(null);
+        setMessages([]);
+        setEvents([]);
+        setPendingApprovals([]);
+        setPendingTaskId(null);
+      }
+    };
+    window.addEventListener("operating-agent:settings", onSettings);
+    return () => window.removeEventListener("operating-agent:settings", onSettings);
+  }, [workspace]);
+
+  const selectWorkspace = (value: string) => {
+    const next = value.trim() || ".";
+    setWorkspace(next);
+    if (next !== workspace) {
+      setSelected(null);
+      setMessages([]);
+      setEvents([]);
+      setPendingApprovals([]);
+      setPendingTaskId(null);
+    }
+    saveSettings({ ...loadSettings(), workspace: next });
+  };
 
   const scrollToEnd = useCallback(() => endRef.current?.scrollIntoView({ behavior: "smooth" }), []);
 
@@ -133,7 +187,14 @@ export function ChatWorkspace({
     const overrides = loadTitleOverrides();
     setTitleOverrides(overrides);
     if (track === "native") {
-      const sessions = await nativeApi.listSessions({ limit: 100 }).catch(() => [] as SessionResponse[]);
+      let sessions: SessionResponse[];
+      try {
+        sessions = await nativeApi.listSessions({ workspace, limit: 100 });
+      } catch {
+        // Keep the sidebar intact while the API is restarting. The polling
+        // effect below retries once the server is reachable again.
+        return;
+      }
       const items: ChatItem[] = sessions.map((s) => ({
         kind: "native" as const,
         id: s.id,
@@ -144,7 +205,13 @@ export function ChatWorkspace({
       setChats(items);
       if (!selected && items[0]) setSelected(items[0].id);
     } else {
-      const threads = await taskApi.listThreads({ limit: 100 }).catch(() => [] as ThreadResponse[]);
+      let threads: ThreadResponse[];
+      try {
+        threads = await taskApi.listThreads({ limit: 100 });
+      } catch {
+        // Do not turn a temporary API outage into an empty chat history.
+        return;
+      }
       const items: ChatItem[] = threads.map((t) => ({
         kind: "langgraph" as const,
         id: t.id,
@@ -155,13 +222,16 @@ export function ChatWorkspace({
       setChats(items);
       if (!selected && items[0]) setSelected(items[0].id);
     }
-  }, [track, selected]);
+  }, [track, selected, workspace]);
 
   const refreshConversation = useCallback(
     async (id: string) => {
+      const generation = ++refreshGenerationRef.current;
+      const isCurrent = () => generation === refreshGenerationRef.current;
       if (track === "native") {
         try {
           const conv = await nativeApi.getConversation(id);
+          if (!isCurrent()) return;
           const msgs: ChatMessage[] = conv.messages.map((m) => {
             const parts = m.parts as Array<Record<string, unknown>>;
             const firstText = parts.find((p) =>
@@ -182,6 +252,7 @@ export function ChatWorkspace({
           });
           setMessages(msgs);
           const allEvents = await nativeApi.getEvents(id, 0).catch(() => [] as EventResponse[]);
+          if (!isCurrent()) return;
           // Activity covers the current response only: keep events from the
           // latest top-level run (helper runs carry "/" in their run id).
           let currentRun = "";
@@ -193,57 +264,84 @@ export function ChatWorkspace({
           }
           setEvents(currentRun ? allEvents.filter((e) => e.run_id === currentRun) : allEvents.slice(-30));
           const perms = await nativeApi.listPermissions(id).catch(() => [] as PermissionResponse[]);
-          setPermissions(perms);
+          if (isCurrent()) setPermissions(perms);
         } catch {
-          setMessages([]);
+          // A transient refresh failure must not erase the last rendered
+          // response. The next refresh will reconcile it from the API.
         }
       } else {
         try {
-          const tasks = await taskApi.listThreadTasks(id, { limit: 100 }).catch(() => []);
+          // Do not turn a transient task-list failure into an empty thread.
+          // Doing so used to remove the live answer and keep polling forever.
+          const tasks = await taskApi.listThreadTasks(id, { limit: 100 });
+          if (!isCurrent()) return;
+          if (tasks[0]?.workspace && tasks[0].workspace !== workspace) {
+            setWorkspace(tasks[0].workspace);
+            saveSettings({ ...loadSettings(), workspace: tasks[0].workspace });
+          }
           const msgs: ChatMessage[] = tasks
             .slice()
             .reverse()
             .flatMap((t) => [
               { id: `${t.id}-user`, role: "user" as const, text: t.goal, time: t.created_at },
-              ...(t.output || t.final_message
-                ? [{ id: `${t.id}-assistant`, role: "assistant" as const, text: String(t.output || t.final_message), time: t.created_at }]
+              ...(t.final_message
+                ? [{ id: `${t.id}-assistant`, role: "assistant" as const, text: t.final_message, time: t.created_at }]
                 : t.error
                   ? [{ id: `${t.id}-error`, role: "assistant" as const, text: `Run failed: ${t.error}`, time: t.created_at }]
                   : []),
             ]);
           setMessages(msgs);
           setPendingTaskId((cur) => {
-            if (!cur) return cur;
-            const finished = tasks.some((t) => t.id === cur && (t.output || t.final_message || t.error));
-            return finished ? null : cur;
+            const current = cur ? tasks.find((task) => task.id === cur) : undefined;
+            if (current && TERMINAL_TASK_STATUSES.has(current.status || "")) return null;
+            if (cur) return cur;
+            const active = tasks.find((task) =>
+              ACTIVE_TASK_STATUSES.has(task.status || ""),
+            );
+            return active?.id || null;
           });
           // Activity covers the current response only: keep events from the
           // latest task in this thread.
           const latestTaskId = tasks.length > 0 ? tasks[0].id : "";
-          const ev = (await taskApi.listThreadEvents(id).catch(() => []))
-            .filter((e) => !latestTaskId || e.task_id === latestTaskId);
-          setEvents(
-            ev.slice(-30).map((e, i) => ({
-              sequence: i + 1,
-              type: e.type,
-              session_id: id,
-              run_id: e.task_id,
-              data: e.payload,
-              time: null,
-            })),
-          );
-          const approvals = await taskApi.listApprovals().catch(() => []);
-          setPendingApprovals(approvals.filter((a) => tasks.some((t) => t.id === a.task_id)));
+          const ev = await taskApi.listThreadEvents(id).catch(() => null);
+          if (isCurrent() && ev) {
+            const filtered = ev.filter((e) => !latestTaskId || e.task_id === latestTaskId);
+            setEvents(
+              filtered.slice(-30).map((e, i) => ({
+                sequence: i + 1,
+                type: e.type,
+                session_id: id,
+                run_id: e.task_id,
+                data: e.payload,
+                time: null,
+              })),
+            );
+          }
+          const approvals = await taskApi.listApprovals().catch(() => null);
+          if (isCurrent() && approvals) {
+            setPendingApprovals(approvals.filter((a) => tasks.some((t) => t.id === a.task_id)));
+          }
         } catch {
-          setMessages([]);
+          // A transient refresh failure must not erase the last rendered
+          // response. The next active poll will reconcile it from the API.
         }
       }
     },
-    [track],
+    [track, workspace],
   );
 
   useEffect(() => {
-    refreshChats();
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      await refreshChats();
+      if (!stopped) timer = setTimeout(poll, 5000);
+    };
+    void poll();
+    return () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+    };
   }, [refreshChats]);
 
   useEffect(() => {
@@ -251,20 +349,29 @@ export function ChatWorkspace({
   }, [selected, refreshConversation]);
 
   useEffect(() => {
-    if (!selected || track !== "langgraph") return;
-    const timer = setInterval(() => refreshConversation(selected), 2000);
-    return () => clearInterval(timer);
-  }, [selected, track, refreshConversation]);
+    if (!selected || track !== "langgraph" || !pendingTaskId) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      await refreshConversation(selected);
+      if (!stopped) timer = setTimeout(poll, 2000);
+    };
+    timer = setTimeout(poll, 2000);
+    return () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [selected, track, pendingTaskId, refreshConversation]);
 
-  // poll permissions / approvals
+  // Poll only while a run is active. Refreshing the conversation already
+  // fetches approvals for the selected thread, so a second independent poll
+  // otherwise doubles the request rate and can make stale approval banners look
+  // like repeated approval requests.
   useEffect(() => {
     const t = setInterval(async () => {
       if (track === "native" && selected) {
         const perms = await nativeApi.listPermissions(selected).catch(() => [] as PermissionResponse[]);
         setPermissions(perms);
-      } else if (track === "langgraph") {
-        const approvals = await taskApi.listApprovals().catch(() => []);
-        setPendingApprovals(approvals);
       }
     }, 2500);
     return () => clearInterval(t);
@@ -351,6 +458,20 @@ export function ChatWorkspace({
     setTimeout(scrollToEnd, 30);
   };
 
+  const resolveApproval = async (callId: string, allowed: boolean) => {
+    try {
+      if (track === "native") {
+        await nativeApi.resolvePermission(callId, { allowed, duration: "once" });
+        setPermissions((prev) => prev.filter((item) => item.call_id !== callId));
+      } else {
+        await taskApi.resolveApproval(callId, { approved: allowed });
+        setPendingApprovals((prev) => prev.filter((item) => item.id !== callId));
+      }
+    } catch (error) {
+      setDialog({ kind: "error", message: (error as Error).message });
+    }
+  };
+
   const onSend = async () => {
     const text = composer.trim();
     if (!text || sending) return;
@@ -382,56 +503,59 @@ export function ChatWorkspace({
       setMessages((prev) => [...prev, { id: liveId, role: "assistant", text: "", thinking: "", streaming: true }]);
       try {
         const url = nativeApi.sendMessageUrl(sid);
+        const settings = loadSettings();
         const res = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message: text, limits: { max_turns: 10, max_cost_usd: 0.05 } }),
+          body: JSON.stringify({
+            message: text,
+            limits: {
+              max_turns: Number(settings.maxTurns) || 10,
+              max_cost_usd: Number(settings.maxCost) || 0.05,
+            },
+          }),
         });
         if (!res.ok || !res.body) throw new Error(`${res.status} ${res.statusText}`);
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buf = "";
         let acc = "";
         let thinkAcc = "";
         let finalAnswer = "";
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buf += decoder.decode(value, { stream: true });
-          const frames = buf.split("\n\n");
-          buf = frames.pop() || "";
-          for (const f of frames) {
-            const eventLine = f.split("\n").find((l) => l.startsWith("event:"));
-            const dataLine = f.split("\n").find((l) => l.startsWith("data:"));
-            if (dataLine) {
-              try {
-                const payload = JSON.parse(dataLine.slice(5).trim());
-                const eventType = eventLine?.slice(6).trim() || payload?.type || "";
-                const eventData = payload?.data || payload;
-                if (eventType === "assistant_delta") {
-                  const t = eventData?.text || "";
-                  if (t) {
-                    acc += t;
-                    patchLiveMessage(liveId, { text: acc });
-                  }
-                } else if (eventType === "reasoning_delta") {
-                  const t = eventData?.text || "";
-                  if (t) {
-                    thinkAcc += t;
-                    patchLiveMessage(liveId, { thinking: thinkAcc });
-                  }
-                } else if (eventType === "run_receipt") {
-                  finalAnswer = eventData?.final_message || eventData?.final_text || "";
-                }
-                // also surface events
-                if (payload?.type || eventType) setEvents((prev) => [...prev.slice(-29), payload as EventResponse]);
-              } catch {
-                // raw frame
-                setEvents((prev) => [...prev.slice(-29), { sequence: prev.length + 1, type: "sse", session_id: sid, run_id: "", data: { raw: f.slice(0, 200) }, time: null }]);
+        await readSSEStream(res.body, (frame) => {
+          try {
+            const payload = JSON.parse(frame.data);
+            const eventType = frame.event || payload?.type || "";
+            const eventData = payload?.data || payload;
+            if (eventType === "assistant_delta") {
+              const delta = String(eventData?.text || "");
+              if (delta) {
+                acc += delta;
+                patchLiveMessage(liveId, { text: acc });
               }
+            } else if (eventType === "reasoning_delta") {
+              const delta = String(eventData?.text || "");
+              if (delta) {
+                thinkAcc += delta;
+                patchLiveMessage(liveId, { thinking: thinkAcc });
+              }
+            } else if (eventType === "run_receipt") {
+              finalAnswer = String(eventData?.final_message || eventData?.final_text || "");
+            } else if (eventType === "state") {
+              const stateAnswer = assistantTextFromState(eventData as Record<string, unknown>);
+              if (stateAnswer) finalAnswer = stateAnswer;
             }
+            if (payload?.type) {
+              setEvents((prev) => [...prev.slice(-29), payload as EventResponse]);
+            }
+          } catch {
+            setEvents((prev) => [...prev.slice(-29), {
+              sequence: prev.length + 1,
+              type: frame.event || "sse",
+              session_id: sid,
+              run_id: "",
+              data: { raw: frame.data.slice(0, 200) },
+              time: null,
+            }]);
           }
-        }
+        });
         // Settle the live bubble with the receipt's final text when present;
         // it is the same content that streamed, so there is no pop-in.
         patchLiveMessage(liveId, { text: finalAnswer || acc, thinking: thinkAcc || undefined, streaming: false });
@@ -452,10 +576,54 @@ export function ChatWorkspace({
         }
         setPendingTaskId(task.id);
         // stream via SSE for a bit
-        const url = taskApi.streamEventsUrl(task.id);
-        const es = new EventSource(url);
-        es.onmessage = (e) => setEvents((prev) => [...prev.slice(-29), { sequence: prev.length + 1, type: "sse", session_id: task.thread_id, run_id: task.id, data: { data: e.data.slice(0, 200) }, time: null }]);
-        setTimeout(() => es.close(), 15000);
+        const url = taskApi.streamEventsUrl(task.thread_id, task.id);
+        let closeStream = () => {};
+        closeStream = sseSubscribe(
+          url,
+          (event) => {
+            let data: Record<string, unknown> = { raw: event.data.slice(0, 200) };
+             try {
+              const parsed = JSON.parse(event.data);
+              if (parsed && typeof parsed === "object") data = parsed as Record<string, unknown>;
+            } catch {
+              // Keep raw data for non-JSON events.
+            }
+            setEvents((prev) => [...prev.slice(-29), {
+              sequence: prev.length + 1,
+              type: event.event,
+              session_id: task.thread_id,
+              run_id: task.id,
+              data,
+              time: null,
+            }]);
+            if (event.event === "finished" || event.event === "error") {
+              const eventData = data.data && typeof data.data === "object"
+                ? data.data as Record<string, unknown>
+                : data;
+              const finalText = String(eventData.final_message || eventData.output || "");
+              if (finalText) {
+                setMessages((prev) => {
+                  const existing = prev.find((message) => message.id === `${task.id}-assistant`);
+                  if (existing) return prev.map((message) => message.id === existing.id ? { ...message, text: finalText } : message);
+                  return [...prev, { id: `${task.id}-assistant`, role: "assistant", text: finalText, time: new Date().toISOString() }];
+                });
+              }
+              setPendingTaskId(null);
+              closeStream();
+            } else if (event.event === "state") {
+              const stateText = assistantTextFromState(data.data && typeof data.data === "object" ? data.data : data);
+              if (stateText) {
+                setMessages((prev) => {
+                  const existing = prev.find((message) => message.id === `${task.id}-assistant`);
+                  if (existing) return prev.map((message) => message.id === existing.id ? { ...message, text: stateText } : message);
+                  return [...prev, { id: `${task.id}-assistant`, role: "assistant", text: stateText, time: new Date().toISOString() }];
+                });
+              }
+            }
+          },
+          () => closeStream(),
+        );
+        setTimeout(closeStream, 30000);
         await refreshConversation(task.thread_id);
         await refreshChats();
       } catch (e) {
@@ -504,7 +672,7 @@ export function ChatWorkspace({
           </div>
           <label className="block">
             <span className="block text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: "var(--fg-3)" }}>Working directory</span>
-            <input value={workspace} onChange={(e) => setWorkspace(e.target.value)} placeholder="." className="field !h-8 !text-[11px] mono" />
+            <input value={workspace} onChange={(e) => setWorkspace(e.target.value)} onBlur={() => selectWorkspace(workspace)} placeholder="/path/to/workspace" className="field !h-8 !text-[11px] mono" />
           </label>
         </div>
 
@@ -620,8 +788,8 @@ export function ChatWorkspace({
             {(track === "native" ? permissions : pendingApprovals.map((a) => ({ call_id: a.id, tool: a.tool_name, preview: a.risk_level, reason: a.id } as unknown as PermissionResponse))).slice(0, 3).map((p) => (
               <div key={p.call_id} className="flex items-center gap-2 px-2.5 py-1.5 rounded-full text-[11px] font-mono shrink-0" style={{ background: "var(--bg-1)", border: "1px solid var(--warning-soft)", color: "var(--fg-1)" }}>
                 <span className="anim-pulse-dot" style={{ color: "var(--warning)" }}>⚠</span> {p.tool} · {p.call_id.slice(0, 6)}
-                <button onClick={async () => { if (track === "native") { await nativeApi.resolvePermission(p.call_id, { allowed: true, duration: "once" }).catch(() => {}); setPermissions((prev) => prev.filter((x) => x.call_id !== p.call_id)); } else { const { taskApi: t } = await import("../../lib/api"); await t.resolveApproval(p.call_id, { approved: true }).catch(() => {}); } }} className="btn-grad ml-1 px-2 py-0.5 rounded-full text-[10px] font-medium" style={{ color: "white", border: "1px solid transparent" }}>Allow</button>
-                <button onClick={async () => { if (track === "native") { await nativeApi.resolvePermission(p.call_id, { allowed: false }).catch(() => {}); setPermissions((prev) => prev.filter((x) => x.call_id !== p.call_id)); } }} className="btn-quiet px-2 py-0.5 rounded-full text-[10px] font-medium" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)" }}>Deny</button>
+                <button onClick={() => resolveApproval(p.call_id, true)} className="btn-grad ml-1 px-2 py-0.5 rounded-full text-[10px] font-medium" style={{ color: "white", border: "1px solid transparent" }}>Allow</button>
+                <button onClick={() => resolveApproval(p.call_id, false)} className="btn-quiet px-2 py-0.5 rounded-full text-[10px] font-medium" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)" }}>Deny</button>
               </div>
             ))}
           </div>

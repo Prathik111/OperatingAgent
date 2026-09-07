@@ -345,6 +345,7 @@ class LangGraphAgent(IAgentOrchestrator):
                 type="finished",
                 payload={
                     "status": result.status.value,
+                    "final_message": result.output,
                     "trace_id": result.metadata.get("langfuse_trace_id"),
                 },
             ),

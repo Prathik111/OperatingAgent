@@ -113,9 +113,13 @@ export const taskApi = {
 
   createTask: (body: CreateTaskRequest) =>
     req<TaskResponse>("/tasks", { method: "POST", body: JSON.stringify(body) }),
-  getTask: (taskId: string) => req<TaskResponse>(`/tasks/${encodeURIComponent(taskId)}`),
-  resumeTask: (taskId: string, body: { resume_value?: unknown; checkpoint_id?: string }) =>
-    req<TaskResponse>(`/tasks/${encodeURIComponent(taskId)}/resume`, { method: "POST", body: JSON.stringify(body) }),
+  getTask: (threadId: string, taskId: string) =>
+    req<TaskResponse>(`/threads/${encodeURIComponent(threadId)}/tasks/${encodeURIComponent(taskId)}`),
+  resumeTask: (threadId: string, taskId: string, body: { resume_value?: unknown; checkpoint_id?: string }) =>
+    req<TaskResponse>(`/threads/${encodeURIComponent(threadId)}/tasks/${encodeURIComponent(taskId)}/resume`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 
   createThreadTask: (threadId: string, body: CreateTaskRequest) =>
     req<TaskResponse>(`/threads/${encodeURIComponent(threadId)}/tasks`, { method: "POST", body: JSON.stringify(body) }),
@@ -144,17 +148,12 @@ export const taskApi = {
     q.set("offset", String(params?.offset ?? 0));
     return req<TaskResponse[]>(`/threads/${encodeURIComponent(threadId)}/tasks?${q.toString()}`);
   },
-  getThreadTask: (threadId: string, taskId: string) =>
-    req<TaskResponse>(`/threads/${encodeURIComponent(threadId)}/tasks/${encodeURIComponent(taskId)}`),
-  resumeThreadTask: (threadId: string, taskId: string, body: { resume_value?: unknown; checkpoint_id?: string }) =>
-    req<TaskResponse>(`/threads/${encodeURIComponent(threadId)}/tasks/${encodeURIComponent(taskId)}/resume`, {
-      method: "POST",
-      body: JSON.stringify(body),
-    }),
   listThreadEvents: (threadId: string) => req<ThreadEventResponse[]>(`/threads/${encodeURIComponent(threadId)}/events`),
 
-  streamEventsUrl: (taskId: string) => `${apiBase()}/tasks/${encodeURIComponent(taskId)}/events`,
-  wsStreamUrl: (taskId: string) => `${apiBase().replace(/^http/, "ws")}/ws/tasks/${encodeURIComponent(taskId)}`,
+  streamEventsUrl: (threadId: string, taskId: string) =>
+    `${apiBase()}/threads/${encodeURIComponent(threadId)}/tasks/${encodeURIComponent(taskId)}/events`,
+  wsStreamUrl: (threadId: string, taskId: string) =>
+    `${apiBase().replace(/^http/, "ws")}/ws/threads/${encodeURIComponent(threadId)}/tasks/${encodeURIComponent(taskId)}`,
 
   listApprovals: () => req<ApprovalResponse[]>("/approvals"),
   getApproval: (id: string) => req<ApprovalResponse>(`/approvals/${encodeURIComponent(id)}`),
@@ -165,19 +164,91 @@ export const taskApi = {
     }),
 };
 
-export function sseSubscribe(url: string, onEvent: (ev: { id: string; event: string; data: string }) => void, onError?: (e: Event) => void) {
-  const es = new EventSource(url);
-  es.onmessage = (e) => onEvent({ id: (e as MessageEvent).lastEventId || "", event: "message", data: (e as MessageEvent).data });
-  // also listen for named events (EventSource dispatches by event type)
-  const handler = (e: MessageEvent) => onEvent({ id: e.lastEventId || "", event: (e as unknown as { type: string }).type || "message", data: e.data });
-  // generic: native events use typed events; we capture all via addEventListener with wildcard workaround: listen for common types
-  for (const t of ["message", "run_finished", "error", "tool_call", "text_delta", "run_receipt", "event"]) {
-    try {
-      es.addEventListener(t, handler as EventListener);
-    } catch {
-      // ignore
-    }
+export interface SSEMessage {
+  id: string;
+  event: string;
+  data: string;
+}
+
+const SSE_EVENT_TYPES = [
+  "state",
+  "finished",
+  "error",
+  "assistant_delta",
+  "reasoning_delta",
+  "message_added",
+  "tool_started",
+  "tool_finished",
+  "permission_requested",
+  "permission_resolved",
+  "turn_started",
+  "run_finished",
+  "run_receipt",
+  "model_fallback",
+] as const;
+
+function parseSSEFrame(frame: string): SSEMessage | null {
+  let id = "";
+  let event = "message";
+  const data: string[] = [];
+  for (const rawLine of frame.split(/\r?\n/)) {
+    if (!rawLine || rawLine.startsWith(":")) continue;
+    const separator = rawLine.indexOf(":");
+    const field = separator === -1 ? rawLine : rawLine.slice(0, separator);
+    let value = separator === -1 ? "" : rawLine.slice(separator + 1);
+    if (value.startsWith(" ")) value = value.slice(1);
+    if (field === "id") id = value;
+    else if (field === "event") event = value || "message";
+    else if (field === "data") data.push(value);
   }
+  return data.length ? { id, event, data: data.join("\n") } : null;
+}
+
+export async function readSSEStream(
+  stream: ReadableStream<Uint8Array>,
+  onEvent: (event: SSEMessage) => void,
+): Promise<void> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  const drain = (flush: boolean) => {
+    while (true) {
+      const boundary = /\r?\n\r?\n/.exec(buffer);
+      if (!boundary) break;
+      const frame = buffer.slice(0, boundary.index);
+      buffer = buffer.slice(boundary.index + boundary[0].length);
+      const parsed = parseSSEFrame(frame);
+      if (parsed) onEvent(parsed);
+    }
+    if (flush && buffer.trim()) {
+      const parsed = parseSSEFrame(buffer);
+      if (parsed) onEvent(parsed);
+      buffer = "";
+    }
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    drain(false);
+  }
+  buffer += decoder.decode();
+  drain(true);
+}
+
+export function sseSubscribe(url: string, onEvent: (ev: SSEMessage) => void, onError?: (e: Event) => void) {
+  const es = new EventSource(url);
+  es.onmessage = (e) => onEvent({ id: e.lastEventId || "", event: "message", data: e.data });
+  const handler = (event: Event) => {
+    const e = event as MessageEvent;
+    // EventSource also uses the `error` type for transport failures. Those
+    // events have no data and are handled by `onerror` below.
+    if (typeof e.data !== "string") return;
+    onEvent({ id: e.lastEventId || "", event: e.type || "message", data: e.data });
+  };
+  for (const type of SSE_EVENT_TYPES) es.addEventListener(type, handler as EventListener);
   es.onerror = (e) => onError?.(e as Event);
   return () => es.close();
 }

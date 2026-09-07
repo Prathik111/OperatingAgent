@@ -20,10 +20,9 @@ failed.
 
 One more thing happens in `run_authorized`: a tool marked `SANDBOX` is handed to
 the container runner instead of being called here. That is a single branch, in one
-place, because every tool call already comes through this gate - which is the
-payoff of having one. If the container isn't available the branch falls through and
-the tool runs normally, so a machine without Docker still works; `sandbox.py` says
-which mode a run ended up in.
+place, because every tool call already comes through this gate. A configured
+sandbox fails closed when Docker or its image is unavailable, since an arbitrary
+host command cannot be confined merely by choosing a working directory.
 """
 
 from __future__ import annotations
@@ -111,9 +110,8 @@ class ToolManager:
     async def _invoke(self, tool: Tool, tool_call: Any, context: Any, seconds: float) -> ToolResult:
         """Actually run the tool - in the container if it's marked for one.
 
-        The sandbox answering None means it couldn't (no Docker, no working folder,
-        no command to run), never that the tool failed. So the fallback is to run
-        it here, exactly as an agent with no sandbox at all would.
+        A sandbox result is authoritative, including an unavailable-sandbox
+        failure. None is reserved for tools the sandbox does not implement.
         """
         if self.sandbox is not None and self._is_sandboxed(tool):
             result = await self.sandbox.run(tool, tool_call.arguments, context, seconds)

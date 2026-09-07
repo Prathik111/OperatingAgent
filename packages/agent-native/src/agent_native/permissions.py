@@ -412,6 +412,8 @@ class PermissionRequest:
     arguments: dict = field(default_factory=dict)
     preview: str = ""
     reason: str = ""
+    session_id: str = ""
+    run_id: str = ""
 
 
 @dataclass
@@ -532,6 +534,8 @@ class PermissionManager:
             )
             return True
 
+        request.session_id = session_id
+        request.run_id = run_id
         await self._bus.emit(
             session_id,
             EventType.PERMISSION_REQUESTED,
@@ -591,6 +595,9 @@ class PermissionManager:
         """
         self._responder.deliver(call_id, PermissionAnswer(allowed, duration, scope))
 
-    def pending(self) -> list:
+    def pending(self, session_id: str = "") -> list:
         """The requests currently waiting on the user (for a UI to show)."""
-        return self._responder.pending()
+        requests = self._responder.pending()
+        if not session_id:
+            return requests
+        return [request for request in requests if request.session_id == session_id]

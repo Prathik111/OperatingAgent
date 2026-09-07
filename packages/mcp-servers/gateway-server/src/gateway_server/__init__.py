@@ -4,4 +4,7 @@ __all__ = ["build_gateway", "main", "mcp"]
 
 
 def main() -> None:
-    mcp.run(transport="stdio", show_banner=False)
+    import os
+
+    workspace = os.environ.get("OPERATING_AGENT_WORKSPACE")
+    build_gateway(root=workspace).run(transport="stdio", show_banner=False)

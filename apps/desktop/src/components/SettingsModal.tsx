@@ -13,7 +13,6 @@ export interface DesktopSettings {
   workspace: string;
   maxTurns: string;
   maxCost: string;
-  sandbox: boolean;
 }
 
 export const SETTINGS_KEY = "operating-agent:settings";
@@ -29,7 +28,6 @@ export const DEFAULT_SETTINGS: DesktopSettings = {
   workspace: ".",
   maxTurns: "10",
   maxCost: "0.05",
-  sandbox: true,
 };
 
 export function loadSettings(): DesktopSettings {
@@ -78,15 +76,17 @@ export function SettingsModal({
         const api = track === "native" ? nativeApi : taskApi;
         const current = (await api.getSettings()) as Record<string, unknown>;
         if (cancelled) return;
-        if (typeof current.provider === "string" && current.provider) {
-          setSettings((prev) => ({ ...prev, provider: current.provider as DesktopSettings["provider"] }));
-        }
-        if (typeof current.model === "string" && current.model) {
-          setSettings((prev) => (prev.model ? prev : { ...prev, model: current.model as string }));
-        }
-        if (typeof current.base_url === "string") {
-          setSettings((prev) => (prev.baseUrl ? prev : { ...prev, baseUrl: current.base_url as string }));
-        }
+        setSettings((prev) => ({
+          ...prev,
+          provider: typeof current.provider === "string" && current.provider
+            ? current.provider as DesktopSettings["provider"]
+            : prev.provider,
+          model: typeof current.model === "string" ? current.model : prev.model,
+          baseUrl: typeof current.base_url === "string" ? current.base_url : "",
+          temperature: current.temperature == null ? prev.temperature : String(current.temperature),
+          topP: current.top_p == null ? prev.topP : String(current.top_p),
+          maxTokens: current.max_tokens == null ? "" : String(current.max_tokens),
+        }));
         if (Array.isArray(current.models)) {
           setModels((current.models as unknown[]).map(String));
         }
@@ -148,6 +148,7 @@ export function SettingsModal({
 
   const handleSave = async () => {
     setError("");
+    const previous = loadSettings();
     saveSettings(settings);
     try {
       const body = {
@@ -165,6 +166,7 @@ export function SettingsModal({
       setSaved(true);
       window.setTimeout(onClose, 700);
     } catch (cause) {
+      saveSettings(previous);
       setError((cause as Error).message);
     }
   };
@@ -190,11 +192,10 @@ export function SettingsModal({
               <Field label="Workspace" hint="Must be an existing directory">
                 <input value={settings.workspace} onChange={(e) => set("workspace", e.target.value)} placeholder="." className="field mono" />
               </Field>
-              <Field label="Sandbox">
-                <label className="h-9 px-3 rounded-lg flex items-center gap-2 text-[12px] cursor-pointer" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)" }}>
-                  <input type="checkbox" checked={settings.sandbox} onChange={(e) => set("sandbox", e.target.checked)} />
-                  Use Docker sandbox when available
-                </label>
+              <Field label="Terminal isolation">
+                <div className="min-h-9 px-3 py-2 rounded-lg text-[12px]" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)", color: "var(--fg-2)" }}>
+                  Docker required; workspace mounted read/write at /workspace.
+                </div>
               </Field>
             </div>
           </section>
@@ -203,11 +204,11 @@ export function SettingsModal({
             <SectionTitle>Model Provider</SectionTitle>
             <div className="grid sm:grid-cols-2 gap-3">
               <Field label="Provider">
-                <select value={settings.provider} onChange={(e) => set("provider", e.target.value as DesktopSettings["provider"])} className="field">
+                <select value={settings.provider} onChange={(e) => setSettings((current) => ({ ...current, provider: e.target.value as DesktopSettings["provider"], model: "", baseUrl: "" }))} className="field">
                   <option value="ollama">Ollama · local</option>
                   <option value="groq">Groq · cloud</option>
-                  <option value="openai">OpenAI · cloud</option>
-                  <option value="anthropic">Anthropic · cloud</option>
+                  {track === "langgraph" && <option value="openai">OpenAI · cloud</option>}
+                  {track === "langgraph" && <option value="anthropic">Anthropic · cloud</option>}
                 </select>
               </Field>
               <Field label="Model" hint={defaultModel ? `Empty uses default: ${defaultModel}` : "Empty uses provider default"}>
@@ -283,13 +284,15 @@ export function SettingsModal({
             </div>
           </section>
 
-          <section className="space-y-3">
-            <SectionTitle>Run Defaults</SectionTitle>
-            <div className="grid sm:grid-cols-2 gap-3">
-              <Field label="Maximum turns"><input value={settings.maxTurns} onChange={(e) => set("maxTurns", e.target.value)} className="field mono" /></Field>
-              <Field label="Maximum cost (USD)"><input value={settings.maxCost} onChange={(e) => set("maxCost", e.target.value)} className="field mono" /></Field>
-            </div>
-          </section>
+          {track === "native" && (
+            <section className="space-y-3">
+              <SectionTitle>Run Defaults</SectionTitle>
+              <div className="grid sm:grid-cols-2 gap-3">
+                <Field label="Maximum turns"><input value={settings.maxTurns} onChange={(e) => set("maxTurns", e.target.value)} className="field mono" /></Field>
+                <Field label="Maximum cost (USD)"><input value={settings.maxCost} onChange={(e) => set("maxCost", e.target.value)} className="field mono" /></Field>
+              </div>
+            </section>
+          )}
         </div>
 
         <div className="px-5 py-3 flex items-center gap-2 border-t" style={{ borderColor: "var(--bg-4)", background: "var(--bg-2)" }}>

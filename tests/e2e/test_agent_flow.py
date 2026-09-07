@@ -145,6 +145,8 @@ async def test_agent_emits_state_and_finished_events() -> None:
     assert "state" in types
     assert types[-1] == "finished"
     assert events[-1].payload["status"] == RunStatus.COMPLETED.value
+    assert events[-1].payload["final_message"]
+    assert "output" not in events[-1].payload
 
 
 # Failure modes a caller relies on: an honest result, never an exception
