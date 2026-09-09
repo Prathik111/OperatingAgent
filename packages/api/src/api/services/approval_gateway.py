@@ -13,6 +13,7 @@ then restored into in-process waiters when the API starts again.
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 from common.approvals import ApprovalRecord, ApprovalRequest
@@ -24,6 +25,7 @@ from ..errors import ApprovalAlreadyResolved, ApprovalNotFound
 
 #: Total order on risk, so "at or above the threshold" is a numeric comparison.
 _ORDER = {RiskLevel.SAFE: 0, RiskLevel.REVIEW: 1, RiskLevel.BLOCKED: 2}
+log = logging.getLogger(__name__)
 
 
 class _Pending:
@@ -57,9 +59,12 @@ class ApprovalGateway:
         """Restore unresolved approvals after an API process restart."""
         if self._repository is None:
             return
-        for request in await self._repository.list_pending_approvals():
+        requests = await self._repository.list_pending_approvals()
+        for request in requests:
             async with self._lock:
                 self._pending.setdefault(request.id, _Pending(request))
+        if requests:
+            log.info("restored %d pending approval request(s)", len(requests))
 
     async def request_approval(self, request: ApprovalRequest) -> bool:
         """Return whether the tool call may proceed, blocking for a human if needed.
@@ -71,17 +76,37 @@ class ApprovalGateway:
             ToolCallRequest(tool_name=request.tool_name, arguments=request.arguments)
         )
         request.risk_level = level
+        log.debug(
+            "approval evaluated request_id=%s task_id=%s tool=%s risk=%s threshold=%s",
+            request.id,
+            request.task_id,
+            request.tool_name,
+            level.value,
+            self._threshold.value,
+        )
 
         if self._repository is not None:
             record: ApprovalRecord | None = await self._repository.get_approval_state(
                 request.id
             )
             if record is not None and record.approved is not None:
+                log.info(
+                    "approval request_id=%s already resolved durably approved=%s",
+                    request.id,
+                    record.approved,
+                )
                 return record.approved
 
         if _ORDER[level] < _ORDER[self._threshold]:
+            log.debug("approval auto-approved request_id=%s below threshold", request.id)
             return True
         if level == RiskLevel.BLOCKED:
+            log.warning(
+                "approval auto-denied request_id=%s task_id=%s tool=%s by policy",
+                request.id,
+                request.task_id,
+                request.tool_name,
+            )
             if self._repository is not None:
                 await self._repository.save_approval_request(request)
                 await self._repository.resolve_approval(request.id, False, "blocked by policy")
@@ -90,20 +115,43 @@ class ApprovalGateway:
         async with self._lock:
             pending = self._pending.get(request.id)
             if pending is None:
+                if self._repository is not None:
+                    try:
+                        if request.run_id and request.plan_step_id:
+                            await self._repository.save_approval(
+                                request.run_id,
+                                {
+                                    "id": request.id,
+                                    "plan_step_id": request.plan_step_id,
+                                    "reason": f"risk level {level.value}",
+                                },
+                            )
+                        await self._repository.save_approval_request(request)
+                    except Exception:
+                        log.exception(
+                            "approval request persistence failed request_id=%s; "
+                            "request was not registered",
+                            request.id,
+                        )
+                        raise
                 pending = _Pending(request)
                 self._pending[request.id] = pending
-                if self._repository is not None:
-                    if request.run_id and request.plan_step_id:
-                        await self._repository.save_approval(
-                            request.run_id,
-                            {
-                                "id": request.id,
-                                "plan_step_id": request.plan_step_id,
-                                "reason": f"risk level {level.value}",
-                            },
-                        )
-                    await self._repository.save_approval_request(request)
+                log.info(
+                    "approval requested request_id=%s task_id=%s tool=%s risk=%s",
+                    request.id,
+                    request.task_id,
+                    request.tool_name,
+                    level.value,
+                )
+            else:
+                log.debug("approval request_id=%s joined existing waiter", request.id)
+        log.debug("approval waiting request_id=%s", request.id)
         await pending.event.wait()
+        log.info(
+            "approval waiter released request_id=%s approved=%s",
+            request.id,
+            pending.approved,
+        )
         return pending.approved
 
     async def resolve_approval(
@@ -124,24 +172,46 @@ class ApprovalGateway:
                     else None
                 )
                 if record is None:
+                    log.warning("approval resolution rejected unknown request_id=%s", request_id)
                     raise ApprovalNotFound(request_id)
                 if record.approved is not None:
+                    log.info(
+                        "approval resolution rejected already-resolved request_id=%s",
+                        request_id,
+                    )
                     raise ApprovalAlreadyResolved(request_id)
                 pending = _Pending(record.request)
                 self._pending[request_id] = pending
             if pending.resolved:
+                log.info(
+                    "approval resolution rejected already-resolved request_id=%s",
+                    request_id,
+                )
                 raise ApprovalAlreadyResolved(request_id)
             request = pending.request
-        if self._repository is not None and request.run_id and request.plan_step_id:
-            await self._repository.resolve_approval(
-                {
-                    "approval_id": request.id,
-                    "approved": approved,
-                    "note": note,
-                }
+        log.info(
+            "persisting approval resolution request_id=%s task_id=%s approved=%s",
+            request_id,
+            request.task_id,
+            approved,
+        )
+        try:
+            if self._repository is not None and request.run_id and request.plan_step_id:
+                await self._repository.resolve_approval(
+                    {
+                        "approval_id": request.id,
+                        "approved": approved,
+                        "note": note,
+                    }
+                )
+            if self._repository is not None:
+                await self._repository.resolve_approval(request_id, approved, note)
+        except Exception:
+            log.exception(
+                "approval resolution persistence failed request_id=%s; request remains pending",
+                request_id,
             )
-        if self._repository is not None:
-            await self._repository.resolve_approval(request_id, approved, note)
+            raise
         async with self._lock:
             # Re-validate under lock after persist
             pending = self._pending.get(request_id)
@@ -153,6 +223,12 @@ class ApprovalGateway:
             pending.note = note
             pending.resolved = True
         pending.event.set()
+        log.info(
+            "approval resolved request_id=%s task_id=%s approved=%s",
+            request_id,
+            request.task_id,
+            approved,
+        )
 
     def list_pending(self) -> list[ApprovalRequest]:
         return [p.request for p in self._pending.values() if not p.resolved]

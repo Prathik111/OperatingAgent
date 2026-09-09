@@ -69,9 +69,7 @@ def make_task(**overrides: Any) -> AgentTask:
     return AgentTask(**fields)
 
 
-# ---------------------------------------------------------------------------
 # Happy path — plan, call a tool, verify, answer
-# ---------------------------------------------------------------------------
 
 
 async def test_agent_completes_a_task_end_to_end() -> None:
@@ -149,9 +147,7 @@ async def test_agent_emits_state_and_finished_events() -> None:
     assert events[-1].payload["status"] == RunStatus.COMPLETED.value
 
 
-# ---------------------------------------------------------------------------
 # Failure modes a caller relies on: an honest result, never an exception
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.regression

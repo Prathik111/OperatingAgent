@@ -89,6 +89,12 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             "Langfuse tracing %s for API worker",
             "enabled" if tracing_client is not None else "disabled",
         )
+        log.info(
+            "API repository backend=%s fallback=%s database_url_configured=%s",
+            resolved_settings.repository_backend,
+            resolved_settings.repository_fallback,
+            bool(resolved_settings.database_url),
+        )
 
         try:
             repository, pool = build_repository(resolved_settings)
@@ -232,10 +238,21 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                     max_turns=resolved_settings.execution_max_iterations,
                     temperature=resolved_settings.llm_temperature,
                 )
+                native_sandbox = build_native_sandbox(resolved_settings)
+                if native_sandbox is not None:
+                    try:
+                        sandbox_ready = await native_sandbox.probe()
+                        log.info(
+                            "Native sandbox %s: %s",
+                            "available" if sandbox_ready else "unavailable; host fallback remains enabled",
+                            native_sandbox.status_line(),
+                        )
+                    except Exception as exc:  # noqa: BLE001 - sandbox is optional
+                        log.warning("Native sandbox probe failed; host fallback remains enabled: %s", exc)
                 native_runtime = AgentRuntime(
                     database=native_db,
                     agents=[native_config],
-                    sandbox=build_native_sandbox(resolved_settings),
+                    sandbox=native_sandbox,
                 )
                 wire_native_models(native_runtime, settings=resolved_settings)
                 native_service = AgentService(native_runtime)

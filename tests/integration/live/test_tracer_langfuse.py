@@ -22,9 +22,7 @@ from observability.settings import LangfuseSettings
 
 from tests.support.live import LANGFUSE_HOST
 
-# ---------------------------------------------------------------------------
 # Settings and client
-# ---------------------------------------------------------------------------
 
 
 def test_settings_from_env_are_enabled_and_point_at_the_right_region() -> None:
@@ -52,9 +50,7 @@ def test_get_callback_handler_returns_a_langchain_handler() -> None:
     assert isinstance(handler, BaseCallbackHandler)
 
 
-# ---------------------------------------------------------------------------
 # Tracer facade
-# ---------------------------------------------------------------------------
 
 
 def test_tracer_is_enabled_with_real_credentials() -> None:

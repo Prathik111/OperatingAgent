@@ -68,9 +68,7 @@ from tests._fake_tools import ReadFileTool, WriteFileTool
 from tests._scripted import call_event, scripted_model, text_event
 
 
-# ---------------------------------------------------------------------------
 # Tiny doubles: a turn-aware model, an allow-all policy, a must-not-ask prompter
-# ---------------------------------------------------------------------------
 class TurnAwareProvider:
     """Turn one asks to write a file; every turn after finishes with text.
 
@@ -139,17 +137,13 @@ class _Ctx:
         self.limits = Limits(plan_mode=plan_mode)
 
 
-# ---------------------------------------------------------------------------
 # The flag
-# ---------------------------------------------------------------------------
 async def test_limits_carries_plan_mode_off_by_default() -> None:
     assert Limits().plan_mode is False              # ordinary runs are unaffected
     assert Limits(plan_mode=True).plan_mode is True  # opt in per run, like the ceilings
 
 
-# ---------------------------------------------------------------------------
 # The banner (soft half, the part the model is told)
-# ---------------------------------------------------------------------------
 async def test_banner_folds_into_the_system_message_without_mutating_the_wire() -> None:
     wire = [{"role": "system", "content": "BASE"}, {"role": "user", "content": "hi"}]
     out = _with_plan_mode_banner(wire)
@@ -174,9 +168,7 @@ async def test_banner_is_inserted_when_there_is_no_system_message() -> None:
     assert out[1]["role"] == "user"
 
 
-# ---------------------------------------------------------------------------
 # PlanModePolicy (hard half, the guarantee)
-# ---------------------------------------------------------------------------
 async def test_policy_allows_read_only_denies_mutating_while_planning() -> None:
     policy = PlanModePolicy()
     assert policy.check(_Ctx(True), _Defn(read_only=True), {}).result == PermissionDecision.ALLOW
@@ -211,9 +203,7 @@ async def test_deny_wins_in_the_chain_regardless_of_order() -> None:
     )
 
 
-# ---------------------------------------------------------------------------
 # _tool_schemas (soft half, what the model is shown)
-# ---------------------------------------------------------------------------
 def _loop_with_fake_tools() -> tuple:
     """A loop wired to the read/write fake tools and a plan-mode-only policy chain.
 
@@ -261,9 +251,7 @@ async def test_tool_schemas_hides_mutating_tools_in_plan_mode() -> None:
     assert planning == {"read_file"}
 
 
-# ---------------------------------------------------------------------------
 # End to end: the plan's own verify, both sides of the gate
-# ---------------------------------------------------------------------------
 async def _run_write_attempt(plan_mode: bool) -> tuple:
     """Drive a full run whose model tries to write a file, and report what happened.
 
@@ -314,9 +302,7 @@ async def test_dropping_plan_mode_lets_the_same_write_run() -> None:
     assert banner_seen is False             # no banner on an ordinary run
 
 
-# ---------------------------------------------------------------------------
 # A plain-stdlib runner, so this file verifies on a box without pytest.
-# ---------------------------------------------------------------------------
 def _main() -> int:
     tests = [
         test_limits_carries_plan_mode_off_by_default,

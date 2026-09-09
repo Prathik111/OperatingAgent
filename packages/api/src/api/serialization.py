@@ -50,9 +50,7 @@ def to_jsonable(value: Any) -> Any:
     return value
 
 
-# ---------------------------------------------------------------------------
 # Events
-# ---------------------------------------------------------------------------
 
 
 def event_to_dict(event: AgentEvent) -> dict[str, Any]:
@@ -73,9 +71,7 @@ def event_to_sse(event: AgentEvent) -> dict[str, str]:
     }
 
 
-# ---------------------------------------------------------------------------
 # Config snapshots
-# ---------------------------------------------------------------------------
 
 #: config_snapshots column  ->  AgentConfig attribute it is built from.
 _SECTIONS = (

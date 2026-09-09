@@ -178,16 +178,19 @@ def wire_native_models(runtime: Any, settings: Any | None = None) -> list[str]:
 
 
 async def attach_mcp_tools(runtime: Any, working_directory: str = ".") -> list[Any]:
-    """Attach the gateway's MCP tools to the runtime for one working directory.
+    """Attach MCP tools for a workspace and retain its client for later calls.
 
-    Called lazily on first send_message per working_directory; attaches globally
-    so subsequent sessions in same folder reuse the same tools. Returns attached tools.
+    Native runtimes are shared by all API sessions. The provider therefore keeps
+    one in-memory MCP client per workspace, while each registered tool resolves
+    the client from the active session at execution time.
     """
-    # Check if MCP already attached (runtime.tools has >6 native tools)
     native_names = {"remember", "recall", "plan", "invoke_skill", "delegate", "fan_out"}
-    existing = {t.definition.full_name for t in runtime.tools.all()}
-    if len(existing - native_names) > 0:
-        return []  # already attached
+    provider = getattr(runtime, "_mcp_provider", None)
+    if provider is None:
+        # Preserve compatibility with callers that supplied their own MCP tools.
+        existing = {t.definition.full_name for t in runtime.tools.all()}
+        if len(existing - native_names) > 0:
+            return []
 
     try:
         from agent_native.tools.mcp_bridge import MCPToolProvider
@@ -196,11 +199,12 @@ async def attach_mcp_tools(runtime: Any, working_directory: str = ".") -> list[A
         return []
 
     try:
-        provider = MCPToolProvider()
+        if provider is None:
+            provider = MCPToolProvider()
         root = str(Path(working_directory).expanduser().resolve()) if working_directory and working_directory != "." else str(Path.cwd())
-        # Ensure root exists — fallback to CWD if not
         if not Path(root).is_dir():
-            root = str(Path.cwd())
+            log.warning("Skipping MCP attachment for missing workspace %r", root)
+            return []
         tools = await provider.connect(root=root)
         for t in tools:
             try:
@@ -208,11 +212,10 @@ async def attach_mcp_tools(runtime: Any, working_directory: str = ".") -> list[A
             except Exception as exc:  # noqa: BLE001 - duplicate/incompatible tools are skippable
                 log.debug("Skipping MCP tool registration: %s", exc)
                 continue
-        # Keep provider alive on runtime so it can be closed on shutdown
-        # Store on a private attr to avoid polluting the public API
-        if not hasattr(runtime, "_mcp_providers"):
-            runtime._mcp_providers = []  # type: ignore[attr-defined]
-        runtime._mcp_providers.append(provider)  # type: ignore[attr-defined]
+        # Keep one provider alive on runtime so all workspace clients are closed
+        # together during application shutdown.
+        runtime._mcp_provider = provider  # type: ignore[attr-defined]
+        runtime._mcp_providers = [provider]  # type: ignore[attr-defined]
         log.info("Attached %d MCP tools for %r", len(tools), root)
         return tools
     except Exception as exc:  # noqa: BLE001 - MCP connection is optional

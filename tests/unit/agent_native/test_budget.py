@@ -122,9 +122,7 @@ async def _seeded(model: Model) -> tuple:
     return loop, db, session, conv
 
 
-# ---------------------------------------------------------------------------
 # The ceilings
-# ---------------------------------------------------------------------------
 async def test_token_ceiling_stops_cleanly_and_names_the_reason() -> None:
     # Unpriced model, so cost stays zero and only the token ceiling can trip.
     loop, _db, session, conv = await _seeded(_model())
@@ -184,9 +182,7 @@ async def test_no_ceilings_by_default_finish_names_no_reason() -> None:
     assert result.final_text == "all done"
 
 
-# ---------------------------------------------------------------------------
 # Coordinating backoff
-# ---------------------------------------------------------------------------
 async def test_retry_coordinator_serialises_concurrent_backoffs() -> None:
     """Two backoffs at once don't overlap: the second waits for the first.
 
@@ -202,9 +198,7 @@ async def test_retry_coordinator_serialises_concurrent_backoffs() -> None:
     assert elapsed >= 3 * delay
 
 
-# ---------------------------------------------------------------------------
 # A plain-stdlib runner, so this file verifies on a box without pytest.
-# ---------------------------------------------------------------------------
 def _main() -> int:
     tests = [
         test_token_ceiling_stops_cleanly_and_names_the_reason,

@@ -33,6 +33,7 @@ call comes back here and runs through the gateway as it always did.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
@@ -61,9 +62,7 @@ _SANDBOX_NOTE = (
 )
 
 
-# ---------------------------------------------------------------------------
 # One MCP tool, wearing the agent's Tool coat
-# ---------------------------------------------------------------------------
 class MCPTool(Tool):
     """A single tool exposed by the gateway, made to look like any other Tool.
 
@@ -72,8 +71,9 @@ class MCPTool(Tool):
     `MCPToolProvider` that made this tool, so many tools share one link.
     """
 
-    def __init__(self, client: Any, spec: Any) -> None:
+    def __init__(self, client: Any, spec: Any, client_resolver: Any = None) -> None:
         self._client = client
+        self._client_resolver = client_resolver
         name = _spec_field(spec, "name") or ""
         description = _spec_field(spec, "description") or ""
         schema = (
@@ -111,7 +111,20 @@ class MCPTool(Tool):
     async def execute(self, arguments: dict, context: Any) -> ToolResult:
         """Forward the call to the gateway and turn the reply into a ToolResult."""
         try:
-            raw = await self._client.call_tool(self._definition.name, dict(arguments or {}))
+            client = (
+                self._client_resolver(context)
+                if self._client_resolver is not None
+                else self._client
+            )
+            if client is None:
+                return ToolResult(
+                    False,
+                    error=(
+                        f"MCP workspace is not attached for "
+                        f"{self._definition.name!r}"
+                    ),
+                )
+            raw = await client.call_tool(self._definition.name, dict(arguments or {}))
         except Exception as exc:  # a tool error surfaces here on some versions
             return ToolResult(
                 False,
@@ -134,15 +147,14 @@ class MCPTool(Tool):
         return str(command).strip() or None
 
 
-# ---------------------------------------------------------------------------
 # The connection to the gateway
-# ---------------------------------------------------------------------------
 class MCPToolProvider:
-    """Opens one in-memory link to the gateway and lends out its tools.
+    """Opens in-memory gateway links and lends out workspace-aware tools.
 
-    Call `connect()` once at startup (it returns the tools to register), then
-    `close()` at shutdown. Both `fastmcp` and the gateway are imported lazily, so
-    importing this module never requires the MCP extra to be installed.
+    Each workspace gets its own gateway link. Call `connect()` when a workspace
+    is first used (it returns tools to register), then `close()` at shutdown.
+    Both `fastmcp` and the gateway are imported lazily, so importing this module
+    never requires the MCP extra to be installed.
     """
 
     def __init__(self, gateway_factory: Any = None) -> None:
@@ -150,6 +162,9 @@ class MCPToolProvider:
         # it None and we build the real one.
         self._gateway_factory = gateway_factory
         self._client: Any = None
+        self._clients: dict[str, Any] = {}
+        self._connect_lock = asyncio.Lock()
+        self._shutdown = False
 
     async def connect(self, root: str | None = None) -> list:
         """Open the connection and return one MCPTool per gateway tool.
@@ -160,38 +175,70 @@ class MCPToolProvider:
         into a shared `*_SERVER_ROOT` environment variable, and two providers in
         one process can serve two different folders without clobbering each other.
         """
-        resolved = str(Path(root).expanduser().resolve()) if root else None
-        Client = _import_client()
-        gateway = self._build_gateway(resolved)
-        self._client = Client(gateway)
-        # Hold the async connection open for the whole run; close() ends it.
-        try:
-            await self._client.__aenter__()
-            specs = await self._client.list_tools()
-        except Exception:
+        resolved = str(Path(root).expanduser().resolve()) if root else str(Path.cwd().resolve())
+        async with self._connect_lock:
+            if self._shutdown:
+                raise RuntimeError("MCP tool provider is shut down")
+            if resolved in self._clients:
+                return []
+
+            Client = _import_client()
+            gateway = self._build_gateway(resolved)
+            client = Client(gateway)
+            # Hold the async connection open for the whole run; close() ends it.
             try:
-                await self._client.__aexit__(None, None, None)
+                await client.__aenter__()
+                specs = await client.list_tools()
             except Exception:
-                pass
-            try:
-                closer = getattr(self._client, "close", None)
-                if callable(closer):
-                    await closer()  # type: ignore[operator]
-            except Exception:
-                pass
-            self._client = None
-            raise
-        return [MCPTool(self._client, spec) for spec in specs]
+                try:
+                    await client.__aexit__(None, None, None)
+                except Exception:
+                    pass
+                try:
+                    closer = getattr(client, "close", None)
+                    if callable(closer):
+                        await closer()  # type: ignore[operator]
+                except Exception:
+                    pass
+                raise
+
+            self._clients[resolved] = client
+            self._client = client
+            return [
+                MCPTool(client, spec, client_resolver=self._client_for_context)
+                for spec in specs
+            ]
 
     async def close(self) -> None:
         """End the connection. Safe to call more than once."""
-        client, self._client = self._client, None
-        if client is not None:
+        async with self._connect_lock:
+            self._shutdown = True
+            clients, self._clients = self._clients, {}
+            self._client = None
+            for client in clients.values():
+                try:
+                    await client.__aexit__(None, None, None)
+                except Exception:
+                    # Best-effort teardown: if it's already closed there's nothing to do.
+                    pass
+
+    def _client_for_context(self, context: Any) -> Any | None:
+        """Resolve the MCP connection from the active native session."""
+        session = getattr(context, "session", None)
+        working_directory = getattr(session, "working_directory", None)
+        if working_directory:
             try:
-                await client.__aexit__(None, None, None)
-            except Exception:
-                # Best-effort teardown: if it's already closed there's nothing to do.
-                pass
+                root = str(Path(working_directory).expanduser().resolve())
+            except (OSError, RuntimeError, ValueError):
+                return None
+            # A session with an explicit workspace must never silently borrow a
+            # client attached to another workspace.
+            return self._clients.get(root)
+        # A direct MCPTool test or a single-root runtime can use the only client
+        # even when no session context is available.
+        if len(self._clients) == 1:
+            return next(iter(self._clients.values()))
+        return None
 
     def _build_gateway(self, root: str | None = None) -> Any:
         if self._gateway_factory is not None:
@@ -218,9 +265,7 @@ def _import_client() -> Any:
     return Client
 
 
-# ---------------------------------------------------------------------------
 # Permissions: infer honest flags from the tool's name
-# ---------------------------------------------------------------------------
 # Filesystem tools that only look.
 _FS_READS = {
     "read_file",
@@ -312,9 +357,7 @@ def _infer_permissions(name: str) -> ToolPermissions:
     return ToolPermissions()
 
 
-# ---------------------------------------------------------------------------
 # Shape helpers: MCP replies -> ToolResult, tolerant of version differences
-# ---------------------------------------------------------------------------
 def _spec_field(spec: Any, name: str, default: Any = None) -> Any:
     """Read a field off a tool spec, whether it's an object or a dict."""
     if spec is None:

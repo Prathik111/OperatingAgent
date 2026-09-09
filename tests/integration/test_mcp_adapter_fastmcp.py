@@ -75,9 +75,7 @@ async def test_call_unknown_tool_is_failure_not_exception(in_process_server) -> 
     assert result.error
 
 
-# ---------------------------------------------------------------------------
 # Through the registry the executor actually uses
-# ---------------------------------------------------------------------------
 
 
 async def test_registry_over_real_adapter_round_trips(in_process_server) -> None:

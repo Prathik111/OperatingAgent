@@ -71,9 +71,7 @@ from tests._scripted import (
 )
 
 
-# ---------------------------------------------------------------------------
 # Tiny doubles
-# ---------------------------------------------------------------------------
 class TurnAwareProvider:
     """Turn one asks to write a file; every turn after finishes with text.
 
@@ -146,9 +144,7 @@ def _recorder(sink: list):
     return hook
 
 
-# ---------------------------------------------------------------------------
 # HookManager, in isolation
-# ---------------------------------------------------------------------------
 async def test_empty_manager_is_a_noop() -> None:
     manager = HookManager()
     for point in HookPoint:
@@ -233,9 +229,7 @@ async def test_clear_restores_the_noop() -> None:
     assert not manager.has(HookPoint.POST_TOOL)
 
 
-# ---------------------------------------------------------------------------
 # In the loop: the tool points (the plan's own verify)
-# ---------------------------------------------------------------------------
 def _loop(hooks: HookManager, provider: Any = None) -> tuple:
     """A real loop wired to the read/write fake tools and an allow-all policy chain.
 
@@ -329,9 +323,7 @@ async def test_no_hooks_restores_current_behavior_exactly() -> None:
     assert asked == 0
 
 
-# ---------------------------------------------------------------------------
 # In the loop: the stop point (top-level vs helper routing)
-# ---------------------------------------------------------------------------
 async def test_run_stop_fires_at_the_end_of_a_top_level_run() -> None:
     seen: list = []
     hooks = HookManager()
@@ -374,9 +366,7 @@ async def test_run_stop_routes_helper_ids_to_subagent_stop() -> None:
     assert [c.run_id for c in sub_seen] == ["run_top/researcher"]
 
 
-# ---------------------------------------------------------------------------
 # In the service: the prompt-submitted point, and the runtime wiring
-# ---------------------------------------------------------------------------
 def _service(db: MemoryDatabase, provider: ScriptedProvider) -> tuple:
     """A real AgentRuntime + AgentService on a scripted model - no key, no network."""
     runtime = AgentRuntime(
@@ -425,9 +415,7 @@ async def test_prompt_submitted_cannot_veto_the_run() -> None:
     assert result.status is RunStatus.FINISHED
 
 
-# ---------------------------------------------------------------------------
 # A plain-stdlib runner, so this file verifies on a box without pytest.
-# ---------------------------------------------------------------------------
 def _main() -> int:
     tests = [
         test_empty_manager_is_a_noop,

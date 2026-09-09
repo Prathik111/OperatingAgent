@@ -10,6 +10,7 @@ present.
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 from agent_native.config import AgentConfig
 from agent_native.conversation import Session, ToolCall
@@ -33,9 +34,7 @@ from agent_native.tools.mcp_bridge import (
 )
 
 
-# ---------------------------------------------------------------------------
 # Fakes: enough of FastMCP's shapes to exercise the bridge, nothing more.
-# ---------------------------------------------------------------------------
 class FakeSpec:
     def __init__(self, name, description="", input_schema=None):
         self.name = name
@@ -83,9 +82,7 @@ def _read_tool(client=None):
     )
 
 
-# ---------------------------------------------------------------------------
 # spec -> ToolDefinition
-# ---------------------------------------------------------------------------
 def test_spec_becomes_definition():
     d = _read_tool().definition
     assert d.full_name == "filesystem_read_file"   # namespace empty, name is exact
@@ -105,9 +102,7 @@ def test_spec_from_dict_shape():
     assert tool.definition.permissions.read_only is True
 
 
-# ---------------------------------------------------------------------------
 # name -> permission flags
-# ---------------------------------------------------------------------------
 def test_permission_inference_table():
     p = _infer_permissions
     # filesystem reads vs writes
@@ -141,9 +136,7 @@ def test_permission_inference_table():
     assert not unknown.read_only and not unknown.destructive
 
 
-# ---------------------------------------------------------------------------
 # reply -> ToolResult, across the shapes different fastmcp versions return
-# ---------------------------------------------------------------------------
 def test_result_prefers_text_content():
     r = _to_tool_result(FakeCallResult(content=[FakeText("file body")]))
     assert r.success and r.output == "file body"
@@ -169,9 +162,7 @@ def test_result_bare_list_is_supported():
     assert r.success and r.output == "legacy shape"
 
 
-# ---------------------------------------------------------------------------
 # execute: forwards the call, maps the reply, never throws
-# ---------------------------------------------------------------------------
 async def test_execute_forwards_and_maps():
     client = FakeClient(result=FakeCallResult(content=[FakeText("port=8080")]))
     result = await _read_tool(client).execute({"path": "config.txt"}, context=None)
@@ -185,9 +176,7 @@ async def test_execute_turns_an_exception_into_a_result():
     assert not result.success and "gateway down" in result.error
 
 
-# ---------------------------------------------------------------------------
 # the real permission gate reads the inferred flags
-# ---------------------------------------------------------------------------
 def _manager_with(tool):
     db = MemoryDatabase()
     registry = ToolRegistry()
@@ -282,9 +271,7 @@ async def test_shell_tool_denied_never_runs():
     assert client.calls == []  # denied: the gateway was never touched
 
 
-# ---------------------------------------------------------------------------
 # provider plumbing that doesn't need a live connection
-# ---------------------------------------------------------------------------
 def test_build_gateway_uses_the_factory():
     sentinel = object()
     provider = MCPToolProvider(gateway_factory=lambda: sentinel)
@@ -302,6 +289,54 @@ def test_real_gateway_accepts_and_confines_the_workspace_root(tmp_path):
 
 async def test_close_without_connect_is_safe():
     await MCPToolProvider().close()  # no connection open; must not raise
+
+
+async def test_workspace_client_resolution_keeps_mcp_calls_in_session_root(tmp_path):
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    first_client = FakeClient(result=FakeCallResult(content=[FakeText("first")]))
+    second_client = FakeClient(result=FakeCallResult(content=[FakeText("second")]))
+    provider = MCPToolProvider()
+    provider._clients = {
+        str(first.resolve()): first_client,
+        str(second.resolve()): second_client,
+    }
+    tool = MCPTool(
+        first_client,
+        FakeSpec("filesystem_read_file"),
+        client_resolver=provider._client_for_context,
+    )
+
+    context = SimpleNamespace(
+        session=SimpleNamespace(working_directory=str(second)),
+    )
+    result = await tool.execute({"path": "file.txt"}, context)
+
+    assert result.success and result.output == "second"
+    assert first_client.calls == []
+    assert second_client.calls == [("filesystem_read_file", {"path": "file.txt"})]
+
+
+async def test_workspace_client_resolution_does_not_fallback_for_unknown_root(tmp_path):
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    third = tmp_path / "third"
+    first.mkdir()
+    second.mkdir()
+    third.mkdir()
+    first_client = FakeClient()
+    second_client = FakeClient()
+    provider = MCPToolProvider()
+    provider._clients = {
+        str(first.resolve()): first_client,
+        str(second.resolve()): second_client,
+    }
+
+    context = SimpleNamespace(session=SimpleNamespace(working_directory=str(third)))
+
+    assert provider._client_for_context(context) is None
 
 
 async def test_import_client_guides_when_fastmcp_missing():

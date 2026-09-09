@@ -519,9 +519,7 @@ class AutoApproveResponder(PermissionResponder):
         return PermissionAnswer(True, PermissionDuration.ONCE, "")
 
 
-# ---------------------------------------------------------------------------
 # `agent-native runs`: the run-history view
-# ---------------------------------------------------------------------------
 async def _runs_view(argv: list) -> int:
     """List recent runs with their receipts - for a session, a folder, or all.
 

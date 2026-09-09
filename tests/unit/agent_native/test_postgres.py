@@ -30,9 +30,7 @@ from agent_native.postgres import (
 )
 
 
-# ---------------------------------------------------------------------------
 # A fake pool + connection: records SQL, can be told to drop connections
-# ---------------------------------------------------------------------------
 class _FakeTx:
     async def __aenter__(self):
         return self
@@ -129,9 +127,7 @@ def _executed(db: PostgresDatabase) -> str:
     return "\n".join(sql for op, sql, _ in db._pool.calls if op == "execute")
 
 
-# ---------------------------------------------------------------------------
 # Infrastructure-owned schema verification
-# ---------------------------------------------------------------------------
 async def test_apply_schema_verifies_the_required_migration_without_ddl():
     db = _db()
     await db.apply_schema()
@@ -158,9 +154,7 @@ async def test_schema_version_reads_the_highest_recorded():
     assert await db.schema_version() == 2
 
 
-# ---------------------------------------------------------------------------
 # The retry wrapper: a blip is retried, a bug is not
-# ---------------------------------------------------------------------------
 async def test_a_dropped_connection_is_retried_then_succeeds():
     db = _db(fail_first=2, fetchvals=[42])            # first two acquires fail
     value = await db._fetchval("SELECT 1")
@@ -196,9 +190,7 @@ async def test_retries_give_up_after_the_limit_and_raise():
     assert db._pool.acquire_attempts == 3             # 1 try + 2 retries
 
 
-# ---------------------------------------------------------------------------
 # The event counter's insert-then-number fallback
-# ---------------------------------------------------------------------------
 async def test_next_sequence_returns_the_updated_counter():
     db = _db(fetchvals=[5])                            # the UPDATE ... RETURNING
     assert await db.next_sequence("s") == 5
@@ -212,9 +204,7 @@ async def test_next_sequence_uses_the_canonical_thread_counter():
     )
 
 
-# ---------------------------------------------------------------------------
 # Messages survive the round trip through JSON
-# ---------------------------------------------------------------------------
 def test_message_parts_round_trip_through_json():
     parts = [
         Text("hello world"),

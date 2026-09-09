@@ -13,9 +13,7 @@ from agent_langgraph.graph.state import AgentPlan, Finding, PlanStep
 from common.enums import RunStatus, VerificationResult, WorkflowPhase
 from pydantic import ValidationError
 
-# ---------------------------------------------------------------------------
 # PlanStep
-# ---------------------------------------------------------------------------
 
 
 def test_plan_step_defaults() -> None:
@@ -64,9 +62,7 @@ def test_arguments_default_is_per_instance() -> None:
     assert b.arguments == {}
 
 
-# ---------------------------------------------------------------------------
 # AgentPlan
-# ---------------------------------------------------------------------------
 
 
 def test_agent_plan_requires_all_fields() -> None:
@@ -111,9 +107,7 @@ def test_agent_plan_requires_remediation_defaults_false() -> None:
     assert plan.requires_remediation is False
 
 
-# ---------------------------------------------------------------------------
 # Finding — the durable observation carried across a replan
-# ---------------------------------------------------------------------------
 
 
 def test_finding_defaults() -> None:

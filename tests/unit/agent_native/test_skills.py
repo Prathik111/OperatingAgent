@@ -80,9 +80,7 @@ from tests._scripted import ScriptedProvider, call_event, scripted_registry, tex
 SENTINEL = "ZZ_SKILL_BODY_SENTINEL_42"
 
 
-# ---------------------------------------------------------------------------
 # Writing a skills tree on disk
-# ---------------------------------------------------------------------------
 def _write_skill(base: str, folder: str, text: str, root: str = "skills") -> Path:
     """Create ``<base>/<root>/<folder>/SKILL.md`` with the given text; return its path."""
     manifest = Path(base) / root / folder / "SKILL.md"
@@ -101,9 +99,7 @@ _GREETER = (
 )
 
 
-# ---------------------------------------------------------------------------
 # Tiny doubles for the loop e2e: a turn-aware model, allow-all, a must-not-ask prompter
-# ---------------------------------------------------------------------------
 class _InvokeThenFinish:
     """Turn one invokes a named skill; every turn after finishes with text.
 
@@ -198,9 +194,7 @@ def _context(session: Session) -> RunContext:
     )
 
 
-# ---------------------------------------------------------------------------
 # Discovery: only the name and description are read up front
-# ---------------------------------------------------------------------------
 async def test_discover_reads_name_and_description_from_frontmatter() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         _write_skill(tmp, "greeter", _GREETER)
@@ -282,9 +276,7 @@ async def test_split_frontmatter_and_first_meaningful_line() -> None:
     assert _first_meaningful_line("\n\n   \n") == ""
 
 
-# ---------------------------------------------------------------------------
 # The listing: names and one-liners, never bodies
-# ---------------------------------------------------------------------------
 async def test_skill_listing_names_not_bodies() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         _write_skill(tmp, "greeter", _GREETER)
@@ -298,9 +290,7 @@ async def test_skill_listing_names_not_bodies() -> None:
     assert skill_listing([]) == ""                      # nothing to advertise, nothing added
 
 
-# ---------------------------------------------------------------------------
 # The invoke_skill tool: loads a body, recovers from a bad name, trims a huge one
-# ---------------------------------------------------------------------------
 async def test_invoke_tool_returns_body_for_known_skill() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         _write_skill(tmp, "greeter", _GREETER)
@@ -347,9 +337,7 @@ async def test_invoke_tool_truncates_a_huge_body() -> None:
         assert result.output.startswith("Skill: big")
 
 
-# ---------------------------------------------------------------------------
 # The plan's verify, half one: ABSENT from the base prompt
-# ---------------------------------------------------------------------------
 async def test_base_prompt_lists_the_name_not_the_body() -> None:
     """create_session seeds the catalogue into the system prompt - names, not bodies."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -366,9 +354,7 @@ async def test_base_prompt_lists_the_name_not_the_body() -> None:
         assert SENTINEL not in system                   # ...but the body is NOT in the prompt
 
 
-# ---------------------------------------------------------------------------
 # The plan's verify, half two: PRESENT after the model invokes it
-# ---------------------------------------------------------------------------
 async def test_invoking_a_skill_brings_its_body_into_the_next_request() -> None:
     """A run that invokes a skill has the body on the wire by the next request.
 
@@ -406,9 +392,7 @@ async def test_invoking_a_skill_brings_its_body_into_the_next_request() -> None:
         assert SENTINEL in turn2                         # the body is now on the wire
 
 
-# ---------------------------------------------------------------------------
 # A plain-stdlib runner, so this file verifies on a box without pytest.
-# ---------------------------------------------------------------------------
 def _main() -> int:
     tests = [
         test_discover_reads_name_and_description_from_frontmatter,

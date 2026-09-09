@@ -316,9 +316,7 @@ def test_otlp_attributes_coerces_to_allowed_types() -> None:
     assert coerced["tags"] == ["x", "y"]
 
 
-# ---------------------------------------------------------------------------
 # A plain-stdlib runner, so this file verifies on a box without pytest.
-# ---------------------------------------------------------------------------
 def _main() -> int:
     tests = [
         test_spans_nest_run_turn_tool_including_parallel_tools,

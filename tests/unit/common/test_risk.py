@@ -22,9 +22,7 @@ def call(tool_name: str, **arguments: object) -> ToolCallRequest:
     return ToolCallRequest(tool_name=tool_name, arguments=dict(arguments))
 
 
-# ---------------------------------------------------------------------------
 # BLOCKED — destructive / unrecoverable
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.regression
@@ -97,9 +95,7 @@ def test_force_rm_without_recursive_is_not_blocked(
     assert classifier.classify(call("terminal_run", command=command)) is RiskLevel.REVIEW
 
 
-# ---------------------------------------------------------------------------
 # REVIEW — mutating but recoverable
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -118,9 +114,7 @@ def test_review_calls(classifier: RiskClassifier, tool_name: str, arguments: dic
     assert classifier.classify(call(tool_name, **arguments)) is RiskLevel.REVIEW
 
 
-# ---------------------------------------------------------------------------
 # SAFE — nothing matched
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -159,9 +153,7 @@ def test_benign_payloads_are_safe(
     assert classifier.classify(call(tool_name, **arguments)) is RiskLevel.SAFE
 
 
-# ---------------------------------------------------------------------------
 # Ordering / matching behaviour
-# ---------------------------------------------------------------------------
 
 
 def test_separator_normalised_names_match_word_boundaries(classifier: RiskClassifier) -> None:
@@ -228,9 +220,7 @@ def test_classify_delegates_to_explain(classifier: RiskClassifier) -> None:
     assert classifier.classify(request) is classifier.explain(request)[0]
 
 
-# ---------------------------------------------------------------------------
 # Custom rule sets
-# ---------------------------------------------------------------------------
 
 
 def test_custom_rules_replace_defaults() -> None:

@@ -12,9 +12,7 @@ from __future__ import annotations
 import pytest
 from git_server.services.git_service import GitService
 
-# ---------------------------------------------------------------------------
 # Argument construction (pure — _run captured, git never invoked)
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture

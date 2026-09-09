@@ -28,9 +28,7 @@ def run_verifier(config, state, *, model=None, prompt_manager=None):
     return VerifierNode(state, build_runtime(context))
 
 
-# ---------------------------------------------------------------------------
 # Guards
-# ---------------------------------------------------------------------------
 
 
 async def test_no_plan_routes_to_responding(agent_config) -> None:
@@ -44,9 +42,7 @@ async def test_pointer_past_end_routes_to_responding(agent_config) -> None:
     assert delta["status"] is TaskStatus.RESPONDING
 
 
-# ---------------------------------------------------------------------------
 # Deterministic layer (no LLM round-trip)
-# ---------------------------------------------------------------------------
 
 
 async def test_failed_step_rejected_without_llm(agent_config) -> None:
@@ -74,9 +70,7 @@ async def test_empty_output_rejected_and_counted(agent_config) -> None:
     assert delta["retry_count"] == 1
 
 
-# ---------------------------------------------------------------------------
 # LLM layer
-# ---------------------------------------------------------------------------
 
 
 def completed_step_state(**overrides):
@@ -126,9 +120,7 @@ async def test_llm_failure_fails_closed(agent_config) -> None:
     assert "verifier unavailable" in delta["verification_reason"]
 
 
-# ---------------------------------------------------------------------------
 # Verification disabled
-# ---------------------------------------------------------------------------
 
 
 async def test_verification_disabled_passes_without_llm() -> None:

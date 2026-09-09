@@ -62,7 +62,6 @@ class TaskResponse(BaseModel):
     workspace: str | None = None
     track: AgentTrack
     status: str | None = Field(default=None, description="latest run status, if a run exists")
-    output: str | None = Field(default=None, description="latest run final answer")
     final_message: str | None = Field(
         default=None,
         description="latest run final assistant message",
@@ -94,7 +93,6 @@ class TaskResponse(BaseModel):
             or None,
             track=task.track,
             status=status,
-            output=run.output if run is not None else None,
             final_message=run.output if run is not None else None,
             error=run.error if run is not None else None,
             run_id=run.run_id if run is not None else None,

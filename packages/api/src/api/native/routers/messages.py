@@ -155,8 +155,8 @@ async def send_message(
                 lf = getattr(service.runtime.monitoring, "langfuse_client", None)
                 if lf is not None:
                     lf.flush()
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 - flushing is best effort
+                log.debug("native Langfuse flush failed: %s", exc)
             return run_result
         finally:
             # Unregister cancellation when run ends
@@ -254,8 +254,8 @@ async def resume_run(
             lf = getattr(service.runtime.monitoring, "langfuse_client", None)
             if lf is not None:
                 lf.flush()
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - flushing is best effort
+            log.debug("native Langfuse flush failed: %s", exc)
     finally:
         cancels.pop(session_id, None)
 

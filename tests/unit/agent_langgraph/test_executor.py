@@ -29,9 +29,7 @@ def run_executor(config, state, *, tool_registry=None, **ctx_kwargs):
     return ExecutorNode(state, build_runtime(context))
 
 
-# ---------------------------------------------------------------------------
 # Guards
-# ---------------------------------------------------------------------------
 
 
 async def test_no_plan_fails(agent_config) -> None:
@@ -55,9 +53,7 @@ async def test_iteration_budget_exhausted_fails(make_config) -> None:
     assert "iteration budget" in delta["last_error"]
 
 
-# ---------------------------------------------------------------------------
 # Reasoning-only steps
-# ---------------------------------------------------------------------------
 
 
 async def test_reasoning_step_completes_without_tool(agent_config) -> None:
@@ -70,9 +66,7 @@ async def test_reasoning_step_completes_without_tool(agent_config) -> None:
     assert updated.output == "think about it"
 
 
-# ---------------------------------------------------------------------------
 # Successful tool execution
-# ---------------------------------------------------------------------------
 
 
 async def test_successful_tool_call_routes_to_verifying(agent_config) -> None:
@@ -111,9 +105,7 @@ async def test_large_output_is_truncated(agent_config) -> None:
     assert "chars omitted" in output
 
 
-# ---------------------------------------------------------------------------
 # Failure handling
-# ---------------------------------------------------------------------------
 
 
 async def test_business_failure_is_not_retried(make_config) -> None:
@@ -163,9 +155,7 @@ async def test_timeout_is_treated_as_transient(make_config, monkeypatch) -> None
     assert delta["plan"].steps[0].status is RunStatus.FAILED
 
 
-# ---------------------------------------------------------------------------
 # Human approval gate
-# ---------------------------------------------------------------------------
 
 
 async def test_risky_tool_gate_approved_proceeds(monkeypatch) -> None:
@@ -258,9 +248,7 @@ async def test_no_gate_when_risk_below_threshold(monkeypatch) -> None:
     assert delta["status"] is TaskStatus.VERIFYING
 
 
-# ---------------------------------------------------------------------------
 # Test doubles for tool timing/failure behaviour
-# ---------------------------------------------------------------------------
 
 
 async def _no_sleep(_seconds: float) -> None:

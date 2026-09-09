@@ -16,9 +16,7 @@ from agent_langgraph.tracing import tracer as tracer_module
 from agent_langgraph.tracing.tracer import Tracer, _NoOpSpan
 from common.config import TracingConfig
 
-# ---------------------------------------------------------------------------
 # Disabled regime (no credentials -> get_client() is None)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.regression
@@ -66,9 +64,7 @@ def test_flush_is_noop_when_disabled() -> None:
     Tracer(TracingConfig(enabled=True)).flush()  # must not raise
 
 
-# ---------------------------------------------------------------------------
 # Enabled regime (client patched in)
-# ---------------------------------------------------------------------------
 
 
 class FakeSpan:

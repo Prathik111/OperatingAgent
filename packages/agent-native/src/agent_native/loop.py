@@ -62,9 +62,7 @@ _RETRY_FIRST_DELAY_SECONDS = 1.0
 _STOPPED_MESSAGE = "Not run: you stopped the agent before this call started."
 
 
-# ---------------------------------------------------------------------------
 # The knobs and the outcome
-# ---------------------------------------------------------------------------
 @dataclass
 class Limits:
     """How far a single run may go, and the shape of how it gets there.
@@ -245,9 +243,7 @@ class RunRecord:
     trace_id: str = ""
 
 
-# ---------------------------------------------------------------------------
 # The loop
-# ---------------------------------------------------------------------------
 class AgentLoop:
     """Runs the think/act/observe cycle for one conversation."""
 
@@ -1239,9 +1235,7 @@ class AgentLoop:
         )
 
 
-# ---------------------------------------------------------------------------
 # Assembling streamed tool-call fragments
-# ---------------------------------------------------------------------------
 def _merge_fragment(fragments: dict, order: list, data: dict) -> None:
     """Fold one streamed tool-call fragment into the call it belongs to.
 
@@ -1374,9 +1368,7 @@ def _answered_call_ids(messages: list) -> set:
     return answered
 
 
-# ---------------------------------------------------------------------------
 # Telling a bad moment apart from a bad request
-# ---------------------------------------------------------------------------
 #: Phrases that mean "try again": the provider is busy, slow, or briefly gone.
 _TEMPORARY_HINTS = (
     "rate limit",

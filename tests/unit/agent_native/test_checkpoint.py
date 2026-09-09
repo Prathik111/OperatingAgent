@@ -60,9 +60,7 @@ from tests._scripted import (
 )
 
 
-# ---------------------------------------------------------------------------
 # Small filesystem helpers
-# ---------------------------------------------------------------------------
 def _write(root: str, rel: str, content: str) -> None:
     """Write text to root/rel, making parent folders as needed."""
     path = os.path.join(root, rel)
@@ -88,9 +86,7 @@ def _manifest(root: str) -> dict:
     return out
 
 
-# ---------------------------------------------------------------------------
 # The store on its own - the plan's verify and its neighbours
-# ---------------------------------------------------------------------------
 def test_snapshot_edit_rewind_matches_byte_for_byte() -> None:
     # The plan's verify, verbatim: make edits, checkpoint, make more, rewind, and
     # confirm the folder matches byte for byte. The "more" is deliberately every
@@ -241,9 +237,7 @@ def test_load_on_an_empty_base_is_a_store_with_no_checkpoints() -> None:
         assert store.latest() is None
 
 
-# ---------------------------------------------------------------------------
 # Wired to the step-16 hooks: snapshot before a batch of edits
-# ---------------------------------------------------------------------------
 class _AllowAll(Policy):
     """Allows everything, so the only thing shaping the run is the checkpoint hook."""
 
@@ -399,9 +393,7 @@ async def test_install_auto_checkpoint_registers_on_the_runtime() -> None:
         assert runtime.loop._hooks is runtime.hooks                # the shared manager
 
 
-# ---------------------------------------------------------------------------
 # A plain-stdlib runner, so this file verifies on a box without pytest.
-# ---------------------------------------------------------------------------
 def _main() -> int:
     sync_tests = [
         test_snapshot_edit_rewind_matches_byte_for_byte,

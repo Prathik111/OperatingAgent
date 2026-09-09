@@ -68,9 +68,10 @@ class PostgresTaskRepository:
             conn.transaction(),
             conn.cursor() as cur,
         ):
-            await cur.execute(_sql.DELETE_THREAD_EVENTS, (thread_id,))
-            await cur.execute(_sql.DELETE_THREAD_RUNS, (thread_id,))
-            await cur.execute(_sql.DELETE_THREAD_TASKS, (thread_id,))
+            owner = _API_ACTOR_EXTERNAL_ID
+            await cur.execute(_sql.DELETE_THREAD_EVENTS, (thread_id, owner))
+            await cur.execute(_sql.DELETE_THREAD_RUNS, (thread_id, owner))
+            await cur.execute(_sql.DELETE_THREAD_TASKS, (thread_id, owner))
             await cur.execute(_sql.DELETE_THREAD, (thread_id, _API_ACTOR_EXTERNAL_ID))
             return cur.rowcount > 0
 

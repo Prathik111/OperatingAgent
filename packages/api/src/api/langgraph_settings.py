@@ -76,15 +76,24 @@ async def list_langgraph_models(
 async def update_langgraph_settings(body: RuntimeLLMSettings, request: Request) -> dict[str, Any]:
     agent = _orchestrator(request)
     old = agent.config
-    provider = normalize_provider(body.provider)
+    provider = normalize_provider(body.provider or old.llm.provider)
     if provider not in _LANGGRAPH_PROVIDERS:
         raise HTTPException(
             status_code=422,
             detail=f"unsupported langgraph provider {provider!r}; expected one of {', '.join(_LANGGRAPH_PROVIDERS)}",
         )
-    base_url = clean_base_url(provider, normalize_base_url(body.base_url))
+    base_url = clean_base_url(
+        provider,
+        normalize_base_url(body.base_url)
+        if "base_url" in body.model_fields_set
+        else old.llm.base_url,
+    )
     downloaded = await provider_models(provider, base_url) if provider == "ollama" else []
-    model = resolve_model(provider, normalize_model(body.model), downloaded or None)
+    model = resolve_model(
+        provider,
+        normalize_model(body.model) if body.model is not None else old.llm.model,
+        downloaded or None,
+    )
     if not model:
         raise HTTPException(status_code=422, detail=f"no default model for provider {provider!r}; set model explicitly")
     try:
@@ -103,10 +112,10 @@ async def update_langgraph_settings(body: RuntimeLLMSettings, request: Request) 
                 provider=provider,
                 model=model,
                 api_key=old.llm.api_key,
-                timeout_seconds=body.timeout_seconds,
-                temperature=body.temperature,
-                max_tokens=body.max_tokens,
-                top_p=body.top_p,
+                timeout_seconds=body.timeout_seconds if body.timeout_seconds is not None else old.llm.timeout_seconds,
+                temperature=body.temperature if body.temperature is not None else old.llm.temperature,
+                max_tokens=body.max_tokens if "max_tokens" in body.model_fields_set else old.llm.max_tokens,
+                top_p=body.top_p if body.top_p is not None else old.llm.top_p,
                 base_url=base_url,
             ),
             execution=old.execution,
@@ -128,5 +137,10 @@ async def update_langgraph_settings(body: RuntimeLLMSettings, request: Request) 
         "model": model,
         "models": models,
         "default_model": default_model(provider, models or None),
+        "base_url": base_url,
+        "temperature": config.llm.temperature,
+        "top_p": config.llm.top_p,
+        "max_tokens": config.llm.max_tokens,
+        "timeout_seconds": config.llm.timeout_seconds,
         "applies_to": "new runs",
     }

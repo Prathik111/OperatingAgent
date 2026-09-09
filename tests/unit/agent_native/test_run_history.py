@@ -147,9 +147,7 @@ async def test_render_has_a_row_per_run_and_a_totals_line() -> None:
         assert token in totals_line
 
 
-# ---------------------------------------------------------------------------
 # A plain-stdlib runner, so this file verifies on a box without pytest.
-# ---------------------------------------------------------------------------
 def _main() -> int:
     tests = [
         test_list_sessions_filters_by_folder_and_is_newest_first,

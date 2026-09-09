@@ -45,9 +45,7 @@ from agent_native.redaction import (
 SECRET = "s3cr3t-value-abcdef123456"
 
 
-# ---------------------------------------------------------------------------
 # The redactor itself
-# ---------------------------------------------------------------------------
 def test_known_value_is_masked_wherever_it_sits() -> None:
     r = Redactor(StaticSecretSource([SECRET]))
     assert r.redact_text(f"the key is {SECRET} ok") == "the key is [redacted] ok"
@@ -104,9 +102,7 @@ def test_env_secret_source_reads_the_environment_now() -> None:
             os.environ.pop(name, None)
 
 
-# ---------------------------------------------------------------------------
 # The sinks
-# ---------------------------------------------------------------------------
 async def test_event_data_is_redacted_on_the_way_in() -> None:
     db = MemoryDatabase()
     bus = EventBus(db, redactor=Redactor(StaticSecretSource([SECRET])))
@@ -157,9 +153,7 @@ async def test_memory_notes_are_redacted_before_they_are_kept() -> None:
     assert kept and SECRET not in kept[0].text and MASK in kept[0].text
 
 
-# ---------------------------------------------------------------------------
 # The wiring
-# ---------------------------------------------------------------------------
 def test_runtime_installs_one_redactor_into_every_sink() -> None:
     from agent_native.service import AgentRuntime
 
@@ -177,9 +171,7 @@ def _session(session_id: str):
     return s
 
 
-# ---------------------------------------------------------------------------
 # A plain-stdlib runner, so this file verifies on a box without pytest.
-# ---------------------------------------------------------------------------
 def _main() -> int:
     import inspect
 

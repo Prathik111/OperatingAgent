@@ -179,9 +179,7 @@ async def _run(provider: Any, config: AgentConfig, limits: Limits) -> tuple:
     return result, db, session
 
 
-# ---------------------------------------------------------------------------
 # The budget changes the number on the receipt
-# ---------------------------------------------------------------------------
 async def test_more_effort_yields_more_reasoning_tokens() -> None:
     low_result, _, _ = await _run(
         ReasoningProvider(), AgentConfig(model="scripted-1"), Limits(reasoning_effort="low")
@@ -226,9 +224,7 @@ async def test_reasoning_tokens_reach_the_run_finished_event() -> None:
     assert data["output_tokens"] == result.usage.output_tokens
 
 
-# ---------------------------------------------------------------------------
 # Where the effort comes from: config default vs per-run override
-# ---------------------------------------------------------------------------
 async def test_agent_config_effort_is_used_when_the_run_is_silent() -> None:
     provider = ReasoningProvider()
     result, _, _ = await _run(
@@ -267,9 +263,7 @@ async def test_no_effort_anywhere_passes_nothing_to_a_legacy_provider() -> None:
     assert "done" in result.final_text
 
 
-# ---------------------------------------------------------------------------
 # A provider without a thinking mode
-# ---------------------------------------------------------------------------
 async def test_a_provider_without_thinking_ignores_the_budget() -> None:
     provider = PlainProvider()
     result, _, _ = await _run(
@@ -282,9 +276,7 @@ async def test_a_provider_without_thinking_ignores_the_budget() -> None:
     assert result.usage.reasoning_tokens == 0
 
 
-# ---------------------------------------------------------------------------
 # The CLI surfaces it: receipt line, history totals, runs table
-# ---------------------------------------------------------------------------
 def test_receipt_shows_reasoning_only_when_present() -> None:
     with_reasoning = _receipt(
         {"status": "finished", "turns": 1, "input_tokens": 30, "output_tokens": 220,
@@ -330,9 +322,7 @@ def test_render_table_shows_reasoning_column_only_when_present() -> None:
     assert "REASONING" not in _render_runs_table(without).splitlines()[0]
 
 
-# ---------------------------------------------------------------------------
 # A plain-stdlib runner, so this file verifies on a box without pytest.
-# ---------------------------------------------------------------------------
 def _main() -> int:
     sync_tests = [
         test_receipt_shows_reasoning_only_when_present,

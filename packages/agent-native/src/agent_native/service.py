@@ -186,7 +186,10 @@ class AgentRuntime:
         if provider == "groq":
             from .models.groq_model import Groq
 
-            self.models.register_provider("groq", Groq(base_url=base_url))
+            groq = Groq(base_url=base_url)
+            if not groq.has_key:
+                raise ValueError("GROQ_API_KEY is required for the Groq provider")
+            self.models.register_provider("groq", groq)
         elif provider == "ollama":
             from .models.ollama_model import Ollama
 
@@ -419,9 +422,7 @@ class AgentService:
         return await self.runtime.database.load_conversation(session_id)
 
 
-# ---------------------------------------------------------------------------
 # Rebuilding a run's receipt from what was logged, for resume
-# ---------------------------------------------------------------------------
 def _latest_run_id(events: list) -> str:
     """The id of the most recent run any event belongs to.
 

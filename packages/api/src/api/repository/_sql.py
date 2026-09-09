@@ -323,22 +323,32 @@ LIMIT 1
 # API-owned actor so one caller can never delete another owner's thread.
 DELETE_THREAD_EVENTS = """
 DELETE FROM agent_events AS event
-USING agent_runs AS run, agent_tasks AS task
+USING agent_runs AS run, agent_tasks AS task, agent_threads AS thread, actors AS owner
 WHERE event.run_id = run.id
   AND run.task_id = task.id
   AND task.thread_id = %s
+  AND task.thread_id = thread.id
+  AND thread.owner_actor_id = owner.id
+  AND owner.external_id = %s
 """
 
 DELETE_THREAD_RUNS = """
 DELETE FROM agent_runs AS run
-USING agent_tasks AS task
+USING agent_tasks AS task, agent_threads AS thread, actors AS owner
 WHERE run.task_id = task.id
   AND task.thread_id = %s
+  AND task.thread_id = thread.id
+  AND thread.owner_actor_id = owner.id
+  AND owner.external_id = %s
 """
 
 DELETE_THREAD_TASKS = """
-DELETE FROM agent_tasks
-WHERE thread_id = %s
+DELETE FROM agent_tasks AS task
+USING agent_threads AS thread, actors AS owner
+WHERE task.thread_id = %s
+  AND task.thread_id = thread.id
+  AND thread.owner_actor_id = owner.id
+  AND owner.external_id = %s
 """
 
 DELETE_THREAD = """

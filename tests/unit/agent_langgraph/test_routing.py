@@ -27,9 +27,7 @@ from common.enums import RunStatus, WorkflowPhase
 
 from tests.support.langgraph import make_plan, make_state, make_step
 
-# ---------------------------------------------------------------------------
 # should_execute (after the planner)
-# ---------------------------------------------------------------------------
 
 
 def test_should_execute_routes_to_executor_when_steps_remain() -> None:
@@ -53,9 +51,7 @@ def test_should_execute_tolerates_missing_plan() -> None:
     assert should_execute(state) == RESPONDER
 
 
-# ---------------------------------------------------------------------------
 # verification_router (after the verifier)
-# ---------------------------------------------------------------------------
 
 
 def test_verification_failure_routes_to_error_handler() -> None:
@@ -89,9 +85,7 @@ def test_verification_success_with_plan_exhausted_routes_to_phase_transition() -
     assert verification_router(state) == PHASE_TRANSITION
 
 
-# ---------------------------------------------------------------------------
 # phase_router (after the phase transition)
-# ---------------------------------------------------------------------------
 
 
 def test_phase_router_sends_remediate_to_planner() -> None:
@@ -111,9 +105,7 @@ def test_phase_router_treats_missing_phase_as_more_work() -> None:
     assert phase_router(state) == PLANNER
 
 
-# ---------------------------------------------------------------------------
 # retry_router (after the error handler)
-# ---------------------------------------------------------------------------
 
 
 def test_retry_router_gives_up_when_budget_spent() -> None:

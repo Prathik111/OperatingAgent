@@ -6,13 +6,13 @@ from pydantic import BaseModel, Field
 
 
 class RuntimeLLMSettings(BaseModel):
-    provider: str = Field(default="ollama", min_length=1)
-    model: str = ""
+    provider: str | None = Field(default=None, min_length=1)
+    model: str | None = None
     base_url: str | None = None
-    temperature: float = Field(default=0.0, ge=0, le=2)
-    top_p: float = Field(default=1.0, gt=0, le=1)
+    temperature: float | None = Field(default=None, ge=0, le=2)
+    top_p: float | None = Field(default=None, gt=0, le=1)
     max_tokens: int | None = Field(default=None, gt=0)
-    timeout_seconds: int = Field(default=60, gt=0)
+    timeout_seconds: int | None = Field(default=None, gt=0)
 
 
 _DEFAULT_MODELS: dict[str, str] = {

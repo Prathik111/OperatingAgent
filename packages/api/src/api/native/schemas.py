@@ -13,9 +13,7 @@ from observability import get_trace_url
 from pydantic import AliasChoices, BaseModel, Field
 
 
-# ---------------------------------------------------------------------------
 # Sessions
-# ---------------------------------------------------------------------------
 class CreateSessionRequest(BaseModel):
     agent: str = Field(default="build", description="AgentConfig name")
     title: str = Field(default="", description="Human title")
@@ -42,9 +40,7 @@ class SessionResponse(BaseModel):
         )
 
 
-# ---------------------------------------------------------------------------
 # Runs (defined before SessionWithRunsResponse for forward ref)
-# ---------------------------------------------------------------------------
 class RunResponse(BaseModel):
     run_id: str
     session_id: str = ""
@@ -138,9 +134,7 @@ class SessionWithRunsResponse(SessionResponse):
     message_count: int = 0
 
 
-# ---------------------------------------------------------------------------
 # Messages
-# ---------------------------------------------------------------------------
 class SendMessageRequest(BaseModel):
     message: str | None = Field(
         default=None,
@@ -173,9 +167,7 @@ class ResumeRequest(BaseModel):
 # (RunResponse already defined above)
 
 
-# ---------------------------------------------------------------------------
 # Events
-# ---------------------------------------------------------------------------
 class EventResponse(BaseModel):
     sequence: int
     type: str
@@ -185,9 +177,7 @@ class EventResponse(BaseModel):
     time: datetime | None = None
 
 
-# ---------------------------------------------------------------------------
 # Permissions
-# ---------------------------------------------------------------------------
 class PermissionResponse(BaseModel):
     call_id: str
     tool: str
@@ -212,9 +202,7 @@ class ResolvePermissionRequest(BaseModel):
     scope: str = Field(default="", description="Optional path scope to narrow a session/always grant")
 
 
-# ---------------------------------------------------------------------------
 # Messages / Conversation
-# ---------------------------------------------------------------------------
 class MessagePartResponse(BaseModel):
     part_type: str
     data: dict[str, Any]
@@ -228,9 +216,7 @@ class MessageResponse(BaseModel):
     created_at: datetime | None = None
 
 
-# ---------------------------------------------------------------------------
 # Native health
-# ---------------------------------------------------------------------------
 class NativeHealthResponse(BaseModel):
     status: str
     database: str

@@ -34,9 +34,7 @@ def verified_step(step_id: int = 1, output: str = "result"):
     )
 
 
-# ---------------------------------------------------------------------------
 # Success paths
-# ---------------------------------------------------------------------------
 
 
 async def test_responder_success_marks_completed(agent_config) -> None:
@@ -55,9 +53,7 @@ async def test_responder_trivial_empty_plan_succeeds(agent_config) -> None:
     assert delta["status"] is TaskStatus.COMPLETED
 
 
-# ---------------------------------------------------------------------------
 # Failure paths — the responder must never dress a failure up as success
-# ---------------------------------------------------------------------------
 
 
 async def test_responder_failure_marks_failed(agent_config) -> None:
@@ -78,9 +74,7 @@ async def test_responder_last_error_forces_failure_even_if_steps_ok(agent_config
     assert delta["status"] is TaskStatus.FAILED
 
 
-# ---------------------------------------------------------------------------
 # Fallback synthesis
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.regression

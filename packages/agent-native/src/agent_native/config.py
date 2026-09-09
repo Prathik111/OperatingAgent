@@ -161,7 +161,6 @@ class PromptBuilder:
         return "\n".join(lines)
 
 
-# ---------------------------------------------------------------------------
 # What's in the folder
 #
 # Both of these are read once, when a session's prompt is built, and neither ever
@@ -169,7 +168,6 @@ class PromptBuilder:
 # prompt simply doesn't mention it, which is how the agent behaved before this
 # existed. Neither one starts a subprocess - `git` may not be installed, and
 # waiting on a child process to build a prompt is a bad trade for one branch name.
-# ---------------------------------------------------------------------------
 def read_folder_listing(working_directory: str, limit: int = MAX_LISTED_ENTRIES) -> str:
     """The names at the top of the working folder, folders first, as one line.
 
@@ -232,7 +230,6 @@ def read_branch(working_directory: str) -> str:
     return f"detached at {head[:8]}" if head else ""
 
 
-# ---------------------------------------------------------------------------
 # Skills
 #
 # A skill is a named folder of instructions the agent pulls in only when it's
@@ -242,7 +239,6 @@ def read_branch(working_directory: str) -> str:
 # simply produces an empty catalogue, which is exactly how the agent behaved
 # before skills existed. Only names and one-line descriptions are read here; a
 # skill's full body is loaded on demand by the invoke_skill tool (tools/skill_tool.py).
-# ---------------------------------------------------------------------------
 
 #: A skill is a named folder holding this file - the same shape the harness uses.
 SKILL_FILE = "SKILL.md"

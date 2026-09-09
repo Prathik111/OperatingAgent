@@ -61,9 +61,7 @@ from agent_native.tools.subagent import HELPER_RUN_SEPARATOR, DelegateTool
 from tests._scripted import ScriptedProvider, call_event, text_event
 
 
-# ---------------------------------------------------------------------------
 # Stand-in providers whose failure mode the test owns
-# ---------------------------------------------------------------------------
 def _usage_event(input_tokens: int, output_tokens: int) -> StreamEvent:
     return StreamEvent(
         StreamType.USAGE, {"input_tokens": input_tokens, "output_tokens": output_tokens}
@@ -153,9 +151,7 @@ class _ToolThenText:
         return 0
 
 
-# ---------------------------------------------------------------------------
 # Tiny doubles for the loop wiring
-# ---------------------------------------------------------------------------
 class _AllowAll(Policy):
     """Allows everything, so a run's only variable is the model, never the gate."""
 
@@ -231,9 +227,7 @@ def _context(session: Session, config: AgentConfig, max_turns: int = 3) -> RunCo
     )
 
 
-# ---------------------------------------------------------------------------
 # The candidate list: primary strict, fallbacks best-effort, deduped
-# ---------------------------------------------------------------------------
 async def test_resolve_lists_primary_then_registered_fallbacks() -> None:
     reg = ModelRegistry()
     reg.register_provider("p", _AnswersWithUsage())
@@ -285,9 +279,7 @@ async def test_resolve_raises_on_a_bad_primary() -> None:
     assert raised
 
 
-# ---------------------------------------------------------------------------
 # The plan's verify, half one: the fallback takes over mid-run
-# ---------------------------------------------------------------------------
 async def test_fallback_takes_over_when_primary_fails() -> None:
     """The primary 429s; the run fails over to the backup and finishes there."""
     primary = _AlwaysRateLimited()
@@ -357,9 +349,7 @@ async def test_fallover_is_sticky() -> None:
     assert backup.calls == 2                  # the backup served both turns
 
 
-# ---------------------------------------------------------------------------
 # Fallover only when it could help: not on a permanent error, not once streamed
-# ---------------------------------------------------------------------------
 async def test_a_permanent_failure_does_not_fail_over() -> None:
     """A bad key fails the same way on every model, so trying the backup is waste:
     the run errors on the primary without touching the fallback."""
@@ -383,9 +373,7 @@ async def test_a_permanent_failure_does_not_fail_over() -> None:
     assert backup.calls == 0                  # the backup was never reached
 
 
-# ---------------------------------------------------------------------------
 # A run with no fallbacks is the run it always was
-# ---------------------------------------------------------------------------
 async def test_a_run_without_fallbacks_is_unchanged() -> None:
     """No fallback chain: one model, priced exactly as before, zero fallovers.
 
@@ -411,9 +399,7 @@ async def test_a_run_without_fallbacks_is_unchanged() -> None:
     assert result.cost_usd == 0.005
 
 
-# ---------------------------------------------------------------------------
 # The plan's verify, half two: subagents bill against the cheaper model
-# ---------------------------------------------------------------------------
 async def test_subagent_bills_against_its_cheaper_model() -> None:
     """A helper with its own cheaper model runs on it, and its receipt is priced
     at that model - not the parent's strong one."""
@@ -462,9 +448,7 @@ async def test_subagent_bills_against_its_cheaper_model() -> None:
     assert cheap.calls == 1
 
 
-# ---------------------------------------------------------------------------
 # A plain-stdlib runner, so this file verifies on a box without pytest.
-# ---------------------------------------------------------------------------
 def _main() -> int:
     tests = [
         test_resolve_lists_primary_then_registered_fallbacks,

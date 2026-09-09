@@ -107,6 +107,8 @@ def retry_router(state: AgentState) -> NodeType:
     """
     if state.get("retry_count", 0) >= MAX_RETRIES:
         return RESPONDER
+    if str(state.get("last_error") or "").startswith("human rejected "):
+        return RESPONDER
 
     plan = state.get("plan")
     if plan is not None and state.get("current_step", 0) < len(plan.steps):

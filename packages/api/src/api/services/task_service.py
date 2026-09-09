@@ -61,6 +61,8 @@ class TaskService:
         self._settings = settings
         self._active_task_ids: set[str] = set()
         self._active_thread_ids: set[str] = set()
+        self._lifecycle_guard = asyncio.Lock()
+        self._thread_locks: dict[str, asyncio.Lock] = {}
         # Held so the event loop keeps a strong ref — asyncio only weak-refs
         # tasks, so a fire-and-forget run could otherwise be GC'd mid-flight.
         self._background = background
@@ -79,12 +81,15 @@ class TaskService:
 
     async def delete_thread(self, thread_id: str) -> bool:
         """Delete a thread and everything under it; False when unknown."""
-        if thread_id in self._active_thread_ids:
-            raise TaskAlreadyRunning(thread_id)
-        deleted = await self._repo.delete_thread(thread_id)
-        if deleted:
-            self._active_thread_ids.discard(thread_id)
-        return deleted
+        async with self._lifecycle_guard:
+            lock = self._thread_locks.setdefault(thread_id, asyncio.Lock())
+        async with lock:
+            if thread_id in self._active_thread_ids:
+                raise TaskAlreadyRunning(thread_id)
+            deleted = await self._repo.delete_thread(thread_id)
+            if deleted:
+                self._active_thread_ids.discard(thread_id)
+            return deleted
 
     async def create_task(
         self,
@@ -99,18 +104,24 @@ class TaskService:
             raise UnknownTrack(str(resolved_track))
 
         resolved_thread_id = thread_id or str(uuid4())
+        async with self._lifecycle_guard:
+            lifecycle_lock = self._thread_locks.setdefault(
+                resolved_thread_id, asyncio.Lock()
+            )
+        await lifecycle_lock.acquire()
         if resolved_thread_id in self._active_thread_ids:
+            lifecycle_lock.release()
             raise TaskAlreadyRunning(resolved_thread_id)
         self._active_thread_ids.add(resolved_thread_id)
         try:
             continuing_thread = False
+            existing_tasks: list[tuple[AgentTask, RunStatus | None]] = []
             if thread_id is not None:
                 try:
-                    continuing_thread = bool(
-                        await self._repo.list_tasks_by_thread(
-                            thread_id, limit=1, offset=0
-                        )
+                    existing_tasks = await self._repo.list_tasks_by_thread(
+                        thread_id, limit=1, offset=0
                     )
+                    continuing_thread = bool(existing_tasks)
                 except ThreadNotFound:
                     # ``save_task`` creates a new thread in the Postgres backend;
                     # an unknown explicit id therefore represents its first turn.
@@ -120,6 +131,11 @@ class TaskService:
             selected_workspace = workspace or task_metadata.get("workspace") or task_metadata.get(
                 "working_directory"
             )
+            if selected_workspace is None and existing_tasks:
+                previous = existing_tasks[0][0].metadata
+                selected_workspace = previous.get("workspace") or previous.get(
+                    "working_directory"
+                )
             resolved_workspace = resolve_workspace(
                 str(selected_workspace) if selected_workspace else None,
                 default=self._settings.sandbox_workspace,
@@ -157,6 +173,8 @@ class TaskService:
         except BaseException:
             self._active_thread_ids.discard(resolved_thread_id)
             raise
+        finally:
+            lifecycle_lock.release()
 
     async def create_thread_task(
         self,
@@ -189,43 +207,58 @@ class TaskService:
         checkpoint_id: str | None = None,
     ) -> AgentTask:
         """Start another attempt from the latest LangGraph checkpoint."""
-        task = await self._repo.get_task(task_id)
-        latest_status = await self._repo.get_latest_run_status(task_id)
-        if latest_status in {
-            RunStatus.CREATED,
-            RunStatus.PENDING,
-        } or (latest_status is RunStatus.RUNNING and task_id in self._active_task_ids):
-            raise TaskAlreadyRunning(task_id)
+        async with self._lifecycle_guard:
+            task = await self._repo.get_task(task_id)
+            lifecycle_lock = self._thread_locks.setdefault(
+                task.thread_id, asyncio.Lock()
+            )
+        async with lifecycle_lock:
+            if task.thread_id in self._active_thread_ids:
+                raise TaskAlreadyRunning(task.thread_id)
+            self._active_thread_ids.add(task.thread_id)
+            try:
+                latest_status = await self._repo.get_latest_run_status(task_id)
+                if latest_status in {
+                    RunStatus.CREATED,
+                    RunStatus.PENDING,
+                } or (
+                    latest_status is RunStatus.RUNNING
+                    and task_id in self._active_task_ids
+                ):
+                    raise TaskAlreadyRunning(task_id)
 
-        previous_run_id = await self._repo.get_latest_run_id(task_id)
-        previous_metadata = await self._repo.get_latest_run_metadata(task_id)
-        task.execution_mode = "resume"
-        task.resume_value = resume_value
-        task.resume_checkpoint_id = checkpoint_id
-        task.resume_checkpoint_namespace = previous_metadata.get(
-            "checkpoint_namespace"
-        )
-        config = self._settings.build_agent_config(task.track)
-        run_id = await self._repo.create_run(
-            task.id,
-            config,
-            metadata={
-                "execution_mode": "resume",
-                "thread_id": task.thread_id,
-                "checkpoint_namespace": (
-                    task.resume_checkpoint_namespace or config.checkpoint.namespace
-                ),
-                "resumes_run_id": previous_run_id,
-                "checkpoint_id": checkpoint_id,
-            },
-        )
-        await self._broker.reopen(task.id, clear=True)
-        self._active_task_ids.add(task.id)
-        self._active_thread_ids.add(task.thread_id)
-        run_task = asyncio.create_task(self._run(task, run_id))
-        self._background.add(run_task)
-        run_task.add_done_callback(self._background.discard)
-        return task
+                previous_run_id = await self._repo.get_latest_run_id(task_id)
+                previous_metadata = await self._repo.get_latest_run_metadata(task_id)
+                task.execution_mode = "resume"
+                task.resume_value = resume_value
+                task.resume_checkpoint_id = checkpoint_id
+                task.resume_checkpoint_namespace = previous_metadata.get(
+                    "checkpoint_namespace"
+                )
+                config = self._settings.build_agent_config(task.track)
+                run_id = await self._repo.create_run(
+                    task.id,
+                    config,
+                    metadata={
+                        "execution_mode": "resume",
+                        "thread_id": task.thread_id,
+                        "checkpoint_namespace": (
+                            task.resume_checkpoint_namespace
+                            or config.checkpoint.namespace
+                        ),
+                        "resumes_run_id": previous_run_id,
+                        "checkpoint_id": checkpoint_id,
+                    },
+                )
+                await self._broker.reopen(task.id, clear=True)
+                self._active_task_ids.add(task.id)
+                run_task = asyncio.create_task(self._run(task, run_id))
+                self._background.add(run_task)
+                run_task.add_done_callback(self._background.discard)
+                return task
+            except BaseException:
+                self._active_thread_ids.discard(task.thread_id)
+                raise
 
     async def resume_task_in_thread(
         self,
