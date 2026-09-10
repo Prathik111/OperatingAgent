@@ -9,7 +9,9 @@ from agent_native.database import MemoryDatabase
 from agent_native.events import EventBus
 from agent_native.main import _read_answer
 from agent_native.permissions import (
+    AutoApprovePolicy,
     ChannelResponder,
+    Decision,
     PermissionAnswer,
     PermissionDecision,
     PermissionDuration,
@@ -19,6 +21,7 @@ from agent_native.permissions import (
     PermissionResponder,
     PermissionRule,
     PermissionStore,
+    Policy,
     PolicyChain,
     RulePolicy,
     SessionPolicy,
@@ -311,3 +314,47 @@ async def test_the_terminal_answer_vocabulary():
     assert _read_answer("s") == (True, PermissionDuration.SESSION, "")
     assert _read_answer("s notes") == (True, PermissionDuration.SESSION, "notes")
     assert _read_answer('s "my notes"') == (True, PermissionDuration.SESSION, "my notes")
+
+
+# -- allow-all opt-in ----------------------------------------------------------
+class _StubPolicy(Policy):
+    def __init__(self, verdict: PermissionDecision) -> None:
+        self.verdict = verdict
+
+    def check(self, context, definition, arguments) -> Decision:
+        return Decision(self.verdict, reason="stub")
+
+
+async def test_auto_approve_turns_ask_into_allow():
+    policy = AutoApprovePolicy(_StubPolicy(PermissionDecision.ASK))
+    decision = policy.check(None, _definition("w", destructive=True), {})
+    assert decision.result == PermissionDecision.ALLOW
+    assert "auto" in decision.reason
+
+
+async def test_auto_approve_keeps_denials():
+    # Workspace escapes and plan-mode blocks are safety boundaries, not prompts.
+    policy = AutoApprovePolicy(_StubPolicy(PermissionDecision.DENY))
+    assert policy.check(None, _definition("w", destructive=True), {}).result == PermissionDecision.DENY
+
+
+async def test_auto_approve_leaves_allows_alone():
+    policy = AutoApprovePolicy(_StubPolicy(PermissionDecision.ALLOW))
+    assert policy.check(None, _definition("r", read_only=True), {}).result == PermissionDecision.ALLOW
+
+
+async def test_runtime_auto_approve_toggle_swaps_the_gate():
+    from agent_native.service import AgentRuntime
+
+    runtime = AgentRuntime()
+    assert runtime.auto_approve_all is False
+    destructive = _definition("w", destructive=True)
+
+    assert runtime.tool_manager._policy.check(None, destructive, {}).result == PermissionDecision.ASK
+
+    assert runtime.set_auto_approve_all(True) is True
+    assert runtime.auto_approve_all is True
+    assert runtime.tool_manager._policy.check(None, destructive, {}).result == PermissionDecision.ALLOW
+
+    assert runtime.set_auto_approve_all(False) is False
+    assert runtime.tool_manager._policy.check(None, destructive, {}).result == PermissionDecision.ASK

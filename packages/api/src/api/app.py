@@ -43,12 +43,13 @@ try:
     from .native.routers import messages as native_messages
     from .native.routers import permissions as native_permissions
     from .native.routers import runs as native_runs
+    from .native.routers import sandbox as native_sandbox_router
     from .native.routers import sessions as native_sessions
 
     _NATIVE_ROUTERS_AVAILABLE = True
 except ImportError:  # pragma: no cover
     _NATIVE_ROUTERS_AVAILABLE = False
-    native_events = native_health = native_messages = native_permissions = native_runs = native_sessions = native_settings = None  # type: ignore
+    native_events = native_health = native_messages = native_permissions = native_runs = native_sandbox_router = native_sessions = native_settings = None  # type: ignore
 
 log = logging.getLogger(__name__)
 
@@ -60,6 +61,12 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         nonlocal resolved_settings
+
+        # Explicit-degradation ledger: every fallback below must record a
+        # reason here, surfaced on GET /health. A durable store that fails
+        # without an explicitly configured fallback raises instead.
+        degraded: list[str] = []
+        app.state.degraded = degraded
 
         def use_fallback(backend: str) -> None:
             """Switch every application consumer to the selected local backend."""
@@ -112,11 +119,12 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                     "file_based",
                 }
             ):
-                log.warning(
-                    "Postgres repository could not be initialized; using %s repository: %s",
-                    resolved_settings.repository_fallback,
-                    exc,
+                reason = (
+                    f"task repository: postgres unavailable ({exc}); "
+                    f"using explicitly configured {resolved_settings.repository_fallback} fallback"
                 )
+                log.error("%s", reason)
+                degraded.append(reason)
                 repository, pool = build_fallback_repository(), None
             else:
                 raise
@@ -143,11 +151,12 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                     "file_based",
                 }:
                     raise
-                log.warning(
-                    "Postgres repository unavailable; using %s repository: %s",
-                    resolved_settings.repository_fallback,
-                    exc,
+                reason = (
+                    "task repository: postgres connection failed "
+                    f"({exc}); using explicitly configured {resolved_settings.repository_fallback} fallback"
                 )
+                log.error("%s", reason)
+                degraded.append(reason)
                 repository = build_fallback_repository()
                 pool = None
 
@@ -173,7 +182,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             )
 
             try:
-                native_db, native_pool = build_native_database(resolved_settings)
+                native_db, native_pool = build_native_database(resolved_settings, degraded)
                 # For postgres, open the native pool explicitly
                 if native_pool is not None and hasattr(native_pool, "connect"):
                     # PostgresDatabase owns asyncpg pool
@@ -197,11 +206,12 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                             "file-based",
                             "file_based",
                         ):
-                            log.warning(
-                                "Native Postgres connect failed, falling back to %s: %s",
-                                fallback,
-                                exc,
+                            reason = (
+                                "native runtime: postgres connection failed "
+                                f"({exc}); using explicitly configured {fallback} fallback"
                             )
+                            log.error("%s", reason)
+                            degraded.append(reason)
                             try:
                                 await native_pool.close()
                             except Exception as close_exc:  # noqa: BLE001 - cleanup is best effort
@@ -287,7 +297,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         app.state.broker = broker
         app.state.approvals = approval_gateway
         app.state.background = background
-        app.state.task_service = TaskService(
+        task_service = TaskService(
             orchestrators=orchestrators,
             repository=repository,
             broker=broker,
@@ -295,6 +305,26 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             settings=resolved_settings,
             background=background,
         )
+        app.state.task_service = task_service
+        # Reap executions left non-terminal by a dead process BEFORE serving:
+        # without this, a restarted API would see stale RUNNING rows with empty
+        # in-memory registries and could open duplicate executions over them.
+        recovered = await task_service.recover_stale_executions()
+        if recovered:
+            log.warning(
+                "startup recovered %d stale run(s); resume is safe for their tasks",
+                len(recovered),
+            )
+        app.state.task_service = task_service
+        # Reap executions left non-terminal by a dead process BEFORE serving:
+        # without this, a restarted API would see stale RUNNING rows with empty
+        # in-memory registries and could open duplicate executions over them.
+        recovered = await task_service.recover_stale_executions()
+        if recovered:
+            log.warning(
+                "startup recovered %d stale run(s); resume is safe for their tasks",
+                len(recovered),
+            )
 
         try:
             yield
@@ -395,6 +425,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         assert native_events is not None
         assert native_permissions is not None
         assert native_runs is not None
+        assert native_sandbox_router is not None
         app.include_router(native_health.router)
         app.include_router(native_sessions.router)
         app.include_router(native_settings.router)
@@ -402,4 +433,5 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         app.include_router(native_events.router)
         app.include_router(native_permissions.router)
         app.include_router(native_runs.router)
+        app.include_router(native_sandbox_router.router)
     return app

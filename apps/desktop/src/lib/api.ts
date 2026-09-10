@@ -7,6 +7,7 @@ import type {
   NativeHealthResponse,
   PermissionResponse,
   RunResponse,
+  SandboxStatusResponse,
   SessionResponse,
   SessionWithRunsResponse,
   TaskResponse,
@@ -83,6 +84,8 @@ export const nativeApi = {
     req<EventResponse[]>(`/native/sessions/${encodeURIComponent(sessionId)}/events?from=${from}`),
   getEventsSSEUrl: (sessionId: string, from = 0, stream = 1) =>
     `${apiBase()}/native/sessions/${encodeURIComponent(sessionId)}/events?from=${from}&stream=${stream}`,
+
+  getSandbox: () => req<SandboxStatusResponse>("/native/sandbox"),
 
   listRuns: (sessionId: string) => req<RunResponse[]>(`/native/sessions/${encodeURIComponent(sessionId)}/runs`),
   getRun: (runId: string) => req<RunResponse>(`/native/runs/${encodeURIComponent(runId)}`),
@@ -185,7 +188,76 @@ const SSE_EVENT_TYPES = [
   "run_finished",
   "run_receipt",
   "model_fallback",
+  // Persisted task-event names (see TaskService._run.on_event): subscribed so a
+  // contracted event is never silently dropped by EventSource routing.
+  "llm_call",
+  "tool_call",
+  "phase_entered",
+  "phase_exited",
+  "plan_created",
+  "finding_recorded",
+  "verification_recorded",
+  "trace_ref",
+  "approval_requested",
+  "approval_resolved",
 ] as const;
+
+// ——— Activity (shared by ChatWorkspace + EventTimeline) ———
+// Token-level deltas drive the streaming bubble, not the timeline: one row per
+// chunk would flood Activity with hundreds of fragments for a single answer.
+
+/** Event types that never get an Activity row. */
+export const ACTIVITY_HIDDEN_TYPES: ReadonlySet<string> = new Set([
+  "assistant_delta",
+  "reasoning_delta",
+]);
+
+/** Whether an event of this type belongs in the Activity timeline. */
+export function isActivityEvent(type: string): boolean {
+  return !ACTIVITY_HIDDEN_TYPES.has(type);
+}
+
+const ACTIVITY_SUMMARY_KEYS = [
+  "final_message",
+  "final_text",
+  "output",
+  "text",
+  "goal",
+  "role",
+  "tool_name",
+  "tool",
+  "preview",
+  "name",
+  "error",
+  "reason",
+  "status",
+] as const;
+
+/** One-line summary for an Activity row. Never throws on odd payloads. */
+export function summarizeEventData(type: string, data: unknown): string {
+  if (!data || typeof data !== "object") return "";
+  const record = data as Record<string, unknown>;
+  for (const key of ACTIVITY_SUMMARY_KEYS) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      const text = value.trim();
+      return text.length > 90 ? `${text.slice(0, 90)}…` : text;
+    }
+  }
+  if (typeof record.turn === "number") return `turn ${record.turn}`;
+  return "";
+}
+
+/** Stable signature for one activity row, for keying across refresh + live. */
+export function activitySignature(type: string, data: unknown): string {
+  let rendered: string;
+  try {
+    rendered = JSON.stringify(data) ?? "null";
+  } catch {
+    rendered = String(data);
+  }
+  return `${type}|${rendered}`;
+}
 
 function parseSSEFrame(frame: string): SSEMessage | null {
   let id = "";

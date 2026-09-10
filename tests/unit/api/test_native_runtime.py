@@ -28,6 +28,45 @@ def test_build_native_database_requires_dsn_for_explicit_postgres() -> None:
         build_native_database(ApiSettings(repository_backend="postgres"))
 
 
+def test_build_native_database_fails_closed_without_explicit_fallback(monkeypatch) -> None:
+    """Regression (P0-7): a configured Postgres that cannot be constructed
+    must fail startup by default — never silently become memory."""
+    import agent_native.postgres as native_postgres
+
+    def boom(dsn):
+        raise RuntimeError("no driver")
+
+    monkeypatch.setattr(native_postgres, "PostgresDatabase", boom)
+    settings = ApiSettings(
+        repository_backend="postgres",
+        database_url="postgresql://test",
+        repository_fallback="error",
+    )
+    with pytest.raises(RuntimeError, match="no driver"):
+        build_native_database(settings, [])
+
+
+def test_build_native_database_explicit_memory_fallback_is_recorded(monkeypatch) -> None:
+    """An explicitly configured fallback is honored — and recorded, loudly."""
+    import agent_native.postgres as native_postgres
+
+    def boom(dsn):
+        raise RuntimeError("no driver")
+
+    monkeypatch.setattr(native_postgres, "PostgresDatabase", boom)
+    settings = ApiSettings(
+        repository_backend="postgres",
+        database_url="postgresql://test",
+        repository_fallback="memory",
+    )
+    degraded: list = []
+    database, pool = build_native_database(settings, degraded)
+    assert isinstance(database, MemoryDatabase)
+    assert pool is None
+    assert len(degraded) == 1
+    assert "memory fallback" in degraded[0]
+
+
 def test_wire_native_models_registers_ollama_defaults_without_groq_key(monkeypatch) -> None:
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     monkeypatch.setenv("OLLAMA_HOST", "http://ollama.test:11434")

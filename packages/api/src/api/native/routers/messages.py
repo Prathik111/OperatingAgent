@@ -26,6 +26,63 @@ NativeServiceDep = Annotated[Any, Depends(get_native_service)]
 log = logging.getLogger(__name__)
 
 
+def _cancel_registry(request: Request) -> dict[str, Any]:
+    """In-flight cancellations keyed by run id — never by session.
+
+    Two runs in one session each get their own ``Cancellation`` here, so
+    cancelling one can never flip the other. ``native_cancels`` keeps its
+    historical name; its keys changed from session ids to run ids.
+    """
+    cancels = getattr(request.app.state, "native_cancels", None)
+    if not isinstance(cancels, dict):
+        cancels = {}
+        request.app.state.native_cancels = cancels
+    return cancels
+
+
+def _cancel_index(request: Request) -> dict[str, set[str]]:
+    """Session id -> in-flight run ids, for session-wide cancellation."""
+    index = getattr(request.app.state, "native_cancel_sessions", None)
+    if not isinstance(index, dict):
+        index = {}
+        request.app.state.native_cancel_sessions = index
+    return index
+
+
+def _register_cancel(request: Request, session_id: str, run_id: str, cancellation: Any) -> None:
+    _cancel_registry(request)[run_id] = cancellation
+    _cancel_index(request).setdefault(session_id, set()).add(run_id)
+
+
+def _unregister_cancel(request: Request, session_id: str, run_id: str) -> None:
+    _cancel_registry(request).pop(run_id, None)
+    run_ids = _cancel_index(request).get(session_id)
+    if run_ids is not None:
+        run_ids.discard(run_id)
+        if not run_ids:
+            _cancel_index(request).pop(session_id, None)
+
+
+def _resume_lock(request: Request, session_id: str):
+    """Per-session lock serializing concurrent resumes of one session.
+
+    Two resumes racing would both continue the same interrupted run id and
+    interleave two loops on one transcript. The lock makes the second resume
+    observe the first one's RUN_FINISHED and return its receipt instead.
+    """
+    import asyncio
+
+    locks = getattr(request.app.state, "native_resume_locks", None)
+    if not isinstance(locks, dict):
+        locks = {}
+        request.app.state.native_resume_locks = locks
+    lock = locks.get(session_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        locks[session_id] = lock
+    return lock
+
+
 def _limits_from_request(limits: object | None):
     if limits is None:
         return None
@@ -122,21 +179,29 @@ async def send_message(
     media_parts = _media_from_request(body.media)
     limits = _limits_from_request(body.limits)
 
-    # Prepare a cancellation that the cancel endpoint can flip (stored on app.state)
+    # Snapshot the event cursor BEFORE the run starts. The bus subscription
+    # below registers before replaying, so with the cursor predating the run,
+    # no event the run emits can be missed and none is duplicated. Capturing
+    # the cursor after starting the run (as before) drops whatever the run
+    # emitted in between.
+    try:
+        tip = max([0] + [int(getattr(e, "sequence", 0) or 0) for e in await db.load_events(session_id, after_sequence=0)], default=0)
+    except Exception as exc:  # noqa: BLE001 - event history is best effort
+        log.debug("Could not determine native event tail: %s", exc)
+        tip = 0
+
+    # Mint the run id up front and pin it through the whole request, so the
+    # cancellation registry and the event stream both name exactly this run.
+    import uuid
+
+    run_id = "run_" + uuid.uuid4().hex[:8]
+
+    # Prepare a cancellation that the cancel endpoint can flip, keyed by run
+    # id so concurrent runs in one session stay independently controllable.
     from agent_native.loop import Cancellation
 
     cancellation = Cancellation()
-    # Register cancellation on the service runtime so POST /cancel can find it
-    # Keyed by session_id -> Cancellation
-    existing_cancels = getattr(request.app.state, "native_cancels", None)
-    cancels: dict[str, Any] = (
-        existing_cancels if isinstance(existing_cancels, dict) else {}
-    )
-    request.app.state.native_cancels = cancels
-    cancels[session_id] = cancellation
-
-    # We need to capture the run_id that send_message mints. Wrap service.send_message
-    # to emit with that run_id, then stream events for that run_id.
+    _register_cancel(request, session_id, run_id, cancellation)
 
     # Background run so we can stream events concurrently
     run_result: Any | None = None
@@ -150,6 +215,7 @@ async def send_message(
                 limits=limits,
                 cancellation=cancellation,
                 media=media_parts,
+                run_id=run_id,
             )
             try:
                 lf = getattr(service.runtime.monitoring, "langfuse_client", None)
@@ -159,8 +225,8 @@ async def send_message(
                 log.debug("native Langfuse flush failed: %s", exc)
             return run_result
         finally:
-            # Unregister cancellation when run ends
-            cancels.pop(session_id, None)
+            # Unregister only this run's cancellation; other runs are untouched.
+            _unregister_cancel(request, session_id, run_id)
 
     background = asyncio.create_task(run_in_background())
     # Ensure background is awaited even if client disconnects
@@ -172,27 +238,21 @@ async def send_message(
     background_set.add(background)
     background.add_done_callback(background_set.discard)
 
-    # Stream events for this session until the top-level RUN_FINISHED for this run.
-    # We don't know run_id upfront (minted inside send_message), so we stream the
-    # session's events and stop only when we see RUN_FINISHED for a non-helper run
-    # that was emitted after we started. We also watch background completion to emit
-    # a final sentinel if the run ended without a RUN_FINISHED (error path).
-
-    # Snapshot the current tail so we only stream this run's events
-    try:
-        tip = max([0] + [int(getattr(e, "sequence", 0) or 0) for e in await db.load_events(session_id, after_sequence=0)], default=0)
-    except Exception as exc:  # noqa: BLE001 - event history is best effort
-        log.debug("Could not determine native event tail: %s", exc)
-        tip = 0
+    def _belongs_to_run(event_run_id: str) -> bool:
+        # Our run plus the helpers it spawns ("<run_id>/..."); other
+        # concurrent runs in the session must never end or pollute this stream.
+        return event_run_id == run_id or event_run_id.startswith(run_id + "/")
 
     async def event_source():
         # Replay nothing — we start from tip; background will emit from tip+1
         async for event in service.subscribe(session_id, from_sequence=tip):
+            event_run_id = str(getattr(event, "run_id", "") or "")
+            if not _belongs_to_run(event_run_id):
+                continue
             yield _event_to_sse_dict(event)
-            # Stop on top-level RUN_FINISHED (helper runs contain "/")
+            # Stop on this run's terminal event (helper runs contain "/").
             typ = str(getattr(event, "type", ""))
-            run_id = str(getattr(event, "run_id", "") or "")
-            if typ in ("run_finished", "error") and "/" not in run_id:
+            if typ in ("run_finished", "error") and "/" not in event_run_id:
                 break
             # Also stop if background done and we've drained events up to its finish
             if background.done() and typ in ("run_finished", "error"):
@@ -241,29 +301,50 @@ async def resume_run(
 
     from agent_native.loop import Cancellation
 
-    cancellation = Cancellation()
-    existing_cancels = getattr(request.app.state, "native_cancels", None)
-    cancels: dict[str, Any] = (
-        existing_cancels if isinstance(existing_cancels, dict) else {}
-    )
-    request.app.state.native_cancels = cancels
-    cancels[session_id] = cancellation
+    # Peek the run id the resume will continue BEFORE registering anything,
+    # then pin it: the resumed work emits under exactly this id, so the
+    # cancellation below names the right run. Resumes of one session are
+    # serialized — a second racing resume would otherwise continue the same
+    # interrupted run id with a second loop on one transcript.
     try:
-        result = await service.resume_run(session_id, limits=limits, cancellation=cancellation)
+        run_id = await service.peek_resume_run_id(session_id)
+    except KeyError:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=404, detail=f"session '{session_id}' not found") from None
+    cancellation = Cancellation()
+    _register_cancel(request, session_id, run_id, cancellation)
+    async with _resume_lock(request, session_id):
         try:
-            lf = getattr(service.runtime.monitoring, "langfuse_client", None)
-            if lf is not None:
-                lf.flush()
-        except Exception as exc:  # noqa: BLE001 - flushing is best effort
-            log.debug("native Langfuse flush failed: %s", exc)
-    finally:
-        cancels.pop(session_id, None)
+            result = await service.resume_run(
+                session_id, limits=limits, cancellation=cancellation, run_id=run_id
+            )
+            try:
+                lf = getattr(service.runtime.monitoring, "langfuse_client", None)
+                if lf is not None:
+                    lf.flush()
+            except Exception as exc:  # noqa: BLE001 - flushing is best effort
+                log.debug("native Langfuse flush failed: %s", exc)
+        finally:
+            _unregister_cancel(request, session_id, run_id)
 
     return JSONResponse(content=RunResponse.from_native(result).model_dump(mode="json"))
 
 
 @router.post("/{session_id}/cancel", status_code=202)
-async def cancel_run(session_id: str, request: Request, service: NativeServiceDep):
+async def cancel_run(
+    session_id: str,
+    request: Request,
+    service: NativeServiceDep,
+    run_id: str | None = None,
+):
+    """Cancel an in-flight native run.
+
+    ``run_id`` names exactly one run: cancelling it never touches another
+    run in the same session, and cleanup removes only that run's registry
+    entry. Without ``run_id`` every in-flight run of the session is
+    cancelled and the response names each one that was stopped.
+    """
     from fastapi import HTTPException
 
     db = service.runtime.database
@@ -271,10 +352,33 @@ async def cancel_run(session_id: str, request: Request, service: NativeServiceDe
     if session is None:
         raise HTTPException(status_code=404, detail=f"session '{session_id}' not found")
 
-    cancels: dict = getattr(request.app.state, "native_cancels", {}) or {}
-    cancellation = cancels.get(session_id)
-    if cancellation is None:
+    cancels = _cancel_registry(request)
+    if run_id is not None:
+        cancellation = cancels.get(run_id)
+        if cancellation is None:
+            # Unknown or already-finished run — idempotent 202 with hint.
+            return JSONResponse(
+                status_code=202,
+                content={"session_id": session_id, "run_id": run_id, "cancelled": False, "reason": "no active run"},
+            )
+        cancellation.cancel()
+        return JSONResponse(
+            status_code=202,
+            content={"session_id": session_id, "run_id": run_id, "cancelled": True},
+        )
+
+    run_ids = sorted(_cancel_index(request).get(session_id, set()))
+    cancelled_runs: list[str] = []
+    for active_run_id in run_ids:
+        cancellation = cancels.get(active_run_id)
+        if cancellation is None:
+            continue
+        cancellation.cancel()
+        cancelled_runs.append(active_run_id)
+    if not cancelled_runs:
         # No in-flight run to cancel — idempotent 202 with hint
         return JSONResponse(status_code=202, content={"session_id": session_id, "cancelled": False, "reason": "no active run"})
-    cancellation.cancel()
-    return JSONResponse(status_code=202, content={"session_id": session_id, "cancelled": True})
+    return JSONResponse(
+        status_code=202,
+        content={"session_id": session_id, "cancelled": True, "cancelled_runs": cancelled_runs},
+    )

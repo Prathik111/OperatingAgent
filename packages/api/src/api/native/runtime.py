@@ -39,22 +39,35 @@ def build_native_sandbox(settings: Any) -> Any | None:
         return None
 
 
-def build_native_database(settings: Any) -> tuple[Any, Any]:
+_SQLITE_BACKENDS = {"sqlite", "file", "file-based", "file_based"}
+_MEMORY_BACKENDS = {"memory", "inmemory", "in_memory"}
+
+
+def build_native_database(
+    settings: Any, degraded: list[str] | None = None
+) -> tuple[Any, Any]:
     """Return (Database, pool_or_None) for the native track.
 
     Uses the configured SQLite path for desktop persistence, reuses
     ``DATABASE_URL`` for PostgreSQL, and falls back to ``MemoryDatabase`` only
     when explicitly configured. Returns a pool handle only for the postgres
     branch so lifespan can await open/close.
+
+    A configured durable store that cannot even be constructed fails here
+    unless ``repository_fallback`` explicitly names a fallback — silently
+    swapping in memory would lose the system of record. Explicit fallbacks
+    are recorded in ``degraded`` (when given) and logged loudly, never
+    silently.
     """
     database_url = getattr(settings, "database_url", None)
     backend = (getattr(settings, "repository_backend", "memory") or "memory").lower()
+    fallback = (getattr(settings, "repository_fallback", "error") or "error").lower()
 
     # Explicit postgres request must have a DSN
     if backend == "postgres" and not database_url:
         raise ValueError("repository_backend is 'postgres' but DATABASE_URL is not set")
 
-    if backend in {"sqlite", "file", "file-based", "file_based"}:
+    if backend in _SQLITE_BACKENDS:
         from agent_native.sqlite import SQLiteDatabase
 
         return SQLiteDatabase(
@@ -73,8 +86,30 @@ def build_native_database(settings: Any) -> tuple[Any, Any]:
             # await .connect() / .close() without a second pool type.
             db = PostgresDatabase(database_url)
             return db, db  # db doubles as openable/closeable
-        except Exception as exc:  # noqa: BLE001 - native Postgres is optional
-            log.warning("Failed to init native PostgresDatabase, falling back to memory: %s", exc)
+        except Exception as exc:
+            # Without an explicit fallback this must fail startup, not quietly
+            # downgrade a durable store to memory.
+            if fallback in _SQLITE_BACKENDS:
+                reason = f"native postgres unavailable ({exc}); using explicitly configured sqlite fallback"
+                log.error("%s", reason)
+                if degraded is not None:
+                    degraded.append(reason)
+                from agent_native.sqlite import SQLiteDatabase
+
+                return SQLiteDatabase(
+                    getattr(
+                        settings,
+                        "sqlite_database_path",
+                        str(DEFAULT_SQLITE_DATABASE_PATH),
+                    )
+                ), None
+            if fallback in _MEMORY_BACKENDS:
+                reason = f"native postgres unavailable ({exc}); using explicitly configured memory fallback"
+                log.error("%s", reason)
+                if degraded is not None:
+                    degraded.append(reason)
+            else:
+                raise
 
     from agent_native.database import MemoryDatabase
 

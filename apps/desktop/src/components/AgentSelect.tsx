@@ -4,10 +4,6 @@ interface AgentOption {
   id: AgentTrack;
   name: string;
   subtitle: string;
-  badge: string;
-  badgeTone: "violet" | "zinc";
-  status: string;
-  statusTone: "success" | "warning";
   description: string;
   features: string[];
   metrics: { label: string; value: string }[];
@@ -19,10 +15,6 @@ const OPTIONS: AgentOption[] = [
     id: "native",
     name: "Native Agent",
     subtitle: "Plan-and-Execute + ReAct — hand-written loop",
-    badge: "Ready",
-    badgeTone: "violet",
-    status: "● Ready",
-    statusTone: "success",
     description:
       "The thesis agent. One transcript, one loop, every failure is an observation. Built to measure what it costs to hand-build what a framework gives for free.",
     features: [
@@ -43,10 +35,6 @@ const OPTIONS: AgentOption[] = [
     id: "langgraph",
     name: "LangGraph Agent",
     subtitle: "StateGraph — framework-built track",
-    badge: "Implemented",
-    badgeTone: "violet",
-    status: "● Ready when model is configured",
-    statusTone: "success",
     description:
       "The comparison track is implemented as a real StateGraph. It uses the same tool layer and task suite as Native, while keeping LangGraph's planner, executor, verifier, checkpoints, and interrupt flow.",
     features: [
@@ -139,33 +127,11 @@ export function AgentSelect({
                     {opt.icon}
                   </span>
                   <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span className="text-[13px] font-semibold" style={{ color: "var(--fg-0)" }}>
-                        {opt.name}
-                      </span>
-                      <span
-                        className="text-[10px] font-semibold tracking-wide uppercase px-1.5 py-0.5 rounded"
-                        style={
-                          opt.badgeTone === "violet"
-                            ? { background: "var(--accent-soft)", color: "var(--accent)", border: "1px solid var(--accent-ring)" }
-                            : { background: "var(--bg-3)", color: "var(--fg-2)", border: "1px solid var(--bg-4)" }
-                        }
-                      >
-                        {opt.badge}
-                      </span>
+                    <div className="text-[13px] font-semibold" style={{ color: "var(--fg-0)" }}>
+                      {opt.name}
                     </div>
                     <div className="text-[11px] font-medium leading-tight mt-0.5" style={{ color: "var(--fg-2)" }}>
                       {opt.subtitle}
-                    </div>
-                    <div
-                      className="inline-flex items-center gap-1 mt-1.5 text-[11px] font-mono px-2 py-0.5 rounded-full"
-                      style={{
-                        background: opt.statusTone === "success" ? "var(--success-soft)" : "var(--warning-soft)",
-                        border: `1px solid ${opt.statusTone === "success" ? "rgba(34,197,94,0.35)" : "rgba(245,158,11,0.4)"}`,
-                        color: opt.statusTone === "success" ? "var(--success)" : "var(--warning)",
-                      }}
-                    >
-                      {opt.status}
                     </div>
                   </div>
                 </div>

@@ -305,6 +305,29 @@ class PolicyChain(Policy):
         return strictest
 
 
+class AutoApprovePolicy(Policy):
+    """Downgrade "ask" to "allow" behind an explicit user opt-in.
+
+    Wraps the real chain (it cannot sit *in* the chain — the chain keeps the
+    strictest verdict, so a member can never relax one). Denials still win:
+    workspace escapes and plan-mode blocks are safety boundaries, not prompts,
+    and this opt-in only skips asking, never those.
+    """
+
+    def __init__(self, inner: Policy) -> None:
+        self.inner = inner
+
+    def check(self, context: Any, definition: Any, arguments: dict) -> Decision:
+        decision = self.inner.check(context, definition, arguments)
+        if decision.result is PermissionDecision.ASK:
+            return Decision(
+                PermissionDecision.ALLOW,
+                reason="auto-approved: allow-all permissions is on",
+                rule=decision.rule,
+            )
+        return decision
+
+
 # Grants: remembering the user's answer
 class PermissionDuration(str, Enum):
     ONCE = "once"        # just this call

@@ -17,7 +17,14 @@ from agent_native.permissions import (
     RulePolicy,
     SessionPolicy,
 )
-from agent_native.tools.base import ArgumentChecker, ToolRegistry
+from agent_native.tools.base import (
+    ArgumentChecker,
+    Tool,
+    ToolDefinition,
+    ToolPermissions,
+    ToolRegistry,
+    ToolResult,
+)
 from agent_native.tools.manager import ToolManager
 
 from tests._fake_tools import default_tools
@@ -124,3 +131,57 @@ async def test_write_asks_then_writes():
     assert result.success
     with open(os.path.join(workdir, "o.txt")) as fh:
         assert fh.read() == "hi"
+
+
+# -- policy failure fails closed ------------------------------------------------
+class _ExplodingPolicy:
+    """A policy backend that blows up instead of answering."""
+
+    def check(self, context, definition, arguments):
+        raise RuntimeError("policy backend blew up")
+
+
+class _SpyTool(Tool):
+    """A destructive tool that records whether it ever ran."""
+
+    def __init__(self) -> None:
+        self.calls: list = []
+        self._definition = ToolDefinition(
+            name="wipe_disk",
+            description="deletes everything",
+            input_schema={},
+            permissions=ToolPermissions(destructive=True),
+        )
+
+    @property
+    def definition(self) -> ToolDefinition:
+        return self._definition
+
+    async def execute(self, arguments, context) -> ToolResult:
+        self.calls.append(arguments)
+        return ToolResult(True, output="wiped")
+
+
+async def test_policy_failure_denies_instead_of_allowing_or_crashing():
+    """Regression (P0-5): a policy that throws denies the call.
+
+    The model reads the denial as an observation and adapts; the tool never
+    runs, and the run survives instead of dying on an unexpected error.
+    """
+    from agent_native.tools.base import ToolRegistry
+
+    db = MemoryDatabase()
+    bus = EventBus(db)
+    registry = ToolRegistry()
+    spy = _SpyTool()
+    registry.register(spy)
+    permissions = PermissionManager(PermissionStore(db), bus)
+    manager = ToolManager(registry, _ExplodingPolicy(), permissions)
+
+    result = await manager.execute(
+        ToolCall(id="c", name="wipe_disk", arguments={}), _context(".")
+    )
+    assert not result.success
+    assert "policy check failed" in result.error
+    assert "denied" in result.error
+    assert spy.calls == []

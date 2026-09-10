@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { nativeApi, readSSEStream, sseSubscribe, taskApi } from "../../lib/api";
+import { activitySignature, isActivityEvent, nativeApi, readSSEStream, sseSubscribe, taskApi } from "../../lib/api";
 import type { EventResponse, PermissionResponse, SessionResponse, ThreadResponse } from "../../lib/types";
 import { loadSettings, saveSettings } from "../SettingsModal";
 import { AlertDialog, ConfirmDialog, PromptDialog } from "../Modal";
@@ -150,6 +150,26 @@ export function ChatWorkspace({
   const listRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const refreshGenerationRef = useRef(0);
+  // Stable Activity keys for track rows without backend sequences (langgraph):
+  // the SSE replay and the REST history describe the same events, so both are
+  // keyed by content signature. Without this, every 2s poll remaps keys 1..N
+  // while live appends use length+1, churning rows and sticking each row's
+  // open-state onto the wrong event.
+  const eventKeyRef = useRef(0);
+  const eventSigRef = useRef(new Map<string, number>());
+  const keyForActivity = useCallback((type: string, data: unknown): number => {
+    const sig = activitySignature(type, data);
+    const known = eventSigRef.current.get(sig);
+    if (known !== undefined) return known;
+    eventKeyRef.current += 1;
+    eventSigRef.current.set(sig, eventKeyRef.current);
+    return eventKeyRef.current;
+  }, []);
+  // A new chat gets fresh keys; re-selects and polls keep them stable.
+  useEffect(() => {
+    eventKeyRef.current = 0;
+    eventSigRef.current = new Map();
+  }, [selected, track]);
 
   useEffect(() => {
     const onSettings = (event: Event) => {
@@ -255,14 +275,17 @@ export function ChatWorkspace({
           if (!isCurrent()) return;
           // Activity covers the current response only: keep events from the
           // latest top-level run (helper runs carry "/" in their run id).
+          // Token deltas are excluded — they drive the streaming bubble, and
+          // one row per chunk would bury the milestones.
+          const visible = allEvents.filter((e) => isActivityEvent(e.type));
           let currentRun = "";
-          for (let i = allEvents.length - 1; i >= 0; i--) {
-            const rid = allEvents[i].run_id || "";
+          for (let i = visible.length - 1; i >= 0; i--) {
+            const rid = visible[i].run_id || "";
             if (!rid || rid.includes("/")) continue;
             currentRun = rid;
             break;
           }
-          setEvents(currentRun ? allEvents.filter((e) => e.run_id === currentRun) : allEvents.slice(-30));
+          setEvents(currentRun ? visible.filter((e) => e.run_id === currentRun).slice(-100) : visible.slice(-100));
           const perms = await nativeApi.listPermissions(id).catch(() => [] as PermissionResponse[]);
           if (isCurrent()) setPermissions(perms);
         } catch {
@@ -301,14 +324,17 @@ export function ChatWorkspace({
             return active?.id || null;
           });
           // Activity covers the current response only: keep events from the
-          // latest task in this thread.
+          // latest task in this thread. Rows are keyed by content signature so
+          // a poll maps the same events to the same keys as the live stream.
           const latestTaskId = tasks.length > 0 ? tasks[0].id : "";
           const ev = await taskApi.listThreadEvents(id).catch(() => null);
           if (isCurrent() && ev) {
-            const filtered = ev.filter((e) => !latestTaskId || e.task_id === latestTaskId);
+            const filtered = ev.filter(
+              (e) => (!latestTaskId || e.task_id === latestTaskId) && isActivityEvent(e.type),
+            );
             setEvents(
-              filtered.slice(-30).map((e, i) => ({
-                sequence: i + 1,
+              filtered.slice(-100).map((e) => ({
+                sequence: keyForActivity(e.type, e.payload),
                 type: e.type,
                 session_id: id,
                 run_id: e.task_id,
@@ -327,7 +353,7 @@ export function ChatWorkspace({
         }
       }
     },
-    [track, workspace],
+    [track, workspace, keyForActivity],
   );
 
   useEffect(() => {
@@ -542,13 +568,16 @@ export function ChatWorkspace({
               const stateAnswer = assistantTextFromState(eventData as Record<string, unknown>);
               if (stateAnswer) finalAnswer = stateAnswer;
             }
-            if (payload?.type) {
-              setEvents((prev) => [...prev.slice(-29), payload as EventResponse]);
+            // Deltas stream the live bubble above; only milestones get rows.
+            if (payload?.type && isActivityEvent(payload.type)) {
+              setEvents((prev) => [...prev.slice(-99), payload as EventResponse]);
             }
           } catch {
-            setEvents((prev) => [...prev.slice(-29), {
+            const rawType = frame.event || "sse";
+            if (!isActivityEvent(rawType)) return;
+            setEvents((prev) => [...prev.slice(-99), {
               sequence: prev.length + 1,
-              type: frame.event || "sse",
+              type: rawType,
               session_id: sid,
               run_id: "",
               data: { raw: frame.data.slice(0, 200) },
@@ -588,14 +617,23 @@ export function ChatWorkspace({
             } catch {
               // Keep raw data for non-JSON events.
             }
-            setEvents((prev) => [...prev.slice(-29), {
-              sequence: prev.length + 1,
-              type: event.event,
-              session_id: task.thread_id,
-              run_id: task.id,
-              data,
-              time: null,
-            }]);
+            // Same content signature as the refresh path: replayed history and
+            // the 2s poll map to identical keys instead of duplicating rows.
+            if (isActivityEvent(event.event)) {
+              const key = keyForActivity(event.event, data);
+              setEvents((prev) =>
+                prev.some((p) => p.sequence === key)
+                  ? prev
+                  : [...prev.slice(-99), {
+                    sequence: key,
+                    type: event.event,
+                    session_id: task.thread_id,
+                    run_id: task.id,
+                    data,
+                    time: null,
+                  }],
+              );
+            }
             if (event.event === "finished" || event.event === "error") {
               const eventData = data.data && typeof data.data === "object"
                 ? data.data as Record<string, unknown>

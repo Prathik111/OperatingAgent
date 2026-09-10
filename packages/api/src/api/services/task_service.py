@@ -53,6 +53,7 @@ class TaskService:
         settings: ApiSettings,
         background: set[asyncio.Task],
         approvals: ApprovalGateway | None = None,
+        execution_owner: str | None = None,
     ) -> None:
         self._orchestrators = orchestrators
         self._repo = repository
@@ -61,6 +62,12 @@ class TaskService:
         self._settings = settings
         self._active_task_ids: set[str] = set()
         self._active_thread_ids: set[str] = set()
+        # Names this process's execution claims in durable run metadata. A
+        # fresh token per service means a later process (same code, new owner)
+        # can tell live claims — impossible, it just started — from stale ones
+        # left behind by a dead process. The in-memory sets above stay the
+        # fast path; the database stays the authority.
+        self._execution_owner = execution_owner or uuid4().hex
         self._lifecycle_guard = asyncio.Lock()
         self._thread_locks: dict[str, asyncio.Lock] = {}
         # Held so the event loop keeps a strong ref — asyncio only weak-refs
@@ -70,6 +77,82 @@ class TaskService:
     @property
     def available_tracks(self) -> list[str]:
         return [t.value for t in self._orchestrators]
+
+    @property
+    def execution_owner(self) -> str:
+        """This process's execution-claim token (see ``recover_stale_executions``)."""
+        return self._execution_owner
+
+    async def recover_stale_executions(self) -> list[str]:
+        """Reap runs left non-terminal by a dead process.
+
+        Called once at startup, before serving requests: at that point nothing
+        can be live in this process, so every open run whose owner is not ours
+        is definitionally stale. Each is closed as INTERRUPTED with a recovery
+        marker in its metadata (history and events are untouched), its task
+        status follows, and the run id is reported. Runs owned by this process
+        are never reaped here — a live owner reaps nothing.
+
+        Returns the recovered run ids. Raises nothing for an empty store.
+        """
+        recovered: list[str] = []
+        for open_run in await self._repo.list_open_runs():
+            if open_run.metadata.get("execution_owner") == self._execution_owner:
+                continue
+            await self._recover_run(
+                open_run.task_id,
+                open_run.run_id,
+                open_run.status,
+                dict(open_run.metadata),
+                reason="stale-execution-after-restart",
+            )
+            recovered.append(open_run.run_id)
+        if recovered:
+            log.warning(
+                "recovered %d stale run(s) left non-terminal by a previous process: %s",
+                len(recovered),
+                recovered,
+            )
+        return recovered
+
+    async def _recover_run(
+        self,
+        task_id: str,
+        run_id: str,
+        previous_status: RunStatus,
+        metadata: dict[str, Any],
+        *,
+        reason: str,
+    ) -> None:
+        """Close one stale run as INTERRUPTED, preserving its history.
+
+        The run's events, outputs and prior metadata are left exactly as they
+        were; only the terminal status, an error line and a ``recovery``
+        marker are added, so a later resume starts a clean new attempt with a
+        full audit trail of what came before.
+        """
+        result = AgentRunResult(
+            status=RunStatus.INTERRUPTED,
+            output=None,
+            duration_ms=0.0,
+            llm_calls=0,
+            tool_calls=0,
+            total_tokens=0,
+            metadata={
+                **metadata,
+                "error": (
+                    f"execution did not survive (was {previous_status.value}); "
+                    "safe to resume for a fresh attempt"
+                ),
+                "recovery": {
+                    "reason": reason,
+                    "previous_status": previous_status.value,
+                    "recovered_by": self._execution_owner,
+                },
+            },
+        )
+        await self._repo.finalize_run(run_id, result)
+        await self._repo.update_task_status(task_id, TaskStatus.INTERRUPTED)
 
     @property
     def orchestrators(self) -> dict[str, IAgentOrchestrator]:
@@ -161,6 +244,7 @@ class TaskService:
                     "execution_mode": task.execution_mode,
                     "thread_id": task.thread_id,
                     "checkpoint_namespace": config.checkpoint.namespace,
+                    "execution_owner": self._execution_owner,
                 },
             )
 
@@ -226,6 +310,34 @@ class TaskService:
                     and task_id in self._active_task_ids
                 ):
                     raise TaskAlreadyRunning(task_id)
+                if (
+                    latest_status is RunStatus.RUNNING
+                    and task_id not in self._active_task_ids
+                ):
+                    # RUNNING in the database but with no live execution in this
+                    # process: a stale claim (typically a dead process that never
+                    # got reaped). Close it as recovered before opening a new
+                    # attempt, so history never shows two open executions. A run
+                    # owned by a *different* live owner is refused instead — it
+                    # may genuinely still be executing elsewhere.
+                    latest_metadata = await self._repo.get_latest_run_metadata(task_id)
+                    owner = latest_metadata.get("execution_owner")
+                    if owner is not None and owner != self._execution_owner:
+                        raise TaskAlreadyRunning(task_id)
+                    latest_run_id = await self._repo.get_latest_run_id(task_id)
+                    if latest_run_id is not None:
+                        log.warning(
+                            "resuming over stale run %s (status %s); closing it as recovered first",
+                            latest_run_id,
+                            latest_status.value,
+                        )
+                        await self._recover_run(
+                            task_id,
+                            latest_run_id,
+                            latest_status,
+                            dict(latest_metadata),
+                            reason="stale-execution-at-resume",
+                        )
 
                 previous_run_id = await self._repo.get_latest_run_id(task_id)
                 previous_metadata = await self._repo.get_latest_run_metadata(task_id)
@@ -248,6 +360,7 @@ class TaskService:
                         ),
                         "resumes_run_id": previous_run_id,
                         "checkpoint_id": checkpoint_id,
+                        "execution_owner": self._execution_owner,
                     },
                 )
                 await self._broker.reopen(task.id, clear=True)
@@ -361,6 +474,11 @@ class TaskService:
 
         async def on_event(event: AgentEvent) -> None:
             # Persist first (ordered, durable), then fan out to subscribers.
+            # Persistence failures propagate: the orchestrator records the run
+            # FAILED rather than reporting success with a holey history.
+            # Delivery alone is best-effort — the broker is a cache, so a
+            # publish hiccup is logged loudly but must not fail a run whose
+            # history persisted fine.
             await self._repo.append_event(run_id, event, next(sequence))
             if event.type == "llm_call":
                 await self._repo.save_llm_call(
@@ -386,7 +504,14 @@ class TaskService:
                 await self._repo.save_approval(run_id, event.payload)
             elif event.type == "approval_resolved":
                 await self._repo.resolve_approval(event.payload)
-            await self._broker.publish(task.id, event)
+            try:
+                await self._broker.publish(task.id, event)
+            except Exception as exc:  # noqa: BLE001 - delivery is a cache, not history
+                log.warning(
+                    "event delivery failed for task %s (history persisted): %s",
+                    task.id,
+                    exc,
+                )
 
         try:
             await self._repo.mark_run_running(run_id)

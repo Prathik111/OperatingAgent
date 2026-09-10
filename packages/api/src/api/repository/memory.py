@@ -20,7 +20,7 @@ from common.enums import RunStatus, TaskStatus
 from common.events import AgentEvent, LLMCallRecord, ToolCallRecord
 
 from ..errors import TaskNotFound, ThreadNotFound
-from .base import RunSummary, ThreadRecord
+from .base import OPEN_RUN_STATUSES, OpenRun, RunSummary, ThreadRecord
 
 
 @dataclass(slots=True)
@@ -188,6 +188,18 @@ class InMemoryTaskRepository:
             error=run.last_error,
             metadata=dict(run.metadata),
         )
+
+    async def list_open_runs(self) -> list[OpenRun]:
+        return [
+            OpenRun(
+                task_id=run.task_id,
+                run_id=run.id,
+                status=run.status,
+                metadata=dict(run.metadata),
+            )
+            for run in self._runs.values()
+            if run.status in OPEN_RUN_STATUSES
+        ]
 
     async def mark_run_running(self, run_id: str) -> None:
         self._runs[run_id].status = RunStatus.RUNNING

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { nativeApi, taskApi } from "../lib/api";
+import type { SandboxStatusResponse } from "../lib/types";
 
 export interface DesktopSettings {
   apiUrl: string;
@@ -13,6 +14,7 @@ export interface DesktopSettings {
   workspace: string;
   maxTurns: string;
   maxCost: string;
+  autoApproveAll: boolean;
 }
 
 export const SETTINGS_KEY = "operating-agent:settings";
@@ -28,6 +30,7 @@ export const DEFAULT_SETTINGS: DesktopSettings = {
   workspace: ".",
   maxTurns: "10",
   maxCost: "0.05",
+  autoApproveAll: false,
 };
 
 export function loadSettings(): DesktopSettings {
@@ -60,6 +63,7 @@ export function SettingsModal({
   const [defaultModel, setDefaultModel] = useState("");
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState("");
+  const [sandbox, setSandbox] = useState<SandboxStatusResponse | null>(null);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => event.key === "Escape" && onClose();
@@ -86,6 +90,7 @@ export function SettingsModal({
           temperature: current.temperature == null ? prev.temperature : String(current.temperature),
           topP: current.top_p == null ? prev.topP : String(current.top_p),
           maxTokens: current.max_tokens == null ? "" : String(current.max_tokens),
+          autoApproveAll: typeof current.auto_approve_all === "boolean" ? current.auto_approve_all : prev.autoApproveAll,
         }));
         if (Array.isArray(current.models)) {
           setModels((current.models as unknown[]).map(String));
@@ -143,6 +148,28 @@ export function SettingsModal({
     };
   }, [track, settings.provider, settings.baseUrl]);
 
+  // Live Docker probe while the modal is open: starting Docker on the machine
+  // flips this to connected on the next poll with no restart, and new shell
+  // commands then run in containers automatically.
+  useEffect(() => {
+    if (track !== "native") return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const status = await nativeApi.getSandbox();
+        if (!cancelled) setSandbox(status);
+      } catch {
+        if (!cancelled) setSandbox(null);
+      }
+    };
+    void load();
+    const timer = window.setInterval(load, 4000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [track]);
+
   const set = <K extends keyof DesktopSettings>(key: K, value: DesktopSettings[K]) =>
     setSettings((current) => ({ ...current, [key]: value }));
 
@@ -159,6 +186,7 @@ export function SettingsModal({
         top_p: Number(settings.topP || 1),
         max_tokens: settings.maxTokens ? Number(settings.maxTokens) : null,
         timeout_seconds: 60,
+        auto_approve_all: settings.autoApproveAll,
       };
       if (track === "native") await nativeApi.updateSettings(body);
       else await taskApi.updateSettings(body);
@@ -193,9 +221,33 @@ export function SettingsModal({
                 <input value={settings.workspace} onChange={(e) => set("workspace", e.target.value)} placeholder="." className="field mono" />
               </Field>
               <Field label="Terminal isolation">
-                <div className="min-h-9 px-3 py-2 rounded-lg text-[12px]" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)", color: "var(--fg-2)" }}>
-                  Docker required; workspace mounted read/write at /workspace.
-                </div>
+                {track === "native" ? (
+                  <div className="min-h-9 px-3 py-2 rounded-lg text-[12px] space-y-1" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)", color: "var(--fg-2)" }}>
+                    <span
+                      className={`inline-flex items-center gap-1.5 text-[11px] font-semibold px-2 py-0.5 rounded-full ${sandbox?.available ? "" : "anim-pulse-dot"}`}
+                      style={
+                        sandbox?.available
+                          ? { background: "var(--success-soft)", border: "1px solid rgba(34,197,94,0.35)", color: "var(--success)" }
+                          : { background: "var(--warning-soft)", border: "1px solid rgba(245,158,11,0.4)", color: "var(--warning)" }
+                      }
+                    >
+                      {sandbox ? (sandbox.available ? "● Docker connected" : "○ Docker disconnected") : "○ Checking Docker…"}
+                    </span>
+                    <div className="font-mono text-[11px]">
+                      {sandbox ? (sandbox.image || "no image") : "probing…"}
+                    </div>
+                    {sandbox && !sandbox.available && sandbox.reason && (
+                      <div className="text-[11px]">{sandbox.reason}</div>
+                    )}
+                    <div className="text-[10px]" style={{ color: "var(--fg-3)" }}>
+                      Workspace mounted read/write at /workspace. Start Docker anytime — new shell commands connect automatically.
+                    </div>
+                  </div>
+                ) : (
+                  <div className="min-h-9 px-3 py-2 rounded-lg text-[12px]" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)", color: "var(--fg-2)" }}>
+                    Docker required; workspace mounted read/write at /workspace.
+                  </div>
+                )}
               </Field>
             </div>
           </section>
@@ -291,6 +343,26 @@ export function SettingsModal({
                 <Field label="Maximum turns"><input value={settings.maxTurns} onChange={(e) => set("maxTurns", e.target.value)} className="field mono" /></Field>
                 <Field label="Maximum cost (USD)"><input value={settings.maxCost} onChange={(e) => set("maxCost", e.target.value)} className="field mono" /></Field>
               </div>
+              <label
+                className="flex items-start gap-2.5 rounded-lg px-3 py-2.5 cursor-pointer"
+                style={{ background: settings.autoApproveAll ? "var(--warning-soft)" : "var(--bg-2)", border: "1px solid var(--bg-4)" }}
+              >
+                <input
+                  type="checkbox"
+                  checked={settings.autoApproveAll}
+                  onChange={(e) => set("autoApproveAll", e.target.checked)}
+                  className="mt-0.5 h-4 w-4 shrink-0"
+                />
+                <span>
+                  <span className="block text-[12px] font-medium" style={{ color: "var(--fg-1)" }}>
+                    Allow all tool permissions
+                  </span>
+                  <span className="block text-[11px] leading-relaxed" style={{ color: "var(--fg-2)" }}>
+                    Skip approval prompts — the agent runs every tool without asking.
+                    Safety denials (workspace escapes, plan-mode blocks) still apply.
+                  </span>
+                </span>
+              </label>
             </section>
           )}
         </div>

@@ -23,6 +23,12 @@ NativeRuntimeDep = Annotated[Any, Depends(get_native_runtime)]
 
 _NATIVE_PROVIDERS = ("groq", "ollama")
 
+#: PATCH fields that reconfigure the model. Anything else (e.g. the allow-all
+#: toggle) applies without touching provider validation.
+_LLM_PATCH_FIELDS = frozenset(
+    {"provider", "model", "base_url", "temperature", "top_p", "max_tokens", "timeout_seconds"}
+)
+
 
 @router.get("")
 async def get_native_settings(runtime: NativeRuntimeDep) -> dict[str, Any]:
@@ -50,6 +56,7 @@ async def get_native_settings(runtime: NativeRuntimeDep) -> dict[str, Any]:
     for name in downloaded:
         if name not in models:
             models.append(name)
+    auto_approve = bool(getattr(runtime, "auto_approve_all", False))
     return {
         "track": "native",
         "model": getattr(config, "model", "") if config else "",
@@ -61,6 +68,7 @@ async def get_native_settings(runtime: NativeRuntimeDep) -> dict[str, Any]:
         "top_p": getattr(config, "top_p", 1.0),
         "max_tokens": getattr(config, "max_output_tokens", None),
         "timeout_seconds": getattr(config, "timeout_seconds", 60),
+        "auto_approve_all": bool(auto_approve),
     }
 
 
@@ -85,6 +93,19 @@ async def update_native_settings(
     body: RuntimeLLMSettings,
     runtime: NativeRuntimeDep,
 ) -> dict[str, Any]:
+    if body.auto_approve_all is not None and hasattr(runtime, "set_auto_approve_all"):
+        try:
+            runtime.set_auto_approve_all(bool(body.auto_approve_all))
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not (set(body.model_fields_set) & _LLM_PATCH_FIELDS):
+        # Flags-only patch (e.g. just the allow-all toggle): nothing about the
+        # model changes, so provider validation must not block it.
+        return {
+            "track": "native",
+            "auto_approve_all": bool(getattr(runtime, "auto_approve_all", False)),
+            "applies_to": "new runs",
+        }
     agents = list(getattr(runtime, "agents", {}).values())
     current = agents[0] if agents else None
     current_provider = ""
@@ -172,5 +193,6 @@ async def update_native_settings(
         "top_p": effective.top_p,
         "max_tokens": effective.max_output_tokens,
         "timeout_seconds": effective.timeout_seconds,
+        "auto_approve_all": bool(getattr(runtime, "auto_approve_all", False)),
         "applies_to": "new runs",
     }

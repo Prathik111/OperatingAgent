@@ -61,6 +61,13 @@ export interface NativeHealthResponse {
   langfuse_enabled: boolean;
 }
 
+export interface SandboxStatusResponse {
+  available: boolean;
+  image: string;
+  status: string;
+  reason: string;
+}
+
 // LangGraph / Task API
 export interface HealthResponse {
   status: string;

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { summarizeEventData } from "../../lib/api";
 import type { EventResponse } from "../../lib/types";
 
 interface TypeMeta {
@@ -13,8 +14,18 @@ const META: Record<string, TypeMeta> = {
   reasoning_delta: { label: "Reasoning", color: "var(--fg-3)" },
   tool_started: { label: "Tool started", color: "var(--info)" },
   tool_finished: { label: "Tool finished", color: "var(--success)" },
+  tool_call: { label: "Tool call", color: "var(--info)" },
+  llm_call: { label: "LLM call", color: "var(--accent)" },
   permission_requested: { label: "Approval needed", color: "var(--warning)" },
   permission_resolved: { label: "Approval resolved", color: "var(--success)" },
+  approval_requested: { label: "Approval needed", color: "var(--warning)" },
+  approval_resolved: { label: "Approval resolved", color: "var(--success)" },
+  phase_entered: { label: "Phase", color: "var(--accent)" },
+  phase_exited: { label: "Phase done", color: "var(--fg-2)" },
+  plan_created: { label: "Plan", color: "var(--accent)" },
+  finding_recorded: { label: "Finding", color: "var(--fg-2)" },
+  verification_recorded: { label: "Verification", color: "var(--fg-2)" },
+  trace_ref: { label: "Trace", color: "var(--fg-3)" },
   run_started: { label: "Run started", color: "var(--accent)" },
   run_finished: { label: "Response", color: "var(--success)" },
   run_receipt: { label: "Receipt", color: "var(--fg-2)" },
@@ -29,19 +40,7 @@ function metaFor(type: string): TypeMeta {
 }
 
 function summaryOf(event: EventResponse): string {
-  const data = event.data || {};
-  const pick = (...keys: string[]) => {
-    for (const key of keys) {
-      const value = data[key];
-      if (typeof value === "string" && value.trim()) return value.trim();
-    }
-    return "";
-  };
-  const text =
-    pick("final_message", "final_text", "output", "text", "goal", "role", "tool_name", "tool", "error", "reason");
-  if (text) return text.length > 90 ? `${text.slice(0, 90)}…` : text;
-  if (typeof data.turn === "number") return `turn ${data.turn}`;
-  return "";
+  return summarizeEventData(event.type, event.data || {});
 }
 
 function EventRow({ event }: { event: EventResponse }) {

@@ -11,11 +11,19 @@ import logging
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 DEFAULT_IMAGE = "operating-agent-sandbox:py312"
 DEFAULT_MEMORY = "512m"
 DEFAULT_CPUS = "1.0"
+#: Kill stray processes and cap how many a workload may fork. A workload that
+#: forks faster than this cannot fork-bomb the host; execs beyond the cap
+#: fail loudly inside the container instead.
+DEFAULT_PIDS_LIMIT = "256"
+#: Writable scratch inside an otherwise read-only root filesystem. ``noexec``
+#: keeps it from becoming a staging ground for dropped binaries.
+DEFAULT_TMPFS = ("/tmp:rw,noexec,nosuid,size=64m",)
 log = logging.getLogger(__name__)
 
 
@@ -31,9 +39,18 @@ class CommandOutput:
 
 
 class ContainerRunner:
-    def __init__(self, container_id: str, image: str) -> None:
+    def __init__(
+        self,
+        container_id: str,
+        image: str,
+        on_timeout_destroy: Any = None,
+    ) -> None:
         self.container_id = container_id
         self.image = image
+        # Called (awaited) when a command times out so the pool can destroy
+        # the container. Set by ContainerPool; None keeps the old behaviour
+        # of only stopping the host-side client (tests use this to observe).
+        self._on_timeout_destroy = on_timeout_destroy
 
     async def run(self, command: str | list[str], timeout: float) -> CommandOutput:
         args = ["docker", "exec", self.container_id]
@@ -49,8 +66,23 @@ class ContainerRunner:
         try:
             stdout, stderr = await asyncio.wait_for(process.communicate(), timeout)
         except TimeoutError:
+            # Killing the host-side `docker exec` client does NOT stop the
+            # workload inside the container — the shell and everything it
+            # spawned would keep running, orphaned, indefinitely. Destroy the
+            # session container instead: PID-namespace teardown guarantees the
+            # whole process tree dies, children included. The pool recreates
+            # the container on the next command; the workspace bind-mount
+            # survives, so only in-container scratch state is lost.
             process.kill()
-            await process.communicate()
+            try:
+                await process.communicate()
+            except Exception:  # noqa: BLE001 - reaping is best effort
+                log.debug("could not reap timed-out docker exec client")
+            if self._on_timeout_destroy is not None:
+                try:
+                    await self._on_timeout_destroy()
+                except Exception as exc:  # noqa: BLE001 - destroy is best effort
+                    log.debug("could not destroy timed-out container: %s", exc)
             return CommandOutput(-1, timed_out=True)
         return CommandOutput(
             process.returncode or 0,
@@ -60,7 +92,17 @@ class ContainerRunner:
 
 
 class ContainerPool:
-    """Create one disposable container per logical session."""
+    """Create one disposable container per logical session.
+
+    Hardening flags are constructor policy so deployments can tighten or
+    relax them without touching call sites. The defaults assume an
+    untrusted workload: no capabilities, no new privileges, capped PIDs,
+    a read-only root filesystem with a small noexec ``/tmp``, and no
+    network. ``user`` is empty by default — the image runs as root because
+    the bind-mounted workspace must stay writable on hosts with different
+    UIDs; pass an explicit ``--user`` value when the image bakes in a
+    matching non-root user.
+    """
 
     def __init__(
         self,
@@ -69,11 +111,23 @@ class ContainerPool:
         memory: str = DEFAULT_MEMORY,
         cpus: str = DEFAULT_CPUS,
         network: bool = False,
+        pids_limit: str = DEFAULT_PIDS_LIMIT,
+        readonly: bool = True,
+        tmpfs: tuple[str, ...] = DEFAULT_TMPFS,
+        cap_drop: tuple[str, ...] = ("ALL",),
+        no_new_privileges: bool = True,
+        user: str = "",
     ) -> None:
         self.image = image
         self.memory = memory
         self.cpus = cpus
         self.network = network
+        self.pids_limit = pids_limit
+        self.readonly = readonly
+        self.tmpfs = tuple(tmpfs)
+        self.cap_drop = tuple(cap_drop)
+        self.no_new_privileges = no_new_privileges
+        self.user = user
         self.reason = ""
         self._runners: dict[str, ContainerRunner] = {}
         self._lock = asyncio.Lock()
@@ -161,14 +215,7 @@ class ContainerPool:
             if not await self.probe():
                 return None
             name = f"operating-agent-{uuid4().hex[:12]}"
-            args = [
-                "docker", "run", "-d", "--rm", "--init", "--name", name,
-                "--workdir", "/workspace", "--memory", self.memory, "--cpus", self.cpus,
-                "--mount", f"type=bind,source={root},target=/workspace",
-            ]
-            if not self.network:
-                args.extend(["--network", "none"])
-            args.extend([self.image, "sleep", "infinity"])
+            args = self._run_args(name, root)
             try:
                 process = await asyncio.create_subprocess_exec(
                     *args,
@@ -177,6 +224,9 @@ class ContainerPool:
                 )
                 stdout, stderr = await asyncio.wait_for(process.communicate(), 30)
             except (OSError, TimeoutError) as exc:
+                # A half-created container would linger nameless-but-running;
+                # remove by name so timeouts cannot accumulate orphans.
+                await self._stop(name)
                 self.reason = str(exc) or "could not start Docker container"
                 return None
             if process.returncode != 0:
@@ -185,11 +235,56 @@ class ContainerPool:
             container_id = stdout.decode(errors="replace").strip()
             if not container_id:
                 self.reason = "Docker returned an empty container id"
+                await self._stop(name)
                 return None
-            runner = ContainerRunner(container_id, self.image)
+            runner = ContainerRunner(
+                container_id,
+                self.image,
+                on_timeout_destroy=lambda: self._destroy_runner(key, container_id),
+            )
             self._runners[key] = runner
             log.info("created sandbox container=%s session=%s workspace=%s", container_id, session_id, root)
             return runner
+
+    def _run_args(self, name: str, root: Path) -> list[str]:
+        """The ``docker run`` argv for one session container. Pure function of
+        policy, so security tests can assert on it without Docker."""
+        args = [
+            "docker", "run", "-d", "--rm", "--init", "--name", name,
+            "--workdir", "/workspace",
+            "--memory", self.memory, "--cpus", self.cpus,
+            "--pids-limit", self.pids_limit,
+        ]
+        for cap in self.cap_drop:
+            args.extend(["--cap-drop", cap])
+        if self.no_new_privileges:
+            args.extend(["--security-opt", "no-new-privileges"])
+        if self.readonly:
+            # The workspace stays writable through its bind mount; everything
+            # else in the root filesystem is read-only.
+            args.append("--read-only")
+            for spec in self.tmpfs:
+                args.extend(["--tmpfs", spec])
+        if self.user:
+            args.extend(["--user", self.user])
+        args.extend(["--mount", f"type=bind,source={root},target=/workspace"])
+        if not self.network:
+            args.extend(["--network", "none"])
+        args.extend([self.image, "sleep", "infinity"])
+        return args
+
+    async def _destroy_runner(self, key: str, container_id: str) -> None:
+        """Evict a runner and destroy its container (timeout path).
+
+        Eviction is conditional on the id still matching: a recreated runner
+        for the same key must never be removed by a stale timeout.
+        """
+        async with self._lock:
+            current = self._runners.get(key)
+            if current is None or current.container_id != container_id:
+                return
+            del self._runners[key]
+        await self._stop(container_id)
 
     async def run(
         self,
@@ -275,6 +370,8 @@ __all__ = [
     "DEFAULT_CPUS",
     "DEFAULT_IMAGE",
     "DEFAULT_MEMORY",
+    "DEFAULT_PIDS_LIMIT",
+    "DEFAULT_TMPFS",
     "CommandOutput",
     "ContainerPool",
     "ContainerRunner",
