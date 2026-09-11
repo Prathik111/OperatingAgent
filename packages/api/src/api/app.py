@@ -49,7 +49,8 @@ try:
     _NATIVE_ROUTERS_AVAILABLE = True
 except ImportError:  # pragma: no cover
     _NATIVE_ROUTERS_AVAILABLE = False
-    native_events = native_health = native_messages = native_permissions = native_runs = native_sandbox_router = native_sessions = native_settings = None  # type: ignore
+    native_events = native_health = native_messages = native_permissions = None  # type: ignore
+    native_runs = native_sandbox_router = native_sessions = native_settings = None  # type: ignore
 
 log = logging.getLogger(__name__)
 

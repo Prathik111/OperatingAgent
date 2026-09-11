@@ -4,7 +4,6 @@ import type { EventResponse, PermissionResponse, SessionResponse, ThreadResponse
 import { loadSettings, saveSettings } from "../SettingsModal";
 import { AlertDialog, ConfirmDialog, PromptDialog } from "../Modal";
 import { AnalyticsView } from "./AnalyticsView";
-import { EventTimeline } from "./EventTimeline";
 
 type ChatItem =
   | { kind: "native"; id: string; title: string; subtitle: string; updatedAt: string }
@@ -716,7 +715,7 @@ export function ChatWorkspace({
 
         <div ref={listRef} className="flex-1 overflow-auto px-2 pb-2">
           {showAnalytics ? (
-            <AnalyticsView track={track} />
+            <AnalyticsView track={track} events={events} live={sending} />
           ) : (
             <>
               <div className="flex items-center px-1.5 pt-1 pb-1.5">
@@ -886,7 +885,6 @@ export function ChatWorkspace({
                     </div>
                   </div>
                 )}
-                <EventTimeline events={events} live={sending} />
                 <div ref={endRef} />
               </>
             )}

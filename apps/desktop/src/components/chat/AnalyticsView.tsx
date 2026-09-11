@@ -1,8 +1,17 @@
 import { useEffect, useState } from "react";
 import { nativeApi, taskApi } from "../../lib/api";
-import type { RunResponse, TaskResponse } from "../../lib/types";
+import type { EventResponse, RunResponse, TaskResponse } from "../../lib/types";
+import { EventTimeline } from "./EventTimeline";
 
-export function AnalyticsView({ track }: { track: "native" | "langgraph" }) {
+export function AnalyticsView({
+  track,
+  events,
+  live,
+}: {
+  track: "native" | "langgraph";
+  events: EventResponse[];
+  live?: boolean;
+}) {
   const [nativeRuns, setNativeRuns] = useState<RunResponse[]>([]);
   const [tasks, setTasks] = useState<TaskResponse[]>([]);
   const [loading, setLoading] = useState(true);
@@ -52,6 +61,8 @@ export function AnalyticsView({ track }: { track: "native" | "langgraph" }) {
     );
   }
 
+  const activity = <ActivitySection events={events} live={live} />;
+
   if (track === "native") {
     const totalCost = nativeRuns.reduce((s, r) => s + (r.cost_usd || 0), 0);
     const totalTokens = nativeRuns.reduce((s, r) => s + (r.input_tokens || 0) + (r.output_tokens || 0), 0);
@@ -62,6 +73,7 @@ export function AnalyticsView({ track }: { track: "native" | "langgraph" }) {
 
     return (
       <div className="p-4 space-y-4">
+        {activity}
         <h3 className="text-[13px] font-semibold font-display">Usage</h3>
 
         <div className="grid grid-cols-2 gap-2">
@@ -115,6 +127,7 @@ export function AnalyticsView({ track }: { track: "native" | "langgraph" }) {
 
   return (
       <div className="p-4 space-y-4">
+        {activity}
         <h3 className="text-[13px] font-semibold font-display">Usage</h3>
 
         <div className="grid grid-cols-2 gap-2">
@@ -151,6 +164,19 @@ export function AnalyticsView({ track }: { track: "native" | "langgraph" }) {
             ))}
         </div>
       </div>
+    </div>
+  );
+}
+
+function ActivitySection({ events, live }: { events: EventResponse[]; live?: boolean }) {
+  return (
+    <div className="space-y-2">
+      <EventTimeline events={events} live={live} />
+      {events.length === 0 && !live && (
+        <div className="rounded-xl p-3 text-[11px]" style={{ background: "var(--bg-1)", border: "1px solid var(--bg-4)", color: "var(--fg-3)" }}>
+          No activity yet — send a message to see the run unfold.
+        </div>
+      )}
     </div>
   );
 }

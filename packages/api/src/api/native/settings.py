@@ -26,7 +26,15 @@ _NATIVE_PROVIDERS = ("groq", "ollama")
 #: PATCH fields that reconfigure the model. Anything else (e.g. the allow-all
 #: toggle) applies without touching provider validation.
 _LLM_PATCH_FIELDS = frozenset(
-    {"provider", "model", "base_url", "temperature", "top_p", "max_tokens", "timeout_seconds"}
+    {
+        "provider",
+        "model",
+        "base_url",
+        "temperature",
+        "top_p",
+        "max_tokens",
+        "timeout_seconds",
+    }
 )
 
 
