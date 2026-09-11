@@ -142,11 +142,12 @@ async def ExecutorNode(state: AgentState, runtime: Runtime[AgentContext]) -> dic
             step.id,
             step.tool_name,
         )
+        blocked_reason = f"blocked {step.tool_name}: risk classified BLOCKED"
         return {
-            "plan": _with_step(plan, index,
-                               status=RunStatus.FAILED,
-                               output=f"blocked {step.tool_name}: risk classified BLOCKED"),
-            "last_error": f"blocked {step.tool_name}: risk classified BLOCKED",
+            "plan": _with_step(
+                plan, index, status=RunStatus.FAILED, output=blocked_reason
+            ),
+            "last_error": blocked_reason,
             "retry_count": state.get("retry_count", 0) + 1,
             "status": TaskStatus.EXECUTING,
         }

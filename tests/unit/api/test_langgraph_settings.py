@@ -44,7 +44,9 @@ class _StubLangGraphOrchestrator:
 
 
 @pytest.fixture
-async def langgraph_client() -> AsyncIterator[tuple[httpx.AsyncClient, _StubLangGraphOrchestrator]]:
+async def langgraph_client() -> AsyncIterator[
+    tuple[httpx.AsyncClient, _StubLangGraphOrchestrator]
+]:
     agent = _StubLangGraphOrchestrator(build_agent_config())
     settings = ApiSettings(repository_backend="memory")
     service = TaskService(
@@ -81,13 +83,17 @@ async def test_langgraph_settings_auto_approve_roundtrip(langgraph_client) -> No
     current = await client.get("/settings/langgraph")
     assert current.json()["auto_approve_all"] is True
 
-    disabled = await client.patch("/settings/langgraph", json={"auto_approve_all": False})
+    disabled = await client.patch(
+        "/settings/langgraph", json={"auto_approve_all": False}
+    )
     assert disabled.json()["auto_approve_all"] is False
     assert agent.auto_approve_all is False
 
 
 @pytest.mark.regression
-async def test_langgraph_settings_model_failure_leaves_toggle_untouched(langgraph_client) -> None:
+async def test_langgraph_settings_model_failure_leaves_toggle_untouched(
+    langgraph_client,
+) -> None:
     client, agent = langgraph_client
 
     rejected = await client.patch(

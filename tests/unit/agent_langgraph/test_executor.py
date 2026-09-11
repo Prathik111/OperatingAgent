@@ -315,7 +315,9 @@ async def test_agent_threads_auto_approve_into_context() -> None:
     assert agent.set_auto_approve_all(True) is True
 
     task = AgentTask(id="t1", goal="hi", thread_id="th1", track=AgentTrack.LANGGRAPH)
-    context = agent._build_context(task, config, agent._model_provider, agent._prompt_manager)
+    context = agent._build_context(
+        task, config, agent._model_provider, agent._prompt_manager
+    )
     assert context.auto_approve_all is True
 
 

@@ -65,7 +65,10 @@ class MCPAdapter(IMCPClient):
             return self
         # Inherit the configured stdio env — not the whole host environment —
         # so its variables and restrictions survive, then pin the workspace.
-        base = dict(self._stdio_env) if self._stdio_env is not None else dict(os.environ)
+        if self._stdio_env is not None:
+            base = dict(self._stdio_env)
+        else:
+            base = dict(os.environ)
         base["OPERATING_AGENT_WORKSPACE"] = workspace
         return self.from_stdio(
             self._stdio_command,
