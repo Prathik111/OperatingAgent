@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { activitySignature, isActivityEvent, nativeApi, readSSEStream, sseSubscribe, taskApi } from "../../lib/api";
+import { isTauri, pickDirectory } from "../../lib/pickFolder";
 import type { EventResponse, PermissionResponse, SessionResponse, ThreadResponse } from "../../lib/types";
 import { loadSettings, saveSettings } from "../SettingsModal";
 import { AlertDialog, ConfirmDialog, PromptDialog } from "../Modal";
@@ -24,6 +25,35 @@ type ChatMessage = {
 const ACTIVE_TASK_STATUSES = new Set(["created", "pending", "running"]);
 const TERMINAL_TASK_STATUSES = new Set(["completed", "failed", "interrupted"]);
 
+function messageContentOf(value: Record<string, unknown>): unknown {
+  const data = value.data;
+  if (data && typeof data === "object") return (data as Record<string, unknown>).content;
+  return value.content;
+}
+
+function isAiMessage(value: Record<string, unknown>): boolean {
+  const type = String(value.type || "").toLowerCase();
+  return type === "ai" || type === "aimessage" || type === "assistant";
+}
+
+/** Answer text from content that may be a string or a list of blocks. */
+function textOfContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  const parts: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue;
+    const record = block as Record<string, unknown>;
+    const kind = String(record.type || "").toLowerCase();
+    // Thinking/reasoning blocks are extracted separately; only "text" (and
+    // untyped) blocks belong to the visible answer.
+    if ((kind === "text" || kind === "") && typeof record.text === "string") {
+      parts.push(record.text);
+    }
+  }
+  return parts.join("");
+}
+
 function assistantTextFromState(payload: unknown): string {
   if (!payload || typeof payload !== "object") return "";
   const messages = (payload as Record<string, unknown>).messages;
@@ -32,16 +62,51 @@ function assistantTextFromState(payload: unknown): string {
     const message = messages[index];
     if (!message || typeof message !== "object") continue;
     const value = message as Record<string, unknown>;
-    const type = String(value.type || "").toLowerCase();
-    const data = value.data;
-    const content = data && typeof data === "object"
-      ? (data as Record<string, unknown>).content
-      : value.content;
-    if ((type === "ai" || type === "aimessage" || type === "assistant") && typeof content === "string" && content.trim()) {
-      return content;
-    }
+    if (!isAiMessage(value)) continue;
+    const text = textOfContent(messageContentOf(value));
+    if (text.trim()) return text;
   }
   return "";
+}
+
+/** Reasoning/thinking text from provider-specific shapes, for live display. */
+function reasoningTextFromState(payload: unknown): string {
+  if (!payload || typeof payload !== "object") return "";
+  const messages = (payload as Record<string, unknown>).messages;
+  if (!Array.isArray(messages)) return "";
+  const parts: string[] = [];
+  const push = (value: unknown) => {
+    if (typeof value === "string" && value.trim()) parts.push(value);
+  };
+  for (const message of messages) {
+    if (!message || typeof message !== "object") continue;
+    const value = message as Record<string, unknown>;
+    if (!isAiMessage(value)) continue;
+    const data = value.data;
+    const record = data && typeof data === "object" ? (data as Record<string, unknown>) : value;
+    const extra = record.additional_kwargs;
+    if (extra && typeof extra === "object") {
+      const kwargs = extra as Record<string, unknown>;
+      push(kwargs.reasoning_content);
+      push(kwargs.reasoning);
+      push(kwargs.thinking);
+    }
+    push(record.reasoning_content);
+    push(record.reasoning);
+    const content = record.content;
+    if (Array.isArray(content)) {
+      for (const block of content) {
+        if (!block || typeof block !== "object") continue;
+        const item = block as Record<string, unknown>;
+        const kind = String(item.type || "").toLowerCase();
+        if (kind === "text" || kind === "") continue;
+        push(item.text);
+        push(item.reasoning);
+        push(item.thinking);
+      }
+    }
+  }
+  return parts.join("\n");
 }
 
 type DialogState =
@@ -208,6 +273,13 @@ export function ChatWorkspace({
     saveSettings({ ...loadSettings(), workspace: next });
   };
 
+  // Native file-explorer picker (Tauri shell only; hidden in a browser).
+  const canBrowse = isTauri();
+  const browseWorkspace = async () => {
+    const dir = await pickDirectory(workspace);
+    if (dir) selectWorkspace(dir);
+  };
+
   const scrollToEnd = useCallback(() => endRef.current?.scrollIntoView({ behavior: "smooth" }), []);
 
   // ——— load chats ———
@@ -322,7 +394,17 @@ export function ChatWorkspace({
                   ? [{ id: `${t.id}-error`, role: "assistant" as const, text: `Run failed: ${t.error}`, time: t.created_at }]
                   : []),
             ]);
-          setMessages(msgs);
+          // Keep live-streamed reasoning: thread tasks carry no thinking, so a
+          // refresh would otherwise wipe the Thought process block seconds
+          // after it streamed in.
+          setMessages((prev) => {
+            if (!prev.some((m) => m.thinking)) return msgs;
+            const thinkingById = new Map(prev.filter((m) => m.thinking).map((m) => [m.id, m.thinking] as const));
+            return msgs.map((m) => {
+              const thinking = thinkingById.get(m.id);
+              return thinking && !m.thinking ? { ...m, thinking } : m;
+            });
+          });
           setPendingTaskId((cur) => {
             const current = cur ? tasks.find((task) => task.id === cur) : undefined;
             if (current && TERMINAL_TASK_STATUSES.has(current.status || "")) return null;
@@ -379,8 +461,37 @@ export function ChatWorkspace({
     };
   }, [refreshChats]);
 
+  // Switching chats must never show the previous chat's responses while the
+  // new one loads: clear immediately and show a skeleton until its fetch
+  // settles. Background polls reuse refreshConversation but must not touch
+  // this loading state. A send that just created its session/thread owns its
+  // live bubbles, so it suppresses this reload (it refreshes itself at the end).
+  const [convLoading, setConvLoading] = useState(false);
+  const suppressSelectLoadRef = useRef(false);
   useEffect(() => {
-    if (selected) refreshConversation(selected);
+    if (!selected) {
+      setMessages([]);
+      setEvents([]);
+      setPendingTaskId(null);
+      setConvLoading(false);
+      return;
+    }
+    if (suppressSelectLoadRef.current) {
+      suppressSelectLoadRef.current = false;
+      return;
+    }
+    setConvLoading(true);
+    setMessages([]);
+    setEvents([]);
+    setPendingApprovals([]);
+    setPendingTaskId(null);
+    let cancelled = false;
+    void refreshConversation(selected).finally(() => {
+      if (!cancelled) setConvLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [selected, refreshConversation]);
 
   useEffect(() => {
@@ -525,6 +636,7 @@ export function ChatWorkspace({
           const s = await nativeApi.createSession({ title: text.slice(0, 40), workspace, agent: "build" });
           sid = s.id;
           setChats((prev) => [{ kind: "native", id: s.id, title: s.title || s.id, subtitle: workspaceLabel(s.workspace), updatedAt: new Date().toISOString() }, ...prev]);
+          suppressSelectLoadRef.current = true;
           setSelected(s.id);
         } catch (e) {
           setMessages((prev) => [...prev, { id: `err-${Date.now()}`, role: "assistant", text: `Failed to create session: ${(e as Error).message}` }]);
@@ -609,6 +721,7 @@ export function ChatWorkspace({
         const body = { goal: text, track: "langgraph" as const, workspace, metadata: {} };
         const task = selected ? await taskApi.createThreadTask(selected, body) : await taskApi.createTask(body);
         if (!selected) {
+          suppressSelectLoadRef.current = true;
           setSelected(task.thread_id);
           setChats((prev) => [{ kind: "langgraph", id: task.thread_id, title: task.thread_id.slice(0, 12), subtitle: "1 tasks", updatedAt: new Date().toISOString() }, ...prev]);
         }
@@ -651,19 +764,24 @@ export function ChatWorkspace({
               if (finalText) {
                 setMessages((prev) => {
                   const existing = prev.find((message) => message.id === `${task.id}-assistant`);
-                  if (existing) return prev.map((message) => message.id === existing.id ? { ...message, text: finalText } : message);
+                  if (existing) return prev.map((message) => message.id === existing.id ? { ...message, text: finalText, streaming: false } : message);
                   return [...prev, { id: `${task.id}-assistant`, role: "assistant", text: finalText, time: new Date().toISOString() }];
                 });
               }
               setPendingTaskId(null);
               closeStream();
             } else if (event.event === "state") {
-              const stateText = assistantTextFromState(data.data && typeof data.data === "object" ? data.data : data);
-              if (stateText) {
+              const statePayload = data.data && typeof data.data === "object" ? data.data : data;
+              const stateText = assistantTextFromState(statePayload);
+              const stateThinking = reasoningTextFromState(statePayload);
+              if (stateText || stateThinking) {
                 setMessages((prev) => {
+                  const patch: Partial<ChatMessage> = { streaming: true };
+                  if (stateText) patch.text = stateText;
+                  if (stateThinking) patch.thinking = stateThinking;
                   const existing = prev.find((message) => message.id === `${task.id}-assistant`);
-                  if (existing) return prev.map((message) => message.id === existing.id ? { ...message, text: stateText } : message);
-                  return [...prev, { id: `${task.id}-assistant`, role: "assistant", text: stateText, time: new Date().toISOString() }];
+                  if (existing) return prev.map((message) => message.id === existing.id ? { ...message, ...patch } : message);
+                  return [...prev, { id: `${task.id}-assistant`, role: "assistant", text: stateText, thinking: stateThinking || undefined, streaming: true, time: new Date().toISOString() }];
                 });
               }
             }
@@ -719,7 +837,19 @@ export function ChatWorkspace({
           </div>
           <label className="block">
             <span className="block text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: "var(--fg-3)" }}>Working directory</span>
-            <input value={workspace} onChange={(e) => setWorkspace(e.target.value)} onBlur={() => selectWorkspace(workspace)} placeholder="/path/to/workspace" className="field !h-8 !text-[11px] mono" />
+            <span className="flex gap-1.5">
+              <input value={workspace} onChange={(e) => setWorkspace(e.target.value)} onBlur={() => selectWorkspace(workspace)} placeholder="/path/to/workspace" className="field !h-8 !text-[11px] mono flex-1 min-w-0" />
+              {canBrowse && (
+                <button
+                  onClick={browseWorkspace}
+                  title="Choose folder in file explorer"
+                  className="btn-quiet h-8 px-2.5 rounded-lg text-[11px] font-medium shrink-0"
+                  style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)", color: "var(--fg-1)" }}
+                >
+                  Browse…
+                </button>
+              )}
+            </span>
           </label>
         </div>
 
@@ -845,7 +975,16 @@ export function ChatWorkspace({
         {/* messages */}
         <div className="flex-1 overflow-auto p-4 sm:p-6">
           <div className="mx-auto w-full max-w-[760px] space-y-4">
-            {messages.length === 0 && !sending ? (
+            {convLoading ? (
+              <div className="space-y-3 anim-fade-in" aria-label="Loading conversation">
+                {[0, 1, 2].map((i) => (
+                  <div key={i} className="flex gap-3">
+                    <span className="w-7 h-7 rounded-lg skeleton shrink-0" />
+                    <div className="rounded-2xl px-3.5 py-2.5 skeleton" style={{ width: `${[72, 58, 64][i]}%`, height: 64 }} />
+                  </div>
+                ))}
+              </div>
+            ) : messages.length === 0 && !sending ? (
               <div className="rounded-2xl p-8 text-center hero-glow anim-fade-up" style={{ background: "var(--bg-1)", border: "1px solid var(--bg-4)" }}>
                 <div className="w-11 h-11 rounded-2xl mx-auto grid place-items-center text-[18px] font-bold" style={{ background: "var(--accent-grad)", color: "#fff", boxShadow: "var(--accent-glow)" }}>{track === "native" ? "◈" : "⬢"}</div>
                 <div className="mt-3 text-[15px] font-semibold font-display">Start a <span className="grad-text">new chat</span></div>

@@ -68,6 +68,17 @@ export interface SandboxStatusResponse {
   reason: string;
 }
 
+export interface EnvVariableResponse {
+  name: string;
+  value: string | null;
+  secret: boolean;
+  set: boolean;
+}
+
+export interface EnvironmentResponse {
+  variables: EnvVariableResponse[];
+}
+
 // LangGraph / Task API
 export interface HealthResponse {
   status: string;

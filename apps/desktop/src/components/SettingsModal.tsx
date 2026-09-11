@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { nativeApi, taskApi } from "../lib/api";
+import { isTauri, pickDirectory } from "../lib/pickFolder";
 import type { SandboxStatusResponse } from "../lib/types";
 
 export interface DesktopSettings {
@@ -228,7 +229,22 @@ export function SettingsModal({
             </Field>
             <div className="grid sm:grid-cols-2 gap-3">
               <Field label="Workspace" hint="Must be an existing directory">
-                <input value={settings.workspace} onChange={(e) => set("workspace", e.target.value)} placeholder="." className="field mono" />
+                <span className="flex gap-1.5">
+                  <input value={settings.workspace} onChange={(e) => set("workspace", e.target.value)} placeholder="." className="field mono flex-1 min-w-0" />
+                  {isTauri() && (
+                    <button
+                      onClick={async () => {
+                        const dir = await pickDirectory(settings.workspace);
+                        if (dir) set("workspace", dir);
+                      }}
+                      title="Choose folder in file explorer"
+                      className="btn-quiet h-9 px-2.5 rounded-lg text-[11px] font-medium shrink-0"
+                      style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)", color: "var(--fg-1)" }}
+                    >
+                      Browse…
+                    </button>
+                  )}
+                </span>
               </Field>
               <Field label="Terminal isolation">
                 {track === "native" ? (

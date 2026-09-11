@@ -30,6 +30,7 @@ fn get_track() -> Option<AgentTrack> {
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![set_track, get_track])
         .run(tauri::generate_context!())

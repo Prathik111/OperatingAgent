@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { nativeApi, taskApi } from "../../lib/api";
-import type { EventResponse, RunResponse, TaskResponse } from "../../lib/types";
+import type { EnvVariableResponse, EventResponse, RunResponse, TaskResponse } from "../../lib/types";
 import { EventTimeline } from "./EventTimeline";
 
 export function AnalyticsView({
@@ -12,6 +12,30 @@ export function AnalyticsView({
   events: EventResponse[];
   live?: boolean;
 }) {
+  // Process-level env truth: same API process serves both tracks, so one
+  // fetch covers the tab. Secrets arrive presence-only, never by value.
+  const [envVars, setEnvVars] = useState<EnvVariableResponse[]>([]);
+  const [envError, setEnvError] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    nativeApi
+      .getEnvironment()
+      .then((env) => {
+        if (!cancelled) {
+          setEnvVars(Array.isArray(env.variables) ? env.variables : []);
+          setEnvError(null);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setEnvVars([]);
+          setEnvError("Unable to read the API environment.");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [track]);
   const [nativeRuns, setNativeRuns] = useState<RunResponse[]>([]);
   const [tasks, setTasks] = useState<TaskResponse[]>([]);
   const [loading, setLoading] = useState(true);
@@ -112,6 +136,7 @@ export function AnalyticsView({
             ))}
           </div>
         </div>
+        <EnvironmentSection variables={envVars} error={envError} />
       </div>
     );
   }
@@ -122,19 +147,14 @@ export function AnalyticsView({
     const s = t.status || "pending";
     byStatus[s] = (byStatus[s] || 0) + 1;
   });
-  const byTrack: Record<string, number> = {};
-  tasks.forEach((t) => (byTrack[t.track] = (byTrack[t.track] || 0) + 1));
 
   return (
       <div className="p-4 space-y-4">
         {activity}
         <h3 className="text-[13px] font-semibold font-display">Usage</h3>
 
-        <div className="grid grid-cols-2 gap-2">
-        <Stat label="Tasks" value={String(totalTasks)} sub={`${byStatus["completed"] || 0} completed`} />
-        <Stat label="Threads" value={String(new Set(tasks.map((t) => t.thread_id)).size)} sub={`${Object.keys(byTrack).length} tracks`} />
-        <Stat label="Native" value={String(byTrack["native"] || 0)} sub="track=native" />
-        <Stat label="LangGraph" value={String(byTrack["langgraph"] || 0)} sub="track=langgraph" />
+        <div className="grid grid-cols-1 gap-2">
+        <Stat label="Total tasks" value={String(totalTasks)} sub={`${byStatus["completed"] || 0} completed`} />
       </div>
 
       <div className="rounded-xl p-3" style={{ background: "var(--bg-1)", border: "1px solid var(--bg-4)" }}>
@@ -164,6 +184,35 @@ export function AnalyticsView({
             ))}
         </div>
       </div>
+      <EnvironmentSection variables={envVars} error={envError} />
+    </div>
+  );
+}
+
+function EnvironmentSection({ variables, error }: { variables: EnvVariableResponse[]; error: string | null }) {
+  const configuredCount = variables.filter((variable) => variable.set).length;
+  return (
+    <div className="rounded-xl p-3 max-h-[320px] overflow-auto" style={{ background: "var(--bg-1)", border: "1px solid var(--bg-4)" }}>
+      <div className="flex items-baseline justify-between gap-2">
+        <div className="text-[11px] font-semibold tracking-wide uppercase" style={{ color: "var(--fg-2)" }}>Environment logs</div>
+        {variables.length > 0 && <span className="text-[10px] font-mono" style={{ color: "var(--fg-3)" }}>{configuredCount} set</span>}
+      </div>
+      {error ? (
+        <div className="mt-2 text-[11px] font-mono" style={{ color: "var(--danger)" }}>{error}</div>
+      ) : variables.length === 0 ? (
+        <div className="mt-2 text-[11px]" style={{ color: "var(--fg-3)" }}>No environment data available.</div>
+      ) : (
+        <div className="mt-2 space-y-1">
+          {variables.map((v) => (
+            <div key={v.name} className="flex gap-2 text-[11px] font-mono p-1.5 rounded" style={{ background: "var(--bg-0)", border: "1px solid var(--bg-4)" }}>
+              <span className="shrink-0" style={{ color: "var(--fg-2)" }}>{v.name}</span>
+              <span className="truncate flex-1 text-right" style={{ color: v.set ? "var(--fg-1)" : "var(--fg-3)" }}>
+                {v.secret ? (v.set ? "•••••• (set)" : "not set") : v.set ? String(v.value) : "—"}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
