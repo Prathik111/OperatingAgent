@@ -248,6 +248,77 @@ async def test_no_gate_when_risk_below_threshold(monkeypatch) -> None:
     assert delta["status"] is TaskStatus.VERIFYING
 
 
+# Allow-all opt-in
+
+
+class _AlwaysBlockedClassifier:
+    def classify(self, call):
+        from common.enums import RiskLevel
+
+        return RiskLevel.BLOCKED
+
+
+async def test_auto_approve_skips_gate_but_runs_tool(monkeypatch) -> None:
+    monkeypatch.setattr(executor_module, "interrupt", _fail_if_called)
+    handler = _RecordingApprovalHandler(approved=True)
+    config = build_agent_config(require_human_approval=True)
+    step = make_step(1, tool_name="delete_file", arguments={"path": "x"})
+    registry = StubToolRegistry(default=ToolCallResult(success=True, output="gone", error=None))
+
+    delta = await run_executor(
+        config,
+        make_state(plan=make_plan(step)),
+        tool_registry=registry,
+        approval_handler=handler,
+        auto_approve_all=True,
+    )
+
+    assert delta["status"] is TaskStatus.VERIFYING
+    assert registry.calls == [("delete_file", {"path": "x"})]
+    assert handler.requests == []
+
+
+async def test_auto_approve_still_rejects_blocked(monkeypatch) -> None:
+    monkeypatch.setattr(executor_module, "interrupt", _fail_if_called)
+    config = build_agent_config(require_human_approval=True)
+    step = make_step(1, tool_name="delete_file", arguments={"path": "x"})
+    registry = StubToolRegistry(default=ToolCallResult(success=True, output="gone", error=None))
+
+    delta = await run_executor(
+        config,
+        make_state(plan=make_plan(step)),
+        tool_registry=registry,
+        risk_classifier=_AlwaysBlockedClassifier(),
+        auto_approve_all=True,
+    )
+
+    assert str(delta["last_error"]).startswith("blocked ")
+    assert delta["plan"].steps[0].status is RunStatus.FAILED
+    assert registry.calls == []
+
+
+async def test_agent_threads_auto_approve_into_context() -> None:
+    from agent_langgraph.orchestrator.langgraph_agent import LangGraphAgent
+    from common.agent import AgentTask
+    from common.enums import AgentTrack
+
+    from tests.support.langgraph import StubModelProvider, StubPromptManager
+
+    config = build_agent_config()
+    agent = LangGraphAgent(
+        config,
+        tool_registry=StubToolRegistry(),
+        model_provider=StubModelProvider(),
+        prompt_manager=StubPromptManager(),
+    )
+    assert agent.auto_approve_all is False
+    assert agent.set_auto_approve_all(True) is True
+
+    task = AgentTask(id="t1", goal="hi", thread_id="th1", track=AgentTrack.LANGGRAPH)
+    context = agent._build_context(task, config, agent._model_provider, agent._prompt_manager)
+    assert context.auto_approve_all is True
+
+
 # Test doubles for tool timing/failure behaviour
 
 

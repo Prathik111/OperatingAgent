@@ -346,35 +346,35 @@ export function SettingsModal({
             </div>
           </section>
 
-          {track === "native" && (
-            <section className="space-y-3">
-              <SectionTitle>Run Defaults</SectionTitle>
+          <section className="space-y-3">
+            <SectionTitle>Run Defaults</SectionTitle>
+            {track === "native" && (
               <div className="grid sm:grid-cols-2 gap-3">
                 <Field label="Maximum turns"><input value={settings.maxTurns} onChange={(e) => set("maxTurns", e.target.value)} className="field mono" /></Field>
                 <Field label="Maximum cost (USD)"><input value={settings.maxCost} onChange={(e) => set("maxCost", e.target.value)} className="field mono" /></Field>
               </div>
-              <label
-                className="flex items-start gap-2.5 rounded-lg px-3 py-2.5 cursor-pointer"
-                style={{ background: settings.autoApproveAll ? "var(--warning-soft)" : "var(--bg-2)", border: "1px solid var(--bg-4)" }}
-              >
-                <input
-                  type="checkbox"
-                  checked={settings.autoApproveAll}
-                  onChange={(e) => set("autoApproveAll", e.target.checked)}
-                  className="mt-0.5 h-4 w-4 shrink-0"
-                />
-                <span>
-                  <span className="block text-[12px] font-medium" style={{ color: "var(--fg-1)" }}>
-                    Allow all tool permissions
-                  </span>
-                  <span className="block text-[11px] leading-relaxed" style={{ color: "var(--fg-2)" }}>
-                    Skip approval prompts — the agent runs every tool without asking.
-                    Safety denials (workspace escapes, plan-mode blocks) still apply.
-                  </span>
+            )}
+            <label
+              className="flex items-start gap-2.5 rounded-lg px-3 py-2.5 cursor-pointer"
+              style={{ background: settings.autoApproveAll ? "var(--warning-soft)" : "var(--bg-2)", border: "1px solid var(--bg-4)" }}
+            >
+              <input
+                type="checkbox"
+                checked={settings.autoApproveAll}
+                onChange={(e) => set("autoApproveAll", e.target.checked)}
+                className="mt-0.5 h-4 w-4 shrink-0"
+              />
+              <span>
+                <span className="block text-[12px] font-medium" style={{ color: "var(--fg-1)" }}>
+                  Allow all tool permissions
                 </span>
-              </label>
-            </section>
-          )}
+                <span className="block text-[11px] leading-relaxed" style={{ color: "var(--fg-2)" }}>
+                  Skip approval prompts — the agent runs every tool without asking.
+                  Safety denials (workspace escapes, plan-mode blocks) still apply.
+                </span>
+              </span>
+            </label>
+          </section>
         </div>
 
         <div className="px-5 py-3 flex items-center gap-2 border-t" style={{ borderColor: "var(--bg-4)", background: "var(--bg-2)" }}>

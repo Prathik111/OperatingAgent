@@ -95,6 +95,17 @@ class LangGraphAgent(IAgentOrchestrator):
         self._compiled: Any | None = None
         self._checkpointer_context: AbstractAsyncContextManager[Any] | None = None
         self._compile_lock = asyncio.Lock()
+        self._auto_approve_all = False
+
+    @property
+    def auto_approve_all(self) -> bool:
+        """Whether approval gates are skipped (BLOCKED is still rejected)."""
+        return self._auto_approve_all
+
+    def set_auto_approve_all(self, enabled: bool) -> bool:
+        """Turn the allow-all opt-in on or off live. Returns the new state."""
+        self._auto_approve_all = bool(enabled)
+        return self._auto_approve_all
 
     # -- graph lifecycle ---------------------------------------------------
 
@@ -160,6 +171,7 @@ class LangGraphAgent(IAgentOrchestrator):
             tracer=self._tracer,
             config=config,
             approval_handler=self._approval_handler,
+            auto_approve_all=self._auto_approve_all,
             task_id=task.id,
             event_sink=on_event,
             completed_tool_calls=task.completed_tool_calls,

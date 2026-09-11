@@ -52,6 +52,7 @@ async def get_langgraph_settings(request: Request) -> dict[str, Any]:
         "timeout_seconds": config.llm.timeout_seconds,
         "models": models,
         "default_model": default_model(config.llm.provider, models or None),
+        "auto_approve_all": bool(getattr(agent, "auto_approve_all", False)),
         "applies_to": "new runs",
     }
 
@@ -72,9 +73,41 @@ async def list_langgraph_models(
     }
 
 
+#: PATCH fields that rebuild the model config. Anything else (e.g. the
+#: allow-all toggle) applies without touching provider validation.
+_LLM_PATCH_FIELDS = frozenset(
+    {
+        "provider",
+        "model",
+        "base_url",
+        "temperature",
+        "top_p",
+        "max_tokens",
+        "timeout_seconds",
+    }
+)
+
+
+def _apply_auto_approve(agent: Any, value: bool | None) -> None:
+    if value is not None and hasattr(agent, "set_auto_approve_all"):
+        try:
+            agent.set_auto_approve_all(bool(value))
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.patch("")
 async def update_langgraph_settings(body: RuntimeLLMSettings, request: Request) -> dict[str, Any]:
     agent = _orchestrator(request)
+    if not (set(body.model_fields_set) & _LLM_PATCH_FIELDS):
+        # Flags-only patch: nothing about the model changes, so provider
+        # validation must not block it.
+        _apply_auto_approve(agent, body.auto_approve_all)
+        return {
+            "track": "langgraph",
+            "auto_approve_all": bool(getattr(agent, "auto_approve_all", False)),
+            "applies_to": "new runs",
+        }
     old = agent.config
     provider = normalize_provider(body.provider or old.llm.provider)
     if provider not in _LANGGRAPH_PROVIDERS:
@@ -130,6 +163,9 @@ async def update_langgraph_settings(body: RuntimeLLMSettings, request: Request) 
         await agent.reconfigure(config)
     except (ValueError, NotImplementedError, RuntimeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    # A model PATCH applies the toggle only after the reconfigure succeeds:
+    # a 422 above must leave every setting untouched, not half-applied.
+    _apply_auto_approve(agent, body.auto_approve_all)
     models = await provider_models(provider, base_url)
     return {
         "track": "langgraph",
@@ -142,5 +178,6 @@ async def update_langgraph_settings(body: RuntimeLLMSettings, request: Request) 
         "top_p": config.llm.top_p,
         "max_tokens": config.llm.max_tokens,
         "timeout_seconds": config.llm.timeout_seconds,
+        "auto_approve_all": bool(getattr(agent, "auto_approve_all", False)),
         "applies_to": "new runs",
     }
