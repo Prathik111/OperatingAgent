@@ -316,16 +316,6 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                 "startup recovered %d stale run(s); resume is safe for their tasks",
                 len(recovered),
             )
-        app.state.task_service = task_service
-        # Reap executions left non-terminal by a dead process BEFORE serving:
-        # without this, a restarted API would see stale RUNNING rows with empty
-        # in-memory registries and could open duplicate executions over them.
-        recovered = await task_service.recover_stale_executions()
-        if recovered:
-            log.warning(
-                "startup recovered %d stale run(s); resume is safe for their tasks",
-                len(recovered),
-            )
 
         try:
             yield

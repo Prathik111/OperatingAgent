@@ -423,7 +423,16 @@ class AgentService:
         conversation = await self.runtime.database.load_conversation(session_id)
         for message in conversation.messages:
             await self.runtime.database.save_message(
-                replace(message, id=_new_id(), session_id=fork.id, parts=list(message.parts))
+                replace(
+                    message,
+                    id=_new_id(),
+                    session_id=fork.id,
+                    parts=list(message.parts),
+                    # The Postgres store keys rows by storage_id with
+                    # ON CONFLICT DO NOTHING: keeping the source row's key
+                    # would silently drop every forked message.
+                    storage_id=None,
+                )
             )
         return fork
 

@@ -109,6 +109,10 @@ def retry_router(state: AgentState) -> NodeType:
         return RESPONDER
     if str(state.get("last_error") or "").startswith("human rejected "):
         return RESPONDER
+    if str(state.get("last_error") or "").startswith("blocked "):
+        # A policy block is deterministic: replanning would propose the same
+        # refused call until the budget runs out. Report it instead.
+        return RESPONDER
 
     plan = state.get("plan")
     if plan is not None and state.get("current_step", 0) < len(plan.steps):

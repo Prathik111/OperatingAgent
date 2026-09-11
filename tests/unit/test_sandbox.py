@@ -55,6 +55,8 @@ async def test_invalid_workspace_does_not_start_a_container(monkeypatch, tmp_pat
     assert await pool.get("session", str(tmp_path / "missing")) is None
     assert not called
     assert "workspace does not exist" in pool.reason
+    # A bad workspace argument must not poison Docker availability.
+    assert pool._available is None
 
 
 async def test_native_command_fails_closed_when_docker_is_unavailable(monkeypatch, tmp_path) -> None:

@@ -86,6 +86,29 @@ async def test_fork_copies_history_into_an_independent_session() -> None:
     ]
 
 
+async def test_fork_clears_storage_ids_on_copied_messages() -> None:
+    """Copies must not keep the source rows' storage keys.
+
+    The Postgres store keys rows by storage_id with ON CONFLICT DO NOTHING: a
+    forked copy retaining its source key would be silently dropped, forking an
+    empty session.
+    """
+    db = MemoryDatabase()
+    service = _service(db, ScriptedProvider([text_event("ok")]))
+
+    source = await service.create_session(agent="build", title="root", working_directory=".")
+    await service.send_message(source.id, "the first thing")
+    # Simulate Postgres-loaded rows carrying their storage keys.
+    for message in (await db.load_conversation(source.id)).messages:
+        message.storage_id = f"row-{message.id}"
+
+    fork = await service.fork_session(source.id)
+
+    fork_conv = await db.load_conversation(fork.id)
+    assert len(fork_conv.messages) == len((await db.load_conversation(source.id)).messages)
+    assert all(message.storage_id is None for message in fork_conv.messages)
+
+
 async def test_forking_a_missing_session_is_a_clean_error() -> None:
     """Nothing to branch from -> KeyError, which the CLI/API turn into not-found."""
     db = MemoryDatabase()

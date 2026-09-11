@@ -63,11 +63,15 @@ class MCPAdapter(IMCPClient):
         """Create an equivalent stdio client rooted at one task workspace."""
         if self._stdio_command is None:
             return self
+        # Inherit the configured stdio env — not the whole host environment —
+        # so its variables and restrictions survive, then pin the workspace.
+        base = dict(self._stdio_env) if self._stdio_env is not None else dict(os.environ)
+        base["OPERATING_AGENT_WORKSPACE"] = workspace
         return self.from_stdio(
             self._stdio_command,
             list(self._stdio_args),
             cwd=workspace,
-            env={**os.environ, "OPERATING_AGENT_WORKSPACE": workspace},
+            env=base,
         )
 
     async def aclose(self) -> None:

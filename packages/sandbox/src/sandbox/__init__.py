@@ -75,7 +75,7 @@ class ContainerRunner:
             # survives, so only in-container scratch state is lost.
             process.kill()
             try:
-                await process.communicate()
+                await asyncio.wait_for(process.communicate(), 10)
             except Exception:  # noqa: BLE001 - reaping is best effort
                 log.debug("could not reap timed-out docker exec client")
             if self._on_timeout_destroy is not None:
@@ -197,8 +197,9 @@ class ContainerPool:
         try:
             root = Path(workspace).expanduser().resolve()
         except (OSError, RuntimeError, ValueError) as exc:
+            # A bad workspace argument says nothing about Docker: report it
+            # without touching availability, like the branch below.
             self.reason = f"invalid workspace: {exc}"
-            self._available = False
             return None
         if not root.is_dir():
             self.reason = f"workspace does not exist: {root}"

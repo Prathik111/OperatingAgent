@@ -101,14 +101,14 @@ async def update_native_settings(
     body: RuntimeLLMSettings,
     runtime: NativeRuntimeDep,
 ) -> dict[str, Any]:
-    if body.auto_approve_all is not None and hasattr(runtime, "set_auto_approve_all"):
-        try:
-            runtime.set_auto_approve_all(bool(body.auto_approve_all))
-        except (AttributeError, TypeError, ValueError) as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
     if not (set(body.model_fields_set) & _LLM_PATCH_FIELDS):
         # Flags-only patch (e.g. just the allow-all toggle): nothing about the
         # model changes, so provider validation must not block it.
+        if body.auto_approve_all is not None and hasattr(runtime, "set_auto_approve_all"):
+            try:
+                runtime.set_auto_approve_all(bool(body.auto_approve_all))
+            except (AttributeError, TypeError, ValueError) as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
         return {
             "track": "native",
             "auto_approve_all": bool(getattr(runtime, "auto_approve_all", False)),
@@ -186,6 +186,13 @@ async def update_native_settings(
         )
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    # A model PATCH applies the toggle only after the reconfigure succeeds:
+    # a 422 above must leave every setting untouched, not half-applied.
+    if body.auto_approve_all is not None and hasattr(runtime, "set_auto_approve_all"):
+        try:
+            runtime.set_auto_approve_all(bool(body.auto_approve_all))
+        except (AttributeError, TypeError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     for name in downloaded:
         if name not in models:
             models.append(name)

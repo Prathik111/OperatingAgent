@@ -217,3 +217,40 @@ async def test_registry_uses_array_item_path_format(tmp_path) -> None:
     assert result.success is False
     assert "escapes" in (result.error or "")
     assert adapter.received == []
+
+
+async def test_registry_discovers_paths_nested_under_array_items(tmp_path) -> None:
+    tool = ToolInfo(
+        name="custom_copy_many",
+        description="copy many files",
+        schema=ToolSchema(
+            input_schema={
+                "type": "object",
+                "properties": {
+                    "files": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "target": {"type": "string", "format": "path"},
+                            },
+                        },
+                    }
+                },
+            },
+            output_schema={},
+        ),
+    )
+    adapter = FakeAdapter(tools=[tool])
+    registry = ToolRegistry(
+        adapter,
+        sandbox=SandboxConfig(enabled=True, workspace=tmp_path),
+    )
+
+    result = await registry.call_by_name(
+        "custom_copy_many", {"files": [{"target": "../outside.txt"}]}
+    )
+
+    assert result.success is False
+    assert "escapes" in (result.error or "")
+    assert adapter.received == []

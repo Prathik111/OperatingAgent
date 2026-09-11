@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from agent_langgraph.graph.state import AgentPlan, AgentState, Finding
 from agent_langgraph.runtime.context import AgentContext
@@ -12,6 +13,10 @@ log = logging.getLogger(__name__)
 
 #: Per-finding detail cap when summarising, mirroring the planner's cap.
 _MAX_FINDING_DETAIL = 1_500
+
+#: How many trailing conversation messages the direct-answer path may quote.
+#: Bounded so a long chat cannot bloat a request that needs no tools at all.
+_MAX_HISTORY_MESSAGES = 10
 
 
 def _succeeded(plan: AgentPlan | None, last_error: str | None) -> bool:
@@ -64,6 +69,29 @@ def _build_transcript(plan: AgentPlan | None) -> str:
     return "\n".join(lines)
 
 
+def _recent_history(messages: Any) -> str:
+    """Render the trailing conversation for a direct answer. "" when empty.
+
+    LangChain messages carry ``type``/``content``; anything else degrades to
+    its class name and string form rather than breaking the request.
+    """
+    if not isinstance(messages, list) or not messages:
+        return ""
+    lines = []
+    for message in messages[-_MAX_HISTORY_MESSAGES:]:
+        role = getattr(message, "type", None) or type(message).__name__
+        content = getattr(message, "content", message)
+        if isinstance(content, list):
+            content = " ".join(
+                str(part.get("text", part)) if isinstance(part, dict) else str(part)
+                for part in content
+            )
+        text = str(content).strip()
+        if text:
+            lines.append(f"{role}: {text}")
+    return "\n".join(lines)
+
+
 def _fallback_summary(
     plan: AgentPlan | None,
     succeeded: bool,
@@ -113,10 +141,14 @@ async def ResponderNode(state: AgentState, runtime: Runtime[AgentContext]) -> di
             # An empty plan is intentional for greetings, factual questions, and
             # other requests that need no external action. Ask the responder to
             # answer the goal itself instead of turning the absence of tools into
-            # a misleading execution report.
+            # a misleading execution report. The recent conversation goes along:
+            # without it a contextual follow-up ("what about the second one?")
+            # has nothing to refer to.
+            history = _recent_history(state.get("messages", []))
             request = (
                 f"Original user request:\n{goal}\n\n"
-                "Answer the user's request directly and concisely. No external "
+                + (f"Recent conversation:\n{history}\n\n" if history else "")
+                + "Answer the user's request directly and concisely. No external "
                 "actions were needed, so do not mention planning, steps, tools, "
                 "or an execution transcript."
             )

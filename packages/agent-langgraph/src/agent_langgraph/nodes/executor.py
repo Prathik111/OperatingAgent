@@ -127,6 +127,25 @@ async def ExecutorNode(state: AgentState, runtime: Runtime[AgentContext]) -> dic
 
     # --- Human gate for risky tools -------------------------------------
     risk = _needs_approval(ctx, step)
+    if risk is RiskLevel.BLOCKED and not ctx.config.behaviour.require_human_approval:
+        # BLOCKED with no gate to enter must not run: without this, a blocked
+        # (or fail-closed) verdict with approvals off falls straight through
+        # to invocation. The router terminates "blocked " errors at the
+        # responder instead of replanning a deterministically refused call.
+        log.warning(
+            "blocked step rejected without approval gate task_id=%s step=%s tool=%s",
+            ctx.task_id,
+            step.id,
+            step.tool_name,
+        )
+        return {
+            "plan": _with_step(plan, index,
+                               status=RunStatus.FAILED,
+                               output=f"blocked {step.tool_name}: risk classified BLOCKED"),
+            "last_error": f"blocked {step.tool_name}: risk classified BLOCKED",
+            "retry_count": state.get("retry_count", 0) + 1,
+            "status": TaskStatus.EXECUTING,
+        }
     threshold = _RISK_ORDER.get(RiskLevel(ctx.config.behaviour.risk_threshold), 1)
     if ctx.config.behaviour.require_human_approval and _RISK_ORDER[risk] >= threshold:
         log.info(

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { sseSubscribe, taskApi } from "../../lib/api";
 import type { ApprovalResponse, HealthResponse, TaskResponse, ThreadEventResponse, ThreadResponse } from "../../lib/types";
 import { loadSettings, saveSettings } from "../SettingsModal";
@@ -25,10 +25,19 @@ export function LangGraphWorkspace() {
   const [goal, setGoal] = useState("");
   const [track, setTrack] = useState<"native" | "langgraph">("langgraph");
   const [workspace, setWorkspace] = useState(() => loadSettings().workspace || ".");
+  // Workspace this component adopted itself: saveSettings dispatches
+  // synchronously, so the listener below would otherwise re-enter with the
+  // stale closure workspace and wipe the just-loaded selection.
+  const adoptedWorkspaceRef = useRef<string | null>(null);
   useEffect(() => {
     const onSettings = (event: Event) => {
       const next = (event as CustomEvent<{ workspace?: string }>).detail?.workspace;
-      if (typeof next === "string" && next.trim() && next !== workspace) {
+      if (typeof next !== "string" || !next.trim()) return;
+      if (next === adoptedWorkspaceRef.current) {
+        adoptedWorkspaceRef.current = null;
+        return;
+      }
+      if (next !== workspace) {
         setWorkspace(next);
         setSelectedThread(null);
         setSelectedTask(null);
@@ -58,6 +67,7 @@ export function LangGraphWorkspace() {
       const list = await taskApi.listThreadTasks(tid, { limit: 100 });
       setTasks(list);
       if (list[0]?.workspace && list[0].workspace !== workspace) {
+        adoptedWorkspaceRef.current = list[0].workspace;
         setWorkspace(list[0].workspace);
         saveSettings({ ...loadSettings(), workspace: list[0].workspace });
       }

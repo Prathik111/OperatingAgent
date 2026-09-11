@@ -277,12 +277,17 @@ class ToolRegistry:
                 if fmt in {"path", "file-path", "filepath"} or "path" in description:
                     fields.add(lowered)
                 items = definition.get("items")
-                if isinstance(items, dict) and str(items.get("format", "")).lower() in {
-                    "path",
-                    "file-path",
-                    "filepath",
-                }:
-                    fields.add(lowered)
+                if isinstance(items, dict):
+                    if str(items.get("format", "")).lower() in {
+                        "path",
+                        "file-path",
+                        "filepath",
+                    }:
+                        fields.add(lowered)
+                    # Object fields nested under array items (e.g. files[].target)
+                    # are path-bearing too; the argument walker already descends
+                    # into lists, so discovering the names is sufficient.
+                    fields.update(cls._schema_path_fields(items))
                 fields.update(cls._schema_path_fields(definition))
         return fields
 

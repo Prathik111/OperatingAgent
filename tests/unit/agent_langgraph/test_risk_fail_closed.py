@@ -43,6 +43,13 @@ class _GarbageClassifier:
         return "banana"
 
 
+class _AlwaysBlocked:
+    """Classifies every call BLOCKED, like a strict policy would."""
+
+    def classify(self, call):
+        return RiskLevel.BLOCKED
+
+
 def _run(config, state, **ctx_kwargs):
     context = build_context(config, **ctx_kwargs)
     return ExecutorNode(state, build_runtime(context))
@@ -136,6 +143,33 @@ async def test_needs_approval_returns_blocked_on_failure(agent_config) -> None:
     assert _needs_approval(context, step) is RiskLevel.BLOCKED
 
 
+async def test_blocked_is_rejected_when_approval_is_disabled(monkeypatch) -> None:
+    """BLOCKED with no gate to enter must not run the tool.
+
+    Without this, a blocked (or fail-closed) verdict with approvals off falls
+    straight through to invocation.
+    """
+
+    def no_gate(payload):
+        raise AssertionError("the human gate must not open for BLOCKED")
+
+    monkeypatch.setattr(executor_module, "interrupt", no_gate)
+    config = build_agent_config(require_human_approval=False)
+    step = make_step(1, tool_name="delete_file", arguments={"path": "x"})
+    registry = StubToolRegistry(default=ToolCallResult(success=True, output="gone", error=None))
+
+    delta = await _run(
+        config,
+        make_state(plan=make_plan(step)),
+        tool_registry=registry,
+        risk_classifier=_AlwaysBlocked(),
+    )
+
+    assert str(delta["last_error"]).startswith("blocked ")
+    assert delta["plan"].steps[0].status is RunStatus.FAILED
+    assert registry.calls == []
+
+
 async def test_event_sink_failure_propagates_and_tool_never_runs(agent_config) -> None:
     """Regression (P0-6): a failing event sink must raise, not warn-and-continue.
 
@@ -145,10 +179,13 @@ async def test_event_sink_failure_propagates_and_tool_never_runs(agent_config) -
     def boom(event):
         raise RuntimeError("disk on fire")
 
-    context = build_context(agent_config)
-    context = dataclasses.replace(context, event_sink=boom)
     registry = StubToolRegistry(default=ToolCallResult(success=True, output="done", error=None))
+    context = build_context(agent_config, tool_registry=registry)
+    context = dataclasses.replace(context, event_sink=boom)
 
     with pytest.raises(RuntimeError, match="disk on fire"):
-        await ExecutorNode(make_state(), build_runtime(context))
+        await ExecutorNode(
+            make_state(plan=make_plan(make_step(1, tool_name="echo_tool"))),
+            build_runtime(context),
+        )
     assert registry.calls == []

@@ -301,20 +301,20 @@ async def resume_run(
 
     from agent_native.loop import Cancellation
 
-    # Peek the run id the resume will continue BEFORE registering anything,
-    # then pin it: the resumed work emits under exactly this id, so the
-    # cancellation below names the right run. Resumes of one session are
-    # serialized — a second racing resume would otherwise continue the same
-    # interrupted run id with a second loop on one transcript.
-    try:
-        run_id = await service.peek_resume_run_id(session_id)
-    except KeyError:
-        from fastapi import HTTPException
-
-        raise HTTPException(status_code=404, detail=f"session '{session_id}' not found") from None
-    cancellation = Cancellation()
-    _register_cancel(request, session_id, run_id, cancellation)
+    # Resumes of one session are serialized: peek the run id and register its
+    # cancellation while holding the session lock. Peeking outside the lock
+    # lets two racing resumes register two cancellations under one run id —
+    # the first resume's cleanup would then pop the second resume's entry
+    # while it is still running.
     async with _resume_lock(request, session_id):
+        try:
+            run_id = await service.peek_resume_run_id(session_id)
+        except KeyError:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail=f"session '{session_id}' not found") from None
+        cancellation = Cancellation()
+        _register_cancel(request, session_id, run_id, cancellation)
         try:
             result = await service.resume_run(
                 session_id, limits=limits, cancellation=cancellation, run_id=run_id

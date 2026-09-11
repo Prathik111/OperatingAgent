@@ -65,6 +65,14 @@ export function SettingsModal({
   const [modelsError, setModelsError] = useState("");
   const [sandbox, setSandbox] = useState<SandboxStatusResponse | null>(null);
 
+  // The native track only serves ollama/groq: a provider persisted from the
+  // LangGraph track (openai/anthropic) is shown and saved as the native
+  // default instead of leaking an unsupported value into the native API.
+  const provider =
+    track === "native" && (settings.provider === "openai" || settings.provider === "anthropic")
+      ? "groq"
+      : settings.provider;
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => event.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
@@ -118,7 +126,7 @@ export function SettingsModal({
       try {
         const api = track === "native" ? nativeApi : taskApi;
         try {
-          const data = await api.listModels(settings.provider, settings.baseUrl);
+          const data = await api.listModels(provider, settings.baseUrl);
           if (cancelled) return;
           setModels(Array.isArray(data.models) ? data.models.map(String) : []);
           setDefaultModel(typeof data.default_model === "string" ? data.default_model : "");
@@ -146,7 +154,7 @@ export function SettingsModal({
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [track, settings.provider, settings.baseUrl]);
+  }, [track, provider, settings.baseUrl]);
 
   // Live Docker probe while the modal is open: starting Docker on the machine
   // flips this to connected on the next poll with no restart, and new shell
@@ -176,10 +184,12 @@ export function SettingsModal({
   const handleSave = async () => {
     setError("");
     const previous = loadSettings();
-    saveSettings(settings);
+    const normalized = { ...settings, provider };
+    setSettings(normalized);
+    saveSettings(normalized);
     try {
       const body = {
-        provider: settings.provider,
+        provider: normalized.provider,
         model: settings.model,
         base_url: settings.baseUrl || null,
         temperature: Number(settings.temperature || 0),
@@ -256,7 +266,7 @@ export function SettingsModal({
             <SectionTitle>Model Provider</SectionTitle>
             <div className="grid sm:grid-cols-2 gap-3">
               <Field label="Provider">
-                <select value={settings.provider} onChange={(e) => setSettings((current) => ({ ...current, provider: e.target.value as DesktopSettings["provider"], model: "", baseUrl: "" }))} className="field">
+                <select value={provider} onChange={(e) => setSettings((current) => ({ ...current, provider: e.target.value as DesktopSettings["provider"], model: "", baseUrl: "" }))} className="field">
                   <option value="ollama">Ollama · local</option>
                   <option value="groq">Groq · cloud</option>
                   {track === "langgraph" && <option value="openai">OpenAI · cloud</option>}
@@ -277,7 +287,7 @@ export function SettingsModal({
             </Field>
             <div className="rounded-lg px-3 py-2 space-y-2" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)" }}>
               <div className="flex items-center gap-2 text-[11px] font-medium" style={{ color: "var(--fg-1)" }}>
-                <span>{settings.provider === "ollama" ? `Downloaded Ollama models (${models.length})` : `Known ${settings.provider} models (${models.length})`}</span>
+                <span>{provider === "ollama" ? `Downloaded Ollama models (${models.length})` : `Known ${provider} models (${models.length})`}</span>
                 {modelsLoading && <span className="font-normal" style={{ color: "var(--fg-3)" }}>· loading…</span>}
                 {settings.model.trim() && (
                   <button
@@ -293,7 +303,7 @@ export function SettingsModal({
                 <div className="text-[11px]" style={{ color: "var(--danger)" }}>{modelsError}</div>
               ) : models.length === 0 && !modelsLoading ? (
                 <div className="text-[11px]" style={{ color: "var(--fg-3)" }}>
-                  {settings.provider === "ollama" ? "No downloaded Ollama models found at this base URL." : "No known models for this provider."}
+                  {provider === "ollama" ? "No downloaded Ollama models found at this base URL." : "No known models for this provider."}
                 </div>
               ) : (
                 <div className="flex flex-wrap gap-1.5">

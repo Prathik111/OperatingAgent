@@ -537,6 +537,18 @@ async def test_native_settings_auto_approve_all_roundtrip(native_client) -> None
 
 
 @pytest.mark.regression
+async def test_native_settings_model_failure_leaves_toggle_untouched(native_client) -> None:
+    client, _service, runtime = native_client
+
+    rejected = await client.patch(
+        "/native/settings", json={"provider": "openai", "auto_approve_all": True}
+    )
+    assert rejected.status_code == 422
+    assert runtime.auto_approve_all is False
+    assert (await client.get("/native/settings")).json()["auto_approve_all"] is False
+
+
+@pytest.mark.regression
 async def test_native_sandbox_reports_live_probe(native_client) -> None:
     client, _service, runtime = native_client
 

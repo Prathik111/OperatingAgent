@@ -40,6 +40,9 @@ export function NativeWorkspace() {
   const [streamLog, setStreamLog] = useState<string[]>([]);
   const [newTitle, setNewTitle] = useState("");
   const [newWorkspace, setNewWorkspace] = useState(() => loadSettings().workspace || ".");
+  // Workspace this input saved itself (on blur): skip the selection reset for
+  // the echo of our own save, while still resetting on external changes.
+  const lastSavedWorkspaceRef = useRef(loadSettings().workspace || ".");
   useEffect(() => {
     const onSettings = (event: Event) => {
       const settings = (event as CustomEvent<ReturnType<typeof loadSettings>>).detail;
@@ -51,6 +54,8 @@ export function NativeWorkspace() {
           max_turns: Number(settings.maxTurns) || 10,
           max_cost_usd: Number(settings.maxCost) || 0.05,
         }));
+        if (next === lastSavedWorkspaceRef.current) return;
+        lastSavedWorkspaceRef.current = next;
         setSelected(null);
         setDetail(null);
         setConversation(null);
@@ -225,7 +230,7 @@ export function NativeWorkspace() {
           <div className="grid gap-2">
             <input value={newTitle} onChange={(e) => setNewTitle(e.target.value)} placeholder="Title (optional)" className="h-8 px-2 rounded-lg text-[12px] outline-none" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)", color: "var(--fg-0)" }} />
             <div className="flex gap-2">
-              <input value={newWorkspace} onChange={(e) => { const next = e.target.value; setNewWorkspace(next); saveSettings({ ...loadSettings(), workspace: next || "." }); }} placeholder="workspace" className="flex-1 h-8 px-2 rounded-lg text-[12px] font-mono outline-none" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)", color: "var(--fg-0)" }} />
+              <input value={newWorkspace} onChange={(e) => setNewWorkspace(e.target.value)} onBlur={() => { const next = newWorkspace.trim() || "."; lastSavedWorkspaceRef.current = next; saveSettings({ ...loadSettings(), workspace: next }); }} onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} placeholder="workspace" className="flex-1 h-8 px-2 rounded-lg text-[12px] font-mono outline-none" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)", color: "var(--fg-0)" }} />
               <input value={newAgent} onChange={(e) => setNewAgent(e.target.value)} placeholder="agent" className="w-20 h-8 px-2 rounded-lg text-[12px] outline-none" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)", color: "var(--fg-0)" }} />
             </div>
             <button onClick={onCreate} className="btn-grad h-8 rounded-lg text-[12px] font-medium" style={{ color: "white", border: "1px solid transparent" }}>

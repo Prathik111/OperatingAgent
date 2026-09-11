@@ -74,3 +74,21 @@ def test_status_returns_short_status(captured) -> None:
     result = service.status()
     assert calls[0] == ("status", "--short")
     assert "status" in result
+
+
+@pytest.mark.regression
+def test_reported_path_uses_configured_root(tmp_path, monkeypatch) -> None:
+    """Payload paths must match the workspace _run uses, not the CWD.
+
+    With a configured root and a relative input, resolving against the CWD
+    reports a path the     command never touched.
+    """
+    repo = tmp_path / "ws" / "proj"
+    repo.mkdir(parents=True)
+    service = GitService(root=tmp_path / "ws")
+    monkeypatch.setattr(service, "_run", lambda repository, *args: "")
+
+    assert service.status("proj")["repository"] == str(repo.resolve())
+    assert service.branches("proj")["repository"] == str(repo.resolve())
+    assert service.log("proj")["repository"] == str(repo.resolve())
+    assert service.diff("proj")["repository"] == str(repo.resolve())

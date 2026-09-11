@@ -170,10 +170,19 @@ export function ChatWorkspace({
     eventSigRef.current = new Map();
   }, [selected, track]);
 
+  // Workspace adopted from a task below: saveSettings dispatches synchronously,
+  // so this listener would otherwise re-enter with the stale closure workspace
+  // and wipe the just-loaded conversation.
+  const adoptedWorkspaceRef = useRef<string | null>(null);
   useEffect(() => {
     const onSettings = (event: Event) => {
       const next = (event as CustomEvent<{ workspace?: string }>).detail?.workspace;
-      if (typeof next === "string" && next.trim() && next !== workspace) {
+      if (typeof next !== "string" || !next.trim()) return;
+      if (next === adoptedWorkspaceRef.current) {
+        adoptedWorkspaceRef.current = null;
+        return;
+      }
+      if (next !== workspace) {
         setWorkspace(next);
         setSelected(null);
         setMessages([]);
@@ -298,6 +307,7 @@ export function ChatWorkspace({
           const tasks = await taskApi.listThreadTasks(id, { limit: 100 });
           if (!isCurrent()) return;
           if (tasks[0]?.workspace && tasks[0].workspace !== workspace) {
+            adoptedWorkspaceRef.current = tasks[0].workspace;
             setWorkspace(tasks[0].workspace);
             saveSettings({ ...loadSettings(), workspace: tasks[0].workspace });
           }
