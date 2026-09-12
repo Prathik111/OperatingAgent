@@ -268,6 +268,13 @@ class LangGraphAgent(IAgentOrchestrator):
             model_provider = self._model_provider
             prompt_manager = self._prompt_manager
             invocation = self._invocation_config(task, config)
+        # Direct observers are best-effort, but the API service's callback is
+        # authoritative because it persists the execution history. Keep the
+        # latter's fail-closed behavior while isolating ordinary listeners.
+        event_sink = on_event
+        if on_event is not None and not getattr(on_event, "_authoritative", False):
+            async def event_sink(event: AgentEvent) -> None:
+                await self._emit(on_event, event)
         handler = next(iter(invocation["callbacks"]), None)
 
         started = time.perf_counter()
@@ -302,7 +309,7 @@ class LangGraphAgent(IAgentOrchestrator):
                         }
                     )
             context = self._build_context(
-                task, config, model_provider, prompt_manager, on_event
+                task, config, model_provider, prompt_manager, event_sink
             )
             if config.execution.stream:
                 async for state in graph.astream(

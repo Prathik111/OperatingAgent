@@ -43,6 +43,18 @@ def _task_status_for(run_status: RunStatus) -> TaskStatus:
     return _RUN_TO_TASK.get(run_status, TaskStatus.EXECUTING)
 
 
+class _AuthoritativeEventSink:
+    """Mark the service sink so orchestrators preserve persistence failures."""
+
+    _authoritative = True
+
+    def __init__(self, callback: Any) -> None:
+        self._callback = callback
+
+    async def __call__(self, event: AgentEvent) -> None:
+        await self._callback(event)
+
+
 class TaskService:
     def __init__(
         self,
@@ -512,6 +524,10 @@ class TaskService:
                     task.id,
                     exc,
                 )
+
+        # LangGraph treats this callback as authoritative: repository failures
+        # must propagate so a run cannot report success with missing history.
+        on_event = _AuthoritativeEventSink(on_event)
 
         try:
             await self._repo.mark_run_running(run_id)

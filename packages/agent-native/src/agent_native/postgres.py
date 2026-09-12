@@ -255,8 +255,9 @@ class PostgresDatabase(Database):
                 )
                 await conn.execute(
                     """
-                    INSERT INTO agent_threads (id, owner_actor_id, title, metadata)
-                    VALUES ($1, $2, $3, $4::jsonb)
+                    INSERT INTO agent_threads
+                        (id, owner_actor_id, title, metadata, created_at, updated_at)
+                    VALUES ($1, $2, $3, $4::jsonb, $5, $6)
                     ON CONFLICT (id) DO UPDATE SET
                         title = EXCLUDED.title,
                         metadata = EXCLUDED.metadata
@@ -265,6 +266,8 @@ class PostgresDatabase(Database):
                     actor_id,
                     session.title or None,
                     json.dumps(_session_metadata(session)),
+                    session.created_at,
+                    session.updated_at,
                 )
 
         await self._run(operation)
