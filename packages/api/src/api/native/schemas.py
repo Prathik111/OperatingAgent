@@ -29,6 +29,8 @@ class SessionResponse(BaseModel):
     agent: str
     title: str
     workspace: str
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
     @classmethod
     def from_native(cls, s: Any) -> SessionResponse:
@@ -37,6 +39,8 @@ class SessionResponse(BaseModel):
             agent=getattr(s, "agent", "build"),
             title=getattr(s, "title", ""),
             workspace=getattr(s, "working_directory", ".") or ".",
+            created_at=getattr(s, "created_at", None),
+            updated_at=getattr(s, "updated_at", None),
         )
 
 

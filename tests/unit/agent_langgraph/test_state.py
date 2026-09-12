@@ -111,9 +111,10 @@ def test_agent_plan_requires_remediation_defaults_false() -> None:
 
 
 def test_finding_defaults() -> None:
-    finding = Finding(step_id=1, description="what was checked", detail="what was seen")
+    finding = Finding(task_id="test-task", step_id=1, description="what was checked", detail="what was seen")
     assert finding.source_tool is None
     assert finding.phase is WorkflowPhase.INVESTIGATE
+    assert finding.task_id == "test-task"
 
 
 def test_finding_requires_core_fields() -> None:

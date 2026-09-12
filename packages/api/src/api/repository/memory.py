@@ -63,8 +63,7 @@ class InMemoryTaskRepository:
 
     async def save_task(self, task: AgentTask) -> None:
         self._tasks[task.id] = task
-        # AgentTask.created_at is naive (datetime.utcnow); thread timestamps
-        # are tz-aware, so normalize before storing or comparing.
+        # Normalize legacy naive task timestamps before storing or comparing.
         created_at = task.created_at
         if created_at.tzinfo is None:
             created_at = created_at.replace(tzinfo=UTC)

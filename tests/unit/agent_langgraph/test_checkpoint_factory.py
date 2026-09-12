@@ -57,6 +57,7 @@ async def test_memory_serializer_round_trips_checkpointed_application_types() ->
             ),
             "findings": [
                 Finding(
+                    task_id="test-task",
                     step_id=1,
                     description="checked",
                     detail="working",

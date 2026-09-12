@@ -271,7 +271,7 @@ class PostgresDatabase(Database):
 
     async def get_session(self, session_id: str) -> Session | None:
         row = await self._fetchrow(
-            "SELECT id, title, metadata FROM agent_threads WHERE id = $1",
+            "SELECT id, title, metadata, created_at, updated_at FROM agent_threads WHERE id = $1",
             session_id,
         )
         if row is None:
@@ -289,57 +289,67 @@ class PostgresDatabase(Database):
         return await self._run(operation)
 
     async def list_sessions(self, working_directory: str = "", limit: int = 0) -> list:
-        """Sessions newest first. `created_at DESC` orders; `id` breaks a tie.
+        """Sessions newest first. `updated_at DESC` orders; `id` breaks a tie.
 
         The tie-breaker echoes `list_runs`: two sessions can share a `created_at`
         to the microsecond, and a history view that reorders them between calls is
         one you can't diff.
         """
-        sql = "SELECT id, title, metadata FROM agent_threads "
+        sql = "SELECT id, title, metadata, created_at, updated_at FROM agent_threads "
         args: list = []
         if working_directory:
             sql += "WHERE metadata->>'working_directory' = $1 "
             args.append(working_directory)
-        sql += "ORDER BY created_at DESC, id DESC"
+        sql += "ORDER BY updated_at DESC, id DESC"
         if limit and limit > 0:
             sql += f" LIMIT {int(limit)}"  # int-cast, so no value reaches SQL unchecked
         rows = await self._fetch(sql, *args)
         return [_row_to_session(row) for row in rows]
 
     async def save_message(self, message: Message) -> None:
-        try:
-            await self._execute(
-                """
-                INSERT INTO conversation_messages (id, thread_id, role, parts, model, usage, created_at, native_message_id)
-                VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb, $7, $8)
-                ON CONFLICT (id) DO NOTHING
-                """,
+        async def operation(conn: Any) -> None:
+            async with conn.transaction():
+                args = (
                     message.storage_id or str(_uuid_for("message", message.id)),
-                message.session_id,
-                message.role.value,
-                json.dumps([_part_to_json(p) for p in message.parts]),
-                message.model,
-                json.dumps(_usage_to_json(message.usage)) if message.usage else None,
-                message.created_at,
-                message.id,
-            )
-        except Exception as exc:
-            if "native_message_id" not in str(exc):
-                raise
-            await self._execute(
-                """
-                INSERT INTO conversation_messages (id, thread_id, role, parts, model, usage, created_at)
-                VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb, $7)
-                ON CONFLICT (id) DO NOTHING
-                """,
-                    message.storage_id or str(_uuid_for("message", message.id)),
-                message.session_id,
-                message.role.value,
-                json.dumps([_part_to_json(p) for p in message.parts]),
-                message.model,
-                json.dumps(_usage_to_json(message.usage)) if message.usage else None,
-                message.created_at,
-            )
+                    message.session_id,
+                    message.role.value,
+                    json.dumps([_part_to_json(p) for p in message.parts]),
+                    message.model,
+                    json.dumps(_usage_to_json(message.usage)) if message.usage else None,
+                    message.created_at,
+                )
+                try:
+                    # Keep the compatibility probe isolated: an undefined
+                    # legacy column aborts its savepoint, not the outer
+                    # transaction that must also update the owning thread.
+                    async with conn.transaction():
+                        await conn.execute(
+                            """
+                            INSERT INTO conversation_messages (id, thread_id, role, parts, model, usage, created_at, native_message_id)
+                            VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb, $7, $8)
+                            ON CONFLICT (id) DO NOTHING
+                            """,
+                            *args,
+                            message.id,
+                        )
+                except Exception as exc:
+                    if "native_message_id" not in str(exc):
+                        raise
+                    await conn.execute(
+                        """
+                        INSERT INTO conversation_messages (id, thread_id, role, parts, model, usage, created_at)
+                        VALUES ($1, $2, $3, $4::jsonb, $5, $6::jsonb, $7)
+                        ON CONFLICT (id) DO NOTHING
+                        """,
+                        *args,
+                    )
+                await conn.execute(
+                    "UPDATE agent_threads SET updated_at = GREATEST(updated_at, $2) WHERE id = $1",
+                    message.session_id,
+                    message.created_at,
+                )
+
+        await self._run(operation)
 
     async def load_conversation(self, session_id: str) -> Conversation:
         try:
@@ -768,12 +778,24 @@ def _session_metadata(session: Session) -> dict:
 
 def _row_to_session(row: Any) -> Session:
     metadata = _load_json(row["metadata"], {})
+    created_at = row.get("created_at") if hasattr(row, "get") else None
+    updated_at = row.get("updated_at") if hasattr(row, "get") else None
+    if created_at is None:
+        created_at = datetime.now(UTC)
+    elif created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=UTC)
+    if updated_at is None:
+        updated_at = created_at
+    elif updated_at.tzinfo is None:
+        updated_at = updated_at.replace(tzinfo=UTC)
     return Session(
         id=row["id"],
         agent=metadata.get("agent", "build"),
         title=row["title"] or "",
         working_directory=metadata.get("working_directory", "."),
         revision=int(metadata.get("revision", 0) or 0),
+        created_at=created_at,
+        updated_at=updated_at,
     )
 
 

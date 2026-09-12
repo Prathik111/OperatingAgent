@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { sseSubscribe, taskApi } from "../../lib/api";
 import type { ApprovalResponse, HealthResponse, TaskResponse, ThreadEventResponse, ThreadResponse } from "../../lib/types";
+import { formatLocalDateTime } from "../../lib/time";
 import { loadSettings, saveSettings } from "../SettingsModal";
 import { Card, Label } from "../layout/Shell";
 
@@ -230,7 +231,7 @@ export function LangGraphWorkspace() {
             <button key={th.id} onClick={() => setSelectedThread(th.id)} className="w-full text-left p-2.5 rounded-xl" style={{ background: selectedThread === th.id ? "var(--bg-2)" : "transparent", border: `1px solid ${selectedThread === th.id ? "var(--accent-ring)" : "transparent"}` }}>
               <div className="text-[12px] font-medium truncate">{th.title || th.id}</div>
               <div className="text-[11px] font-mono truncate" style={{ color: "var(--fg-2)" }}>{th.id.slice(0, 10)} · {th.task_count} tasks</div>
-              <div className="text-[10px] font-mono" style={{ color: "var(--fg-3)" }}>{new Date(th.updated_at).toLocaleString()}</div>
+              <div className="text-[10px] font-mono" style={{ color: "var(--fg-3)" }}>{formatLocalDateTime(th.updated_at)}</div>
             </button>
           ))}
           {threads.length === 0 && <div className="text-[11px] p-3" style={{ color: "var(--fg-3)" }}>No threads — POST /tasks to create.</div>}
@@ -279,7 +280,7 @@ export function LangGraphWorkspace() {
                       </div>
                       <div className="text-[12px] font-medium mt-1">{t.goal}</div>
                       <div className="text-[11px] font-mono truncate" style={{ color: "var(--fg-2)" }}>{t.final_message || t.error || "—"} {t.trace_id ? `· trace ${t.trace_id.slice(0, 8)}` : ""}</div>
-                      <div className="text-[10px] font-mono mt-1" style={{ color: "var(--fg-3)" }}>{new Date(t.created_at).toLocaleString()} · {t.workspace || ""}</div>
+                      <div className="text-[10px] font-mono mt-1" style={{ color: "var(--fg-3)" }}>{formatLocalDateTime(t.created_at)} · {t.workspace || ""}</div>
                     </button>
                   ))}
                   {tasks.length === 0 && <div className="text-[11px]" style={{ color: "var(--fg-3)" }}>No tasks in this thread — POST /threads/{selectedThread}/tasks</div>}

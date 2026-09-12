@@ -57,7 +57,7 @@ async def test_responder_trivial_empty_plan_succeeds(agent_config) -> None:
 
 
 async def test_responder_direct_answer_keeps_conversation_history(agent_config) -> None:
-    from langchain_core.messages import HumanMessage
+    from langchain_core.messages import AIMessage, HumanMessage
 
     model = StubModel(answer="The second one.")
     state = make_state(
@@ -65,6 +65,7 @@ async def test_responder_direct_answer_keeps_conversation_history(agent_config) 
         last_error=None,
         messages=[
             HumanMessage(content="Which file holds the config?"),
+            AIMessage(content="The config is in settings.json."),
             HumanMessage(content="What about the second one?"),
         ],
     )
@@ -73,6 +74,30 @@ async def test_responder_direct_answer_keeps_conversation_history(agent_config) 
     assert delta["status"] is TaskStatus.COMPLETED
     request = model.invocations[0][1].content
     assert "Which file holds the config?" in request
+    assert "The config is in settings.json." in request
+
+
+async def test_responder_includes_bounded_history_for_greeting(agent_config) -> None:
+    from langchain_core.messages import AIMessage, HumanMessage
+
+    model = StubModel(answer="Hi!")
+    state = make_state(
+        plan=make_plan(),
+        last_error=None,
+        messages=[
+            HumanMessage(content="Create anime_quotes.txt."),
+            AIMessage(content="The file was created successfully."),
+            HumanMessage(content="Hi"),
+        ],
+    )
+    state["goal"] = "Hi"
+
+    await run_responder(agent_config, state, model=model)
+
+    request = model.invocations[0][1].content
+    assert "Conversation history" in request
+    assert "file was created successfully" in request
+    assert "ignore unrelated history" in request
 
 
 # Failure paths — the responder must never dress a failure up as success

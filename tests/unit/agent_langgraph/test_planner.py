@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import pytest
-from agent_langgraph.graph.state import AgentPlan, PlanStep
+from agent_langgraph.graph.state import AgentPlan, Finding, PlanStep
 from agent_langgraph.nodes.planner import PlannerNode, planner_function
-from common.enums import TaskStatus
+from common.enums import TaskStatus, WorkflowPhase
 from common.exceptions import PlanningException
 from langchain_core.messages import SystemMessage
 
@@ -122,3 +122,21 @@ async def test_planner_drops_no_tool_synthesis_steps(agent_config) -> None:
     plan = await planner_function("check status and give a commit message", [], runtime)
 
     assert [step.tool_name for step in plan.steps] == ["git_status"]
+
+
+async def test_planner_only_includes_findings_for_current_task(agent_config) -> None:
+    model = StubModel()
+    runtime = build_runtime(build_context(agent_config, model=model, task_id="current-task"))
+    state = make_state(
+        workflow_phase=WorkflowPhase.REMEDIATE,
+        findings=[
+            Finding(task_id="previous-task", step_id=1, description="old finding", detail="old detail"),
+            Finding(task_id="current-task", step_id=2, description="current finding", detail="current detail"),
+        ],
+    )
+
+    await PlannerNode(state, runtime)
+
+    system_message = model.structured_handles[0].invocations[0][0]
+    assert "current detail" in system_message.content
+    assert "old detail" not in system_message.content

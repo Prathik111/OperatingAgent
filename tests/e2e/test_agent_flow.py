@@ -197,10 +197,11 @@ async def test_agent_continues_same_thread_with_prior_transcript() -> None:
     agent, _ = build_agent()
     model = agent._model_provider.model
 
+    model.answer = "The first turn created anime_quotes.txt."
     first = await agent.run(make_task(id="turn-1", goal="first turn"))
     second_task = make_task(
         id="turn-2",
-        goal="second turn",
+        goal="what was created in the first turn?",
         execution_mode="continue",
     )
     second = await agent.run(second_task)
@@ -208,7 +209,14 @@ async def test_agent_continues_same_thread_with_prior_transcript() -> None:
     assert first.status is RunStatus.COMPLETED
     assert second.status is RunStatus.COMPLETED
     responder_messages = [getattr(item, "content", "") for item in model.invocations[-1]]
-    assert any("second turn" in content for content in responder_messages)
+    assert any("first turn created anime_quotes.txt" in content for content in responder_messages)
+    planner_messages = [
+        getattr(message, "content", "")
+        for handle in model.structured_handles
+        for invocation in handle.invocations
+        for message in invocation
+    ]
+    assert any("first turn created anime_quotes.txt" in content for content in planner_messages)
 
 
 async def test_agent_resumes_an_interrupted_checkpoint() -> None:

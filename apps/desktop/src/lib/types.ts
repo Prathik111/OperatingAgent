@@ -7,6 +7,8 @@ export interface SessionResponse {
   agent: string;
   title: string;
   workspace: string;
+  created_at: string | null;
+  updated_at: string | null;
 }
 
 export interface RunResponse {

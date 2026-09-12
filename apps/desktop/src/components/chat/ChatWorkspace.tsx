@@ -4,6 +4,8 @@ import type { EventResponse, PermissionResponse, SessionResponse, ThreadResponse
 import { loadSettings, saveSettings } from "../SettingsModal";
 import { AlertDialog, ConfirmDialog, PromptDialog } from "../Modal";
 import { AnalyticsView } from "./AnalyticsView";
+import { MarkdownText } from "../MarkdownText";
+import { formatLocalTime, timeAgo } from "../../lib/time";
 
 type ChatItem =
   | { kind: "native"; id: string; title: string; subtitle: string; updatedAt: string }
@@ -28,7 +30,21 @@ function assistantTextFromState(payload: unknown): string {
   if (!payload || typeof payload !== "object") return "";
   const messages = (payload as Record<string, unknown>).messages;
   if (!Array.isArray(messages)) return "";
+  // Only the current turn counts. State is restored from the thread
+  // checkpoint, so everything before the newest user message is history: the
+  // last AI message there is the *previous* response, and returning it would
+  // paint the previous answer into the live bubble while the agent works.
+  let start = 0;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!message || typeof message !== "object") continue;
+    const type = String((message as Record<string, unknown>).type || "").toLowerCase();
+    if (type === "human" || type === "humanmessage" || type === "user") {
+      start = index + 1;
+      break;
+    }
+  }
+  for (let index = messages.length - 1; index >= start; index -= 1) {
     const message = messages[index];
     if (!message || typeof message !== "object") continue;
     const value = message as Record<string, unknown>;
@@ -83,19 +99,6 @@ function ThinkingBlock({ text, live }: { text: string; live: boolean }) {
   );
 }
 
-function timeAgo(iso: string): string {
-  const ms = Date.now() - new Date(iso).getTime();
-  if (Number.isNaN(ms)) return "";
-  const mins = Math.floor(ms / 60000);
-  if (mins < 1) return "now";
-  if (mins < 60) return `${mins}m`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h`;
-  const days = Math.floor(hrs / 24);
-  if (days < 7) return `${days}d`;
-  return new Date(iso).toLocaleDateString();
-}
-
 function workspaceLabel(workspace: string): string {
   if (!workspace || workspace === ".") return "";
   const parts = workspace.split(/[/\\]/).filter(Boolean);
@@ -143,6 +146,16 @@ export function ChatWorkspace({
   const [showAnalytics, setShowAnalytics] = useState(false);
   const [dialog, setDialog] = useState<DialogState>(null);
   const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
+  // Live langgraph content, keyed by task id. The 2s poll rebuilds messages
+  // from persisted tasks (which lack a final message until the run ends), so
+  // without these refs each poll would wipe the streaming bubble that SSE
+  // just painted — the flicker where the answer appears then vanishes.
+  const liveTextRef = useRef(new Map<string, string>());
+  const liveThinkRef = useRef(new Map<string, string>());
+  const pendingTaskIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    pendingTaskIdRef.current = pendingTaskId;
+  }, [pendingTaskId]);
   const [search, setSearch] = useState("");
   const [workspace, setWorkspace] = useState(() => loadSettings().workspace || ".");
   const [titleOverrides, setTitleOverrides] = useState<Record<string, string>>(loadTitleOverrides);
@@ -210,6 +223,24 @@ export function ChatWorkspace({
 
   const scrollToEnd = useCallback(() => endRef.current?.scrollIntoView({ behavior: "smooth" }), []);
 
+  // Keep the latest answer in view while it streams (native parity: the live
+  // bubble scrolls on every delta). Runs on message/event growth only while a
+  // send or a langgraph task is in flight, so reading history stays put.
+  const autoScrollActive = sending || pendingTaskId !== null;
+  const autoScrollActiveRef = useRef(autoScrollActive);
+  useEffect(() => {
+    autoScrollActiveRef.current = autoScrollActive;
+  }, [autoScrollActive]);
+  useEffect(() => {
+    if (autoScrollActiveRef.current) scrollToEnd();
+  }, [messages, events, scrollToEnd]);
+
+  const patchLiveAssistant = useCallback((taskId: string, patch: Partial<ChatMessage>) => {
+    const id = `${taskId}-assistant`;
+    setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, ...patch } : m)));
+    setTimeout(scrollToEnd, 30);
+  }, [scrollToEnd]);
+
   // ——— load chats ———
   const refreshChats = useCallback(async () => {
     const overrides = loadTitleOverrides();
@@ -228,7 +259,7 @@ export function ChatWorkspace({
         id: s.id,
         title: overrides[`native:${s.id}`] || s.title || s.id.slice(0, 12),
         subtitle: workspaceLabel(s.workspace),
-        updatedAt: new Date().toISOString(),
+        updatedAt: s.updated_at || s.created_at || "",
       }));
       setChats(items);
       if (!selected && items[0]) setSelected(items[0].id);
@@ -311,18 +342,75 @@ export function ChatWorkspace({
             setWorkspace(tasks[0].workspace);
             saveSettings({ ...loadSettings(), workspace: tasks[0].workspace });
           }
+          // Persisted reasoning per task → one Thought-process block on each
+          // assistant bubble, native parity: thinking survives settle and
+          // reload instead of vanishing when the live refs are cleared.
+          // reasoning_delta is excluded from Activity rows, so it is
+          // collected here; scoping by task id keeps one turn's reasoning
+          // from ever leaking into another turn's bubble.
+          const ev = await taskApi.listThreadEvents(id).catch(() => null);
+          if (!isCurrent()) return;
+          const thinkByTask = new Map<string, string>();
+          if (ev) {
+            for (const e of ev) {
+              if (e.type !== "reasoning_delta") continue;
+              const text = String((e.payload as Record<string, unknown> | null)?.text || "").trim();
+              if (!text) continue;
+              const prevT = thinkByTask.get(e.task_id);
+              thinkByTask.set(e.task_id, prevT ? `${prevT}\n\n${text}` : text);
+            }
+          }
           const msgs: ChatMessage[] = tasks
             .slice()
             .reverse()
             .flatMap((t) => [
               { id: `${t.id}-user`, role: "user" as const, text: t.goal, time: t.created_at },
               ...(t.final_message
-                ? [{ id: `${t.id}-assistant`, role: "assistant" as const, text: t.final_message, time: t.created_at }]
+                ? [{ id: `${t.id}-assistant`, role: "assistant" as const, text: t.final_message, thinking: thinkByTask.get(t.id), time: t.created_at }]
                 : t.error
                   ? [{ id: `${t.id}-error`, role: "assistant" as const, text: `Run failed: ${t.error}`, time: t.created_at }]
                   : []),
             ]);
-          setMessages(msgs);
+          // Re-apply live SSE content the server hasn't persisted yet. Without
+          // this, every poll replaces the streaming bubble with "no answer
+          // yet" until the run ends — the answer flickers in and out.
+          const merged = [...msgs];
+          const liveTaskIds = new Set([
+            ...liveTextRef.current.keys(),
+            ...liveThinkRef.current.keys(),
+          ]);
+          for (const taskId of liveTaskIds) {
+            const liveText = liveTextRef.current.get(taskId) || "";
+            // Live fragments win while streaming; persisted reasoning fills
+            // the gap (e.g. reloaded mid-run) so the bubble never goes blank.
+            const liveThink = liveThinkRef.current.get(taskId) ?? thinkByTask.get(taskId);
+            const hasServerAnswer = merged.some(
+              (m) => m.id === `${taskId}-assistant` || m.id === `${taskId}-error`,
+            );
+            if (hasServerAnswer) {
+              // Persisted final message won: drop stale live fragments.
+              liveTextRef.current.delete(taskId);
+              liveThinkRef.current.delete(taskId);
+              continue;
+            }
+            if (!liveText && !liveThink) continue;
+            const streaming = pendingTaskIdRef.current === taskId;
+            const entry: ChatMessage = {
+              id: `${taskId}-assistant`,
+              role: "assistant",
+              text: liveText,
+              thinking: liveThink || undefined,
+              streaming,
+              time: new Date().toISOString(),
+            };
+            const userIdx = merged.findIndex((m) => m.id === `${taskId}-user`);
+            if (userIdx >= 0) merged.splice(userIdx + 1, 0, entry);
+            else merged.push(entry);
+          }
+          setMessages(merged);
+          if (pendingTaskIdRef.current && autoScrollActiveRef.current) {
+            setTimeout(scrollToEnd, 30);
+          }
           setPendingTaskId((cur) => {
             const current = cur ? tasks.find((task) => task.id === cur) : undefined;
             if (current && TERMINAL_TASK_STATUSES.has(current.status || "")) return null;
@@ -335,8 +423,8 @@ export function ChatWorkspace({
           // Activity covers the current response only: keep events from the
           // latest task in this thread. Rows are keyed by content signature so
           // a poll maps the same events to the same keys as the live stream.
+          // `ev` was fetched above (it also feeds the Thought-process blocks).
           const latestTaskId = tasks.length > 0 ? tasks[0].id : "";
-          const ev = await taskApi.listThreadEvents(id).catch(() => null);
           if (isCurrent() && ev) {
             const filtered = ev.filter(
               (e) => (!latestTaskId || e.task_id === latestTaskId) && isActivityEvent(e.type),
@@ -418,7 +506,7 @@ export function ChatWorkspace({
     if (track === "native") {
       try {
         const s = await nativeApi.createSession({ title, workspace, agent: "build" });
-        setChats((prev) => [{ kind: "native", id: s.id, title: s.title || s.id, subtitle: workspaceLabel(s.workspace), updatedAt: new Date().toISOString() }, ...prev]);
+        setChats((prev) => [{ kind: "native", id: s.id, title: s.title || s.id, subtitle: workspaceLabel(s.workspace), updatedAt: s.updated_at || s.created_at || "" }, ...prev]);
         setSelected(s.id);
         setMessages([]);
       } catch (e) {
@@ -455,7 +543,7 @@ export function ChatWorkspace({
     setDialog(null);
     try {
       const f = await nativeApi.forkSession(selected, `${selectedMeta?.title || selected} (fork)`);
-      setChats((prev) => [{ kind: "native", id: f.id, title: f.title || f.id, subtitle: workspaceLabel(f.workspace), updatedAt: new Date().toISOString() }, ...prev]);
+        setChats((prev) => [{ kind: "native", id: f.id, title: f.title || f.id, subtitle: workspaceLabel(f.workspace), updatedAt: f.updated_at || f.created_at || "" }, ...prev]);
       setSelected(f.id);
     } catch (e) {
       setDialog({ kind: "error", message: (e as Error).message });
@@ -524,7 +612,7 @@ export function ChatWorkspace({
         try {
           const s = await nativeApi.createSession({ title: text.slice(0, 40), workspace, agent: "build" });
           sid = s.id;
-          setChats((prev) => [{ kind: "native", id: s.id, title: s.title || s.id, subtitle: workspaceLabel(s.workspace), updatedAt: new Date().toISOString() }, ...prev]);
+        setChats((prev) => [{ kind: "native", id: s.id, title: s.title || s.id, subtitle: workspaceLabel(s.workspace), updatedAt: s.updated_at || s.created_at || "" }, ...prev]);
           setSelected(s.id);
         } catch (e) {
           setMessages((prev) => [...prev, { id: `err-${Date.now()}`, role: "assistant", text: `Failed to create session: ${(e as Error).message}` }]);
@@ -613,6 +701,15 @@ export function ChatWorkspace({
           setChats((prev) => [{ kind: "langgraph", id: task.thread_id, title: task.thread_id.slice(0, 12), subtitle: "1 tasks", updatedAt: new Date().toISOString() }, ...prev]);
         }
         setPendingTaskId(task.id);
+        // Live assistant bubble, native parity: deltas grow this message in
+        // place, so the answer (and Thought process) streams instead of
+        // popping in as one full block at the end.
+        liveTextRef.current.set(task.id, "");
+        setMessages((prev) => [
+          ...prev,
+          { id: `${task.id}-assistant`, role: "assistant", text: "", thinking: "", streaming: true, time: new Date().toISOString() },
+        ]);
+        setTimeout(scrollToEnd, 50);
         // stream via SSE for a bit
         const url = taskApi.streamEventsUrl(task.thread_id, task.id);
         let closeStream = () => {};
@@ -642,30 +739,60 @@ export function ChatWorkspace({
                     time: null,
                   }],
               );
+              if (autoScrollActiveRef.current) setTimeout(scrollToEnd, 30);
             }
-            if (event.event === "finished" || event.event === "error") {
-              const eventData = data.data && typeof data.data === "object"
-                ? data.data as Record<string, unknown>
-                : data;
-              const finalText = String(eventData.final_message || eventData.output || "");
+            // Single-writer rule for the answer bubble: only `assistant_delta`
+            // fragments (new streamed content) and the `finished` receipt
+            // (authoritative full answer) may write it. `state` snapshots are
+            // deliberately excluded — they carry the whole checkpoint history,
+            // so painting them replays the previous turn's answer and raw step
+            // transcripts into the current bubble while the agent works. State
+            // still feeds the Activity timeline via isActivityEvent above.
+            if (event.event === "reasoning_delta") {
+              // Each reasoning_delta event carries one complete paragraph
+              // (plan rationale, one verification verdict), so events join
+              // with a blank line — identically to the refresh path below,
+              // so settling never reflows the text. (assistant_delta stays a
+              // plain append: the responder emits the answer as one event.)
+              const delta = String(data.text || "").trim();
+              if (delta) {
+                const prevT = liveThinkRef.current.get(task.id);
+                const next = prevT ? `${prevT}\n\n${delta}` : delta;
+                liveThinkRef.current.set(task.id, next);
+                patchLiveAssistant(task.id, { thinking: next });
+              }
+            } else if (event.event === "assistant_delta") {
+              const delta = String(data.text || "");
+              if (delta) {
+                const next = (liveTextRef.current.get(task.id) || "") + delta;
+                liveTextRef.current.set(task.id, next);
+                patchLiveAssistant(task.id, { text: next });
+              }
+            } else if (event.event === "finished" || event.event === "error") {
+              const finalText = String(data.final_message || data.output || "");
               if (finalText) {
-                setMessages((prev) => {
-                  const existing = prev.find((message) => message.id === `${task.id}-assistant`);
-                  if (existing) return prev.map((message) => message.id === existing.id ? { ...message, text: finalText } : message);
-                  return [...prev, { id: `${task.id}-assistant`, role: "assistant", text: finalText, time: new Date().toISOString() }];
+                // The receipt carries the whole answer; it overwrites any
+                // streamed fragments so the bubble always converges exactly.
+                liveTextRef.current.set(task.id, finalText);
+                patchLiveAssistant(task.id, {
+                  text: finalText,
+                  thinking: liveThinkRef.current.get(task.id) || undefined,
+                  streaming: false,
                 });
+              } else {
+                // No answer (e.g. error without final text): drop the empty
+                // live bubble instead of leaving a ghost; the refresh below
+                // renders the server-side error entry for this task.
+                liveTextRef.current.delete(task.id);
+                liveThinkRef.current.delete(task.id);
+                setMessages((prev) => prev.filter((m) => m.id !== `${task.id}-assistant`));
               }
               setPendingTaskId(null);
               closeStream();
-            } else if (event.event === "state") {
-              const stateText = assistantTextFromState(data.data && typeof data.data === "object" ? data.data : data);
-              if (stateText) {
-                setMessages((prev) => {
-                  const existing = prev.find((message) => message.id === `${task.id}-assistant`);
-                  if (existing) return prev.map((message) => message.id === existing.id ? { ...message, text: stateText } : message);
-                  return [...prev, { id: `${task.id}-assistant`, role: "assistant", text: stateText, time: new Date().toISOString() }];
-                });
-              }
+              // Reconcile with persisted server truth so the settled answer
+              // renders from the task record — no manual refresh needed. The
+              // 2s poll stays as backup while the task is still pending.
+              void refreshConversation(task.thread_id).then(() => refreshChats());
             }
           },
           () => closeStream(),
@@ -868,7 +995,11 @@ export function ChatWorkspace({
                         <ThinkingBlock text={m.thinking || ""} live={!!m.streaming} />
                       )}
                       {m.text ? (
-                        <div className={`text-[13px] leading-relaxed whitespace-pre-wrap break-words ${m.streaming ? "stream-caret" : ""}`}>{m.text}</div>
+                        m.role === "assistant" ? (
+                          <MarkdownText className={`text-[13px] leading-relaxed ${m.streaming ? "stream-caret" : ""}`}>{m.text}</MarkdownText>
+                        ) : (
+                          <div className={`text-[13px] leading-relaxed whitespace-pre-wrap break-words ${m.streaming ? "stream-caret" : ""}`}>{m.text}</div>
+                        )
                       ) : m.streaming ? (
                         <div className="text-[13px] leading-relaxed stream-caret" style={{ color: "var(--fg-2)" }}> </div>
                       ) : null}
@@ -879,7 +1010,7 @@ export function ChatWorkspace({
                           ))}
                         </div>
                       )}
-                      {m.time && !m.streaming && <div className="mt-1 text-[10px] font-mono" style={{ color: m.role === "user" ? "rgba(255,255,255,0.7)" : "var(--fg-3)" }}>{new Date(m.time).toLocaleTimeString()}</div>}
+                      {m.time && !m.streaming && <div className="mt-1 text-[10px] font-mono" style={{ color: m.role === "user" ? "rgba(255,255,255,0.7)" : "var(--fg-3)" }}>{formatLocalTime(m.time)}</div>}
                     </div>
                     {m.role === "user" && <span className="w-7 h-7 rounded-full grid place-items-center text-[11px] font-semibold shrink-0 mt-0.5" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)", color: "var(--fg-2)" }}>you</span>}
                   </div>
