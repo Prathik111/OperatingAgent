@@ -69,7 +69,7 @@ class Ollama:
         if self._client is None or self._client_timeout != timeout:
             from ollama import AsyncClient
 
-            kwargs = {"host": self.host}
+            kwargs: dict[str, Any] = {"host": self.host}
             if timeout is not None:
                 kwargs["timeout"] = timeout
             self._client = AsyncClient(**kwargs)

@@ -82,6 +82,11 @@ class Finding(BaseModel):
     outputs and kept here.
     """
 
+    task_id: str = Field(
+        default="",
+        description="Task/run this finding belongs to (scopes findings to a single task)."
+    )
+
     step_id: int = Field(
         description="Plan step this finding came from."
     )

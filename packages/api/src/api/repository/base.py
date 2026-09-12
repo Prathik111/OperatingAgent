@@ -43,6 +43,21 @@ class RunSummary:
     metadata: dict
 
 
+#: Run statuses that mean "an execution may still be attached". Everything
+#: else is terminal: no process, live or dead, will ever advance the run again.
+OPEN_RUN_STATUSES = (RunStatus.CREATED, RunStatus.PENDING, RunStatus.RUNNING)
+
+
+@dataclass(slots=True, frozen=True)
+class OpenRun:
+    """A run in non-terminal status, for execution-ownership decisions."""
+
+    task_id: str
+    run_id: str
+    status: RunStatus
+    metadata: dict
+
+
 @runtime_checkable
 class TaskRepository(Protocol):
     async def create_thread(self, thread_id: str, title: str | None = None) -> ThreadRecord:
@@ -159,4 +174,14 @@ class TaskRepository(Protocol):
 
     async def get_latest_run(self, task_id: str) -> RunSummary | None:
         """Return the latest persisted run receipt for a task."""
+        ...
+
+    async def list_open_runs(self) -> list[OpenRun]:
+        """Runs in non-terminal status (created/pending/running).
+
+        The restart-recovery read: anything listed here had an execution
+        attached when it was written, and only an explicit recovery may move
+        it to a terminal status. Backends return every match; callers decide
+        ownership.
+        """
         ...

@@ -9,8 +9,25 @@ CRUD surface and its error contract. ``root`` is set to the per-test
 
 from __future__ import annotations
 
+import os
+import shutil
+from pathlib import Path
+
 import pytest
 from file_server.services.filesystem_service import FileSystemService
+
+
+def _try_symlink(target: Path, link: Path, *, target_is_directory: bool = False) -> None:
+    """Create ``link -> target``, skipping when the OS forbids symlinks."""
+    try:
+        if os.path.islink(link) or link.exists():
+            if link.is_dir() and not link.is_symlink():
+                shutil.rmtree(link)
+            else:
+                link.unlink()
+        link.symlink_to(target, target_is_directory=target_is_directory)
+    except OSError as exc:
+        pytest.skip(f"symlinks unavailable on this host: {exc}")
 
 
 @pytest.fixture
@@ -204,3 +221,112 @@ async def test_watch_directory_returns_snapshots(service) -> None:
     assert len(result["snapshots"]) == 1
     names = {e["name"] for e in result["snapshots"][0]["entries"]}
     assert "watched.txt" in names
+
+
+# Symlink / TOCTOU hardening (P0-10)
+#
+# ``_normalize_path`` re-resolves on every call, so a naive outside-symlink is
+# already rejected. The gap was subtler: a symlink whose target stays inside
+# ``root`` was *followed* (confused deputy), and a directory swapped for a
+# symlink between check and use was trusted. The service now rejects any link
+# component — pre-placed or swapped in — fail closed.
+
+
+@pytest.mark.regression
+def test_symlink_file_pointing_outside_is_rejected(service, workspace) -> None:
+    secret = workspace.parent / f"{workspace.name}_secret.txt"
+    secret.write_text("s3cr3t")
+    try:
+        _try_symlink(secret, workspace / "link.txt")
+        with pytest.raises(PermissionError):
+            service.read_file("link.txt")
+        with pytest.raises(PermissionError):
+            service.exists("link.txt")
+        with pytest.raises(PermissionError):
+            service.metadata("link.txt")
+    finally:
+        secret.unlink(missing_ok=True)
+
+
+@pytest.mark.regression
+def test_read_through_symlink_dir_inside_root_is_rejected(service, workspace) -> None:
+    real = workspace / "real"
+    real.mkdir()
+    (real / "file.txt").write_text("real-content")
+    _try_symlink(real, workspace / "linkdir", target_is_directory=True)
+    with pytest.raises(PermissionError):
+        service.read_file("linkdir/file.txt")
+
+
+@pytest.mark.regression
+def test_write_through_symlink_dir_is_rejected(service, workspace) -> None:
+    real = workspace / "real"
+    real.mkdir()
+    _try_symlink(real, workspace / "linkdir", target_is_directory=True)
+    with pytest.raises(PermissionError):
+        service.write_file("linkdir/evil.txt", "x")
+    # The link target must not gain a file through the rejected write.
+    assert not (real / "evil.txt").exists()
+
+
+@pytest.mark.regression
+def test_dir_swap_with_symlink_is_rejected(service, workspace) -> None:
+    service.write_file("a/file.txt", "A")
+    service.write_file("b/file.txt", "B")
+    shutil.rmtree(workspace / "a")
+    _try_symlink(workspace / "b", workspace / "a", target_is_directory=True)
+    # Pre-hardening this followed the swapped link and returned "B".
+    with pytest.raises(PermissionError):
+        service.read_file("a/file.txt")
+    with pytest.raises(PermissionError):
+        service.write_file("a/new.txt", "x")
+
+
+@pytest.mark.regression
+def test_copy_dest_through_symlink_is_rejected(service, workspace) -> None:
+    service.write_file("src.txt", "payload")
+    real = workspace / "real"
+    real.mkdir()
+    _try_symlink(real, workspace / "linkdir", target_is_directory=True)
+    with pytest.raises(PermissionError):
+        service.copy_file("src.txt", "linkdir/dst.txt")
+    assert not (real / "dst.txt").exists()
+
+
+@pytest.mark.regression
+def test_move_dest_through_symlink_is_rejected(service, workspace) -> None:
+    service.write_file("src.txt", "payload")
+    real = workspace / "real"
+    real.mkdir()
+    _try_symlink(real, workspace / "linkdir", target_is_directory=True)
+    with pytest.raises(PermissionError):
+        service.move_file("src.txt", "linkdir/dst.txt")
+    # Failed move must leave the source untouched.
+    assert service.read_file("src.txt")["content"] == "payload"
+
+
+@pytest.mark.regression
+def test_delete_directory_recursive_unlinks_symlink_without_following(
+    service, workspace
+) -> None:
+    target = workspace / "target"
+    target.mkdir()
+    (target / "keep.txt").write_text("keep")
+    box = workspace / "box"
+    box.mkdir()
+    (box / "other.txt").write_text("other")
+    _try_symlink(target, box / "link", target_is_directory=True)
+    service.delete_directory("box", recursive=True)
+    assert service.exists("box")["exists"] is False
+    # Only the link is removed; the link target is preserved.
+    assert (target / "keep.txt").read_text() == "keep"
+
+
+@pytest.mark.regression
+def test_list_directory_on_symlink_dir_is_rejected(service, workspace) -> None:
+    real = workspace / "real"
+    real.mkdir()
+    (real / "file.txt").write_text("x")
+    _try_symlink(real, workspace / "linkdir", target_is_directory=True)
+    with pytest.raises(PermissionError):
+        service.list_directory("linkdir")

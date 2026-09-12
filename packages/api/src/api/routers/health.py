@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
 from ..config import ApiSettings
 from ..dependencies import get_settings, get_task_service
@@ -21,9 +21,12 @@ TaskServiceDep = Annotated[TaskService, Depends(get_task_service)]
 async def health(
     settings: SettingsDep,
     service: TaskServiceDep,
+    request: Request,
 ) -> HealthResponse:
+    degraded = list(getattr(request.app.state, "degraded", None) or [])
     return HealthResponse(
-        status="ok",
+        status="degraded" if degraded else "ok",
         repository=settings.repository_backend,
         tracks=service.available_tracks,
+        degraded=degraded,
     )

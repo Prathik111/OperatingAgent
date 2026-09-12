@@ -271,6 +271,8 @@ class Session:
     working_directory: str = "."
     revision: int = 0
     id: str = field(default_factory=_new_id)
+    created_at: datetime = field(default_factory=_now)
+    updated_at: datetime = field(default_factory=_now)
 
 
 class Conversation:

@@ -279,6 +279,7 @@ def build_context(
     risk_classifier: Any = None,
     tracer: Any = None,
     approval_handler: Any = None,
+    auto_approve_all: bool = False,
     task_id: str = "test-task",
 ) -> AgentContext:
     """Assemble an ``AgentContext`` from stubs, defaulting every slot.
@@ -299,6 +300,7 @@ def build_context(
         tracer=tracer if tracer is not None else Tracer(config.tracing),
         config=config,
         approval_handler=approval_handler,
+        auto_approve_all=auto_approve_all,
         task_id=task_id,
     )
 

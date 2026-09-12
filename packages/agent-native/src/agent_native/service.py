@@ -84,11 +84,12 @@ class AgentRuntime:
         self.policy = policy or PolicyChain(
             [RulePolicy(), WorkspacePolicy(), SessionPolicy(), PlanModePolicy()]
         )
+        self._auto_approve_all = False
         self.permission_store = PermissionStore(self.database)
         self.permissions = PermissionManager(self.permission_store, self.events)
-        # Where shell commands run. None means "in this process, like everything
-        # else" - the caller decides, because starting containers is the caller's
-        # cost to accept (see tools/sandbox.py).
+        # Where sandbox-marked shell commands run. An explicitly disabled sandbox
+        # leaves legacy direct-tool behavior available to CLI callers; the API
+        # desktop path enables it by default and fails closed when Docker is absent.
         self.sandbox = sandbox
         self.tool_manager = ToolManager(
             self.tools, self.policy, self.permissions, sandbox=sandbox
@@ -150,6 +151,26 @@ class AgentRuntime:
         # helper delegates or fans out in turn.
         self.tools.register(DelegateTool(self))
         self.tools.register(FanOutTool(self))
+
+    @property
+    def auto_approve_all(self) -> bool:
+        """Whether approval prompts are skipped (denials still enforced)."""
+        return self._auto_approve_all
+
+    def set_auto_approve_all(self, enabled: bool) -> bool:
+        """Turn the allow-all opt-in on or off live. Returns the new state.
+
+        On: the tool gate wraps the base chain so ASK becomes ALLOW. DENY
+        verdicts (workspace escapes, plan-mode blocks) still win — this skips
+        asking, never safety boundaries. Off restores the base chain itself.
+        """
+        from .permissions import AutoApprovePolicy
+
+        self._auto_approve_all = bool(enabled)
+        self.tool_manager.set_policy(
+            AutoApprovePolicy(self.policy) if self._auto_approve_all else self.policy
+        )
+        return self._auto_approve_all
 
     def register_default_tools(self) -> None:
         """Register any built-in tools. None ship now - the agent's tools come from
@@ -265,8 +286,14 @@ class AgentService:
         limits: Limits | None = None,
         cancellation: Cancellation | None = None,
         media: list | None = None,
+        run_id: str | None = None,
     ):
-        """Add the user's message and run the agent until it stops."""
+        """Add the user's message and run the agent until it stops.
+
+        ``run_id`` pins the run's identity so a caller (e.g. the HTTP layer)
+        can subscribe to and cancel exactly this run. When omitted a fresh id
+        is minted, as before.
+        """
         session = await self.runtime.database.get_session(session_id)
         if session is None:
             raise KeyError(f"No such session: {session_id!r}")
@@ -274,7 +301,7 @@ class AgentService:
 
         # Mint the run before writing its first event.  The canonical Postgres
         # schema anchors every event to an agent_run, including MESSAGE_ADDED.
-        run_id = "run_" + uuid.uuid4().hex[:8]
+        run_id = run_id or ("run_" + uuid.uuid4().hex[:8])
         user_msg = user_message(session_id, text, media=media)
         await self.runtime.database.save_message(user_msg)
         await self.runtime.events.emit(
@@ -308,11 +335,25 @@ class AgentService:
         )
         return await self.runtime.loop.run(conversation, context)
 
+    async def peek_resume_run_id(self, session_id: str) -> str:
+        """The run id a resume would continue, without running anything.
+
+        Lets a caller register per-run state (cancellation, subscriptions)
+        before the resumed work starts emitting. Raises ``KeyError`` for an
+        unknown session, like :meth:`resume_run` does.
+        """
+        session = await self.runtime.database.get_session(session_id)
+        if session is None:
+            raise KeyError(f"No such session: {session_id!r}")
+        events = [e for e in await self.runtime.database.load_events(session_id, 0) if not is_helper_run(e.run_id)]
+        return _latest_run_id(events) or ("run_" + uuid.uuid4().hex[:8])
+
     async def resume_run(
         self,
         session_id: str,
         limits: Limits | None = None,
         cancellation: Cancellation | None = None,
+        run_id: str | None = None,
     ):
         """Reattach to a session and carry its last run to completion.
 
@@ -349,8 +390,9 @@ class AgentService:
             session=session,
             # Continue the interrupted run's id when the log has one, so its record
             # is updated in place and its events stay under one run; only invent a
-            # fresh id if nothing run-scoped was ever logged.
-            run_id=_latest_run_id(events) or ("run_" + uuid.uuid4().hex[:8]),
+            # fresh id if nothing run-scoped was ever logged. A caller may pin
+            # the id (see peek_resume_run_id) to register per-run state first.
+            run_id=run_id or _latest_run_id(events) or ("run_" + uuid.uuid4().hex[:8]),
             config=config,
             limits=limits or Limits(max_turns=config.max_turns),
             cancellation=cancellation or Cancellation(),
@@ -381,7 +423,16 @@ class AgentService:
         conversation = await self.runtime.database.load_conversation(session_id)
         for message in conversation.messages:
             await self.runtime.database.save_message(
-                replace(message, id=_new_id(), session_id=fork.id, parts=list(message.parts))
+                replace(
+                    message,
+                    id=_new_id(),
+                    session_id=fork.id,
+                    parts=list(message.parts),
+                    # The Postgres store keys rows by storage_id with
+                    # ON CONFLICT DO NOTHING: keeping the source row's key
+                    # would silently drop every forked message.
+                    storage_id=None,
+                )
             )
         return fork
 
@@ -408,9 +459,9 @@ class AgentService:
         """
         await self.runtime.permissions.resolve(call_id, allowed, duration, scope)
 
-    def pending_permissions(self) -> list:
+    def pending_permissions(self, session_id: str = "") -> list:
         """Permission prompts currently waiting on the user."""
-        return self.runtime.permissions.pending()
+        return self.runtime.permissions.pending(session_id)
 
     async def subscribe(self, session_id: str, from_sequence: int = 0):
         """Stream a session's events, catching up from `from_sequence` first."""

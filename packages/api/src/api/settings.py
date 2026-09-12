@@ -13,6 +13,10 @@ class RuntimeLLMSettings(BaseModel):
     top_p: float | None = Field(default=None, gt=0, le=1)
     max_tokens: int | None = Field(default=None, gt=0)
     timeout_seconds: int | None = Field(default=None, gt=0)
+    auto_approve_all: bool | None = Field(
+        default=None,
+        description="Skip approval prompts (denials still enforced)",
+    )
 
 
 _DEFAULT_MODELS: dict[str, str] = {

@@ -47,7 +47,7 @@ async def get_legacy_task(task_id: str, service: TaskServiceDep) -> TaskResponse
     )
 
 
-@router.post("/{task_id}/resume", response_model=TaskResponse)
+@router.post("/{task_id}/resume", response_model=TaskResponse, include_in_schema=False)
 async def resume_task(
     task_id: str,
     body: ResumeTaskRequest,

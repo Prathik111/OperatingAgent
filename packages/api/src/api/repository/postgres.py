@@ -24,7 +24,7 @@ from psycopg.types.json import Jsonb
 from ..errors import TaskNotFound, ThreadNotFound
 from ..serialization import config_content_hash, config_to_snapshot
 from . import _sql
-from .base import RunSummary, ThreadRecord
+from .base import OpenRun, RunSummary, ThreadRecord
 
 if TYPE_CHECKING:  # avoid importing psycopg_pool at module import time
     from psycopg_pool import AsyncConnectionPool
@@ -242,6 +242,20 @@ class PostgresTaskRepository:
             error=error,
             metadata=dict(metadata or {}),
         )
+
+    async def list_open_runs(self) -> list[OpenRun]:
+        async with self._pool.connection() as conn, conn.cursor() as cur:
+            await cur.execute(_sql.SELECT_OPEN_RUNS)
+            rows = await cur.fetchall()
+        return [
+            OpenRun(
+                task_id=str(task_id),
+                run_id=str(run_id),
+                status=RunStatus(status),
+                metadata=dict(metadata or {}),
+            )
+            for task_id, run_id, status, metadata in rows
+        ]
 
     async def mark_run_running(self, run_id: str) -> None:
         async with self._pool.connection() as conn, conn.cursor() as cur:

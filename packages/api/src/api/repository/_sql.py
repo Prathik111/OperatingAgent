@@ -319,6 +319,14 @@ ORDER BY attempt DESC
 LIMIT 1
 """
 
+# Restart-recovery read: every run an execution may still be attached to.
+# No ordering guarantee is needed — callers decide ownership per row.
+SELECT_OPEN_RUNS = """
+SELECT task_id, id, status, metadata
+FROM agent_runs
+WHERE status::text IN ('created', 'pending', 'running')
+"""
+
 # Thread deletion, leaf tables first. The thread row itself is scoped to the
 # API-owned actor so one caller can never delete another owner's thread.
 DELETE_THREAD_EVENTS = """

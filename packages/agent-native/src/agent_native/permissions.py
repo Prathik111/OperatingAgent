@@ -305,6 +305,29 @@ class PolicyChain(Policy):
         return strictest
 
 
+class AutoApprovePolicy(Policy):
+    """Downgrade "ask" to "allow" behind an explicit user opt-in.
+
+    Wraps the real chain (it cannot sit *in* the chain — the chain keeps the
+    strictest verdict, so a member can never relax one). Denials still win:
+    workspace escapes and plan-mode blocks are safety boundaries, not prompts,
+    and this opt-in only skips asking, never those.
+    """
+
+    def __init__(self, inner: Policy) -> None:
+        self.inner = inner
+
+    def check(self, context: Any, definition: Any, arguments: dict) -> Decision:
+        decision = self.inner.check(context, definition, arguments)
+        if decision.result is PermissionDecision.ASK:
+            return Decision(
+                PermissionDecision.ALLOW,
+                reason="auto-approved: allow-all permissions is on",
+                rule=decision.rule,
+            )
+        return decision
+
+
 # Grants: remembering the user's answer
 class PermissionDuration(str, Enum):
     ONCE = "once"        # just this call
@@ -412,6 +435,8 @@ class PermissionRequest:
     arguments: dict = field(default_factory=dict)
     preview: str = ""
     reason: str = ""
+    session_id: str = ""
+    run_id: str = ""
 
 
 @dataclass
@@ -532,6 +557,8 @@ class PermissionManager:
             )
             return True
 
+        request.session_id = session_id
+        request.run_id = run_id
         await self._bus.emit(
             session_id,
             EventType.PERMISSION_REQUESTED,
@@ -591,6 +618,9 @@ class PermissionManager:
         """
         self._responder.deliver(call_id, PermissionAnswer(allowed, duration, scope))
 
-    def pending(self) -> list:
+    def pending(self, session_id: str = "") -> list:
         """The requests currently waiting on the user (for a UI to show)."""
-        return self._responder.pending()
+        requests = self._responder.pending()
+        if not session_id:
+            return requests
+        return [request for request in requests if request.session_id == session_id]

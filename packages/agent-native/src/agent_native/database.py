@@ -15,13 +15,20 @@ the receipt being write-only.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .conversation import Conversation, Message, Session
     from .events import Event
     from .memory import Memory
+
+
+def _utc(value: datetime) -> datetime:
+    """Normalize legacy naive UTC values before comparing or storing them."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 class Database(ABC):
@@ -156,19 +163,27 @@ class MemoryDatabase(Database):
         return existed
 
     async def list_sessions(self, working_directory: str = "", limit: int = 0) -> list:
-        # Dict insertion order is chronological, so reversing gives newest first -
-        # the same order the Postgres store gets from `created_at DESC`.
+        # Match Postgres: recent message activity moves a session to the top.
         sessions = list(self._sessions.values())
         if working_directory:
             sessions = [
                 s for s in sessions if getattr(s, "working_directory", "") == working_directory
             ]
-        sessions.reverse()
+        for session in sessions:
+            session.created_at = _utc(session.created_at)
+            session.updated_at = _utc(session.updated_at)
+        sessions.sort(key=lambda s: (s.updated_at, s.id), reverse=True)
         if limit and limit > 0:
             sessions = sessions[:limit]
         return sessions
 
     async def save_message(self, message: Message) -> None:
+        message.created_at = _utc(message.created_at)
+        session = self._sessions.get(message.session_id)
+        if session is not None:
+            session.created_at = _utc(session.created_at)
+            session.updated_at = _utc(session.updated_at)
+            session.updated_at = max(session.updated_at, message.created_at)
         self._messages.setdefault(message.session_id, []).append(message)
 
     async def load_conversation(self, session_id: str) -> Conversation:

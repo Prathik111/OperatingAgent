@@ -95,6 +95,17 @@ class LangGraphAgent(IAgentOrchestrator):
         self._compiled: Any | None = None
         self._checkpointer_context: AbstractAsyncContextManager[Any] | None = None
         self._compile_lock = asyncio.Lock()
+        self._auto_approve_all = False
+
+    @property
+    def auto_approve_all(self) -> bool:
+        """Whether approval gates are skipped (BLOCKED is still rejected)."""
+        return self._auto_approve_all
+
+    def set_auto_approve_all(self, enabled: bool) -> bool:
+        """Turn the allow-all opt-in on or off live. Returns the new state."""
+        self._auto_approve_all = bool(enabled)
+        return self._auto_approve_all
 
     # -- graph lifecycle ---------------------------------------------------
 
@@ -160,6 +171,7 @@ class LangGraphAgent(IAgentOrchestrator):
             tracer=self._tracer,
             config=config,
             approval_handler=self._approval_handler,
+            auto_approve_all=self._auto_approve_all,
             task_id=task.id,
             event_sink=on_event,
             completed_tool_calls=task.completed_tool_calls,
@@ -256,6 +268,13 @@ class LangGraphAgent(IAgentOrchestrator):
             model_provider = self._model_provider
             prompt_manager = self._prompt_manager
             invocation = self._invocation_config(task, config)
+        # Direct observers are best-effort, but the API service's callback is
+        # authoritative because it persists the execution history. Keep the
+        # latter's fail-closed behavior while isolating ordinary listeners.
+        event_sink = on_event
+        if on_event is not None and not getattr(on_event, "_authoritative", False):
+            async def event_sink(event: AgentEvent) -> None:
+                await self._emit(on_event, event)
         handler = next(iter(invocation["callbacks"]), None)
 
         started = time.perf_counter()
@@ -290,7 +309,7 @@ class LangGraphAgent(IAgentOrchestrator):
                         }
                     )
             context = self._build_context(
-                task, config, model_provider, prompt_manager, on_event
+                task, config, model_provider, prompt_manager, event_sink
             )
             if config.execution.stream:
                 async for state in graph.astream(
@@ -345,6 +364,7 @@ class LangGraphAgent(IAgentOrchestrator):
                 type="finished",
                 payload={
                     "status": result.status.value,
+                    "final_message": result.output,
                     "trace_id": result.metadata.get("langfuse_trace_id"),
                 },
             ),

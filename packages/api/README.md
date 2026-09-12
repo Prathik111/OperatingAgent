@@ -20,6 +20,10 @@ docker compose --env-file .env -f infra/docker/docker-compose.yml up -d postgres
 uv run api                       # loads .env, then starts on 127.0.0.1:8000
 ```
 
+For the desktop path, PostgreSQL and Docker are optional. Set
+`API_REPOSITORY_BACKEND=sqlite` in `.env` to use the durable local SQLite file,
+then start the Tauri shell from `apps/desktop` with `npm run tauri -- dev`.
+
 ```bash
 curl http://127.0.0.1:8000/health
 curl -X POST http://127.0.0.1:8000/tasks \

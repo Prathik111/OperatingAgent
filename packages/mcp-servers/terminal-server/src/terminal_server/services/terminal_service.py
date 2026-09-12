@@ -78,9 +78,24 @@ class TerminalService:
         logger: logging.Logger | None = None,
         *,
         allowed_commands: frozenset[str] | None = None,
+        root: str | Path | None = None,
     ) -> None:
         self.logger = logger or LOGGER
         self.allowed_commands = allowed_commands if allowed_commands is not None else _load_allowlist()
+        self.root = Path(root).expanduser().resolve() if root else None
+        if self.root is not None and not self.root.is_dir():
+            raise ValueError(f"terminal workspace does not exist: {self.root}")
+
+    def _working_directory(self, cwd: str | None) -> Path:
+        candidate = Path(cwd).expanduser() if cwd else (self.root or Path.cwd())
+        if not candidate.is_absolute():
+            candidate = (self.root or Path.cwd()) / candidate
+        resolved = candidate.resolve()
+        if not resolved.is_dir():
+            raise NotADirectoryError(f"terminal working directory does not exist: {resolved}")
+        if self.root is not None and not resolved.is_relative_to(self.root):
+            raise PermissionError(f"terminal working directory escapes workspace: {resolved}")
+        return resolved
 
     def _authorize(self, command: str) -> list[str]:
         """Parse a command and authorize it against the allowlist.
@@ -124,7 +139,7 @@ class TerminalService:
         """
 
         argv = self._authorize(command)
-        working_directory = Path(cwd).expanduser().resolve() if cwd else None
+        working_directory = self._working_directory(cwd)
         try:
             result = subprocess.run(
                 argv,

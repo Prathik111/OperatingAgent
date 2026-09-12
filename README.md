@@ -17,8 +17,7 @@ measured comparison of orchestration overhead, latency, reliability, and code vo
 .
 ├── apps/
 │   ├── desktop/                  # Tauri 2 shell
-│   ├── frontend-native/          # React UI — native track
-│   └── frontend-langgraph/       # React UI — langgraph track
+│   
 ├── packages/                     # uv workspace members (Python)
 │   ├── api/                      # FastAPI backend
 │   ├── agent-native/              # Plan-and-Execute + ReAct
@@ -47,7 +46,7 @@ measured comparison of orchestration overhead, latency, reliability, and code vo
 |---|---|---|
 | [uv](https://docs.astral.sh/uv/) | latest | Python package/workspace manager |
 | Python | 3.12+ | installed automatically by `uv` if missing |
-| Node.js + [pnpm](https://pnpm.io/) | LTS | for `apps/*` frontends |
+| Node.js + pnpm | LTS | for the `apps/desktop` frontend |
 | Docker Desktop | latest | for sandboxed tool execution + infra (Postgres, Qdrant, Langfuse) |
 | Rust toolchain | stable | required by Tauri (`apps/desktop`) |
 
@@ -128,12 +127,11 @@ uv sync --all-packages
 This is the point `uv` actually reads the root `[tool.uv.workspace]` table, resolves every
 member into one `uv.lock`, and builds a single shared `.venv` at the repo root.
 
-### 5. Frontend + desktop shell (separate from the uv workspace)
+### 5. Desktop shell (separate from the uv workspace)
 
-```bash
-cd apps/frontend-native      && pnpm install
-cd ../frontend-langgraph      && pnpm install
-cd ../desktop                 && pnpm install
+```powershell
+cd apps/desktop
+pnpm install
 ```
 
 ---
@@ -165,7 +163,7 @@ uv sync --all-packages
 ### Running a package's code
 ```bash
 # API backend
-uv run --package api uvicorn api.main:app --reload
+uv run api
 
 # An MCP server
 uv run --package file-server python -m file_server
@@ -176,6 +174,21 @@ uv run --package agent-native python -m agent_native
 # LangGraph agent track
 uv run --package agent-langgraph python -m agent_langgraph
 ```
+
+### Running the desktop application
+
+From the repository root, the Tauri development command starts the FastAPI
+sidecar on `127.0.0.1:8000` and the Vite frontend on `127.0.0.1:1420`.
+
+```powershell
+cd apps/desktop
+cargo pnpm run tauri -- dev
+```
+
+The LangGraph track launches `gateway_server` through FastMCP stdio when it
+needs tools. A separate MCP process on port `8080` is not required for normal
+desktop use. For a database-free desktop run, set
+`API_REPOSITORY_BACKEND=sqlite` (or `memory`) in `.env`.
 
 ### Running tests for one package
 ```bash

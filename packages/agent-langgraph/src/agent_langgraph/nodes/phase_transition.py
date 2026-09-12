@@ -3,8 +3,10 @@ from __future__ import annotations
 import logging
 
 from agent_langgraph.graph.state import AgentPlan, AgentState, Finding
+from agent_langgraph.runtime.context import AgentContext
 from common.enums import RunStatus, TaskStatus, WorkflowPhase
 from langchain_core.messages import SystemMessage
+from langgraph.runtime import Runtime
 
 log = logging.getLogger(__name__)
 
@@ -17,7 +19,9 @@ _NEXT_PHASE: dict[WorkflowPhase, WorkflowPhase] = {
 }
 
 
-def _harvest(plan: AgentPlan | None, phase: WorkflowPhase) -> list[Finding]:
+def _harvest(
+    plan: AgentPlan | None, phase: WorkflowPhase, task_id: str
+) -> list[Finding]:
     """Lift durable observations out of an exhausted plan.
 
     A replan replaces ``plan`` wholesale, so anything the next phase needs has
@@ -36,6 +40,7 @@ def _harvest(plan: AgentPlan | None, phase: WorkflowPhase) -> list[Finding]:
             continue
         harvested.append(
             Finding(
+                task_id=task_id,
                 step_id=step.id,
                 description=step.description,
                 detail=str(step.output),
@@ -46,7 +51,7 @@ def _harvest(plan: AgentPlan | None, phase: WorkflowPhase) -> list[Finding]:
     return harvested
 
 
-def PhaseTransitionNode(state: AgentState) -> dict:
+def PhaseTransitionNode(state: AgentState, runtime: Runtime[AgentContext] | None = None) -> dict:
     """Advance the workflow phase once the current plan is exhausted.
 
     Reached when a plan runs out of steps, whether that plan was empty from the
@@ -67,9 +72,15 @@ def PhaseTransitionNode(state: AgentState) -> dict:
     """
     phase = state.get("workflow_phase") or WorkflowPhase.INVESTIGATE
     plan: AgentPlan | None = state.get("plan")
+    task_id = runtime.context.task_id if runtime and runtime.context else "test-task"
 
-    harvested = _harvest(plan, phase)
-    total_findings = len(state.get("findings", [])) + len(harvested)
+    harvested = _harvest(plan, phase, task_id)
+    current_findings = [
+        finding
+        for finding in state.get("findings", [])
+        if getattr(finding, "task_id", "") == task_id
+    ]
+    total_findings = len(current_findings) + len(harvested)
 
     next_phase = _NEXT_PHASE[phase]
 

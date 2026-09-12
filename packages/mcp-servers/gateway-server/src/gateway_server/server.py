@@ -23,9 +23,9 @@ from typing import Final
 from fastmcp import FastMCP
 from file_server.server import build_file_server
 from file_server.server import mcp as file_mcp
-from git_server.server import mcp as git_mcp
+from git_server.server import build_git_server
 from search_server.server import mcp as search_mcp
-from terminal_server.server import mcp as terminal_mcp
+from terminal_server.server import build_terminal_server
 
 VERSION: Final[str] = "0.1.0"
 
@@ -34,8 +34,8 @@ VERSION: Final[str] = "0.1.0"
 # native config's ``tools.enabled`` list.
 MOUNTS: Final[dict[str, FastMCP]] = {
     "filesystem": file_mcp,
-    "git": git_mcp,
-    "terminal": terminal_mcp,
+    "git": build_git_server(),
+    "terminal": build_terminal_server(),
     "search": search_mcp,
 }
 
@@ -82,6 +82,8 @@ def build_gateway(root: str | None = None) -> FastMCP:
     mounts = dict(MOUNTS)
     if root is not None:
         mounts["filesystem"] = build_file_server(root=root)
+        mounts["git"] = build_git_server(root=root)
+        mounts["terminal"] = build_terminal_server(root=root)
     # Private diagnostics handle; FastMCP does not declare arbitrary instance
     # attributes in its type.
     gateway._operating_agent_mounts = mounts  # pyright: ignore[reportAttributeAccessIssue]

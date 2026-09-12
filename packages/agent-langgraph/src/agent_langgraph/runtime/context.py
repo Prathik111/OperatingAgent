@@ -50,6 +50,9 @@ class AgentContext:
     tracer: Tracer
     config: AgentConfig
     approval_handler: ApprovalHandler | None = None
+    #: Skip the human approval gate (ASK becomes proceed). BLOCKED verdicts
+    #: are still rejected — this skips asking, never safety boundaries.
+    auto_approve_all: bool = False
     task_id: str = "standalone"
     event_sink: Callable[[AgentEvent], Awaitable[None] | None] | None = None
     completed_tool_calls: dict[str, str] | None = None

@@ -64,15 +64,30 @@ def _needs_approval(ctx: AgentContext, step: PlanStep) -> RiskLevel:
     """Classify a step's risk deterministically.
 
     Delegates to the shared RiskClassifier (``classify(call) -> RiskLevel``).
-    Any unexpected failure degrades to SAFE rather than crashing execution.
+    Any unexpected failure — an exception, a timeout, a malformed verdict —
+    fails CLOSED to BLOCKED, so the step always enters the human gate instead
+    of running ungated. Returning SAFE here would let a broken classifier
+    silently wave through destructive tools.
     """
     try:
-        return ctx.risk_classifier.classify(
+        level = ctx.risk_classifier.classify(
             ToolCallRequest(tool_name=step.tool_name or "", arguments=step.arguments)
         )
     except Exception as exc:  # noqa: BLE001 - injected classifier boundary
-        log.warning("risk classification failed for %s: %s", step.tool_name, exc)
-        return RiskLevel.SAFE
+        log.error(
+            "risk classification failed for %s, failing closed: %s",
+            step.tool_name,
+            exc,
+        )
+        return RiskLevel.BLOCKED
+    if not isinstance(level, RiskLevel):
+        log.error(
+            "risk classifier returned malformed verdict %r for %s, failing closed",
+            level,
+            step.tool_name,
+        )
+        return RiskLevel.BLOCKED
+    return level
 
 
 async def ExecutorNode(state: AgentState, runtime: Runtime[AgentContext]) -> dict:
@@ -112,8 +127,36 @@ async def ExecutorNode(state: AgentState, runtime: Runtime[AgentContext]) -> dic
 
     # --- Human gate for risky tools -------------------------------------
     risk = _needs_approval(ctx, step)
+    auto_approve = bool(getattr(ctx, "auto_approve_all", False))
+    behaviour = ctx.config.behaviour
+    if risk is RiskLevel.BLOCKED and (
+        not behaviour.require_human_approval or auto_approve
+    ):
+        # BLOCKED with no gate to enter must not run: without this, a blocked
+        # (or fail-closed) verdict with approvals off falls straight through
+        # to invocation. The router terminates "blocked " errors at the
+        # responder instead of replanning a deterministically refused call.
+        log.warning(
+            "blocked step rejected without approval gate task_id=%s step=%s tool=%s",
+            ctx.task_id,
+            step.id,
+            step.tool_name,
+        )
+        blocked_reason = f"blocked {step.tool_name}: risk classified BLOCKED"
+        return {
+            "plan": _with_step(
+                plan, index, status=RunStatus.FAILED, output=blocked_reason
+            ),
+            "last_error": blocked_reason,
+            "retry_count": state.get("retry_count", 0) + 1,
+            "status": TaskStatus.EXECUTING,
+        }
     threshold = _RISK_ORDER.get(RiskLevel(ctx.config.behaviour.risk_threshold), 1)
-    if ctx.config.behaviour.require_human_approval and _RISK_ORDER[risk] >= threshold:
+    if (
+        ctx.config.behaviour.require_human_approval
+        and not auto_approve
+        and _RISK_ORDER[risk] >= threshold
+    ):
         log.info(
             "approval gate entered task_id=%s step=%s tool=%s risk=%s threshold=%s",
             ctx.task_id,
@@ -330,14 +373,19 @@ async def _emit_tool_finished(
 
 
 async def _emit_event(ctx: AgentContext, event: AgentEvent) -> None:
+    """Deliver an event to the service sink, propagating failures.
+
+    This sink is the authoritative execution history (the service persists
+    before fanning out), not telemetry: swallowing a persistence failure here
+    would let a run report success with holes in its record. A raise fails
+    the node, and the orchestrator records the run FAILED with the error
+    surfaced — never a false success.
+    """
     if ctx.event_sink is None:
         return
-    try:
-        outcome = ctx.event_sink(event)
-        if outcome is not None and hasattr(outcome, "__await__"):
-            await outcome
-    except Exception as exc:  # noqa: BLE001 - event persistence is best effort
-        log.warning("could not persist %s event: %s", event.type, exc)
+    outcome = ctx.event_sink(event)
+    if outcome is not None and hasattr(outcome, "__await__"):
+        await outcome
 
 
 def _phase_value(phase: Any) -> str:

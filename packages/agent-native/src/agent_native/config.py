@@ -124,6 +124,11 @@ class PromptBuilder:
             "When you need a tool, call it. When a tool result comes back, read it "
             "and then either call another tool or give the user your final answer."
         )
+        lines.append(
+            "Your final answer is for the user: write it in your own words, "
+            "summarizing what you did and the key outcome. Never paste raw tool "
+            "output as your answer."
+        )
         # A catalogue of skills sits above the standing instructions but below the
         # tool line: it's reference the model reaches for mid-task, not a rule to
         # obey. Only names and one-liners are here; a skill's body is loaded on

@@ -20,18 +20,20 @@ failed.
 
 One more thing happens in `run_authorized`: a tool marked `SANDBOX` is handed to
 the container runner instead of being called here. That is a single branch, in one
-place, because every tool call already comes through this gate - which is the
-payoff of having one. If the container isn't available the branch falls through and
-the tool runs normally, so a machine without Docker still works; `sandbox.py` says
-which mode a run ended up in.
+place, because every tool call already comes through this gate. A configured
+sandbox fails closed when Docker or its image is unavailable, since an arbitrary
+host command cannot be confined merely by choosing a working directory.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 from .base import ArgumentChecker, ExecutionMode, Tool, ToolRegistry, ToolResult
+
+log = logging.getLogger(__name__)
 
 #: How long any one tool may take when it doesn't say otherwise. Generous, because
 #: this is a backstop against hanging - not a performance budget.
@@ -60,6 +62,10 @@ class ToolManager:
         #: Where SANDBOX-marked tools run. None means "nowhere else" - they run
         #: here like everything else, which is the old behaviour.
         self.sandbox = sandbox
+
+    def set_policy(self, policy: Any) -> None:
+        """Swap the gating policy live (e.g. allow-all opt-in)."""
+        self._policy = policy
 
     async def execute(self, tool_call: Any, context: Any) -> ToolResult:
         """Run one tool call, or explain why it didn't run."""
@@ -111,9 +117,8 @@ class ToolManager:
     async def _invoke(self, tool: Tool, tool_call: Any, context: Any, seconds: float) -> ToolResult:
         """Actually run the tool - in the container if it's marked for one.
 
-        The sandbox answering None means it couldn't (no Docker, no working folder,
-        no command to run), never that the tool failed. So the fallback is to run
-        it here, exactly as an agent with no sandbox at all would.
+        A sandbox result is authoritative, including an unavailable-sandbox
+        failure. None is reserved for tools the sandbox does not implement.
         """
         if self.sandbox is not None and self._is_sandboxed(tool):
             result = await self.sandbox.run(tool, tool_call.arguments, context, seconds)
@@ -134,10 +139,23 @@ class ToolManager:
         return self._registry.find(name)
 
     async def _check_permission(self, context: Any, tool: Tool, tool_call: Any) -> tuple:
-        """Ask the policy; if it says 'ask', ask the user (reusing any saved grant)."""
+        """Ask the policy; if it says 'ask', ask the user (reusing any saved grant).
+
+        A policy that throws fails CLOSED to a denial: the model reads the
+        reason as an observation and adapts, instead of the call running
+        ungated or the whole run dying on an unexpected error.
+        """
         from ..permissions import PermissionDecision, PermissionRequest
 
-        decision = self._policy.check(context, tool.definition, tool_call.arguments)
+        try:
+            decision = self._policy.check(context, tool.definition, tool_call.arguments)
+        except Exception as exc:
+            log.warning(
+                "policy check failed for %s, denying: %s",
+                tool.definition.full_name,
+                exc,
+            )
+            return False, f"policy check failed ({type(exc).__name__}); denied to be safe"
 
         if decision.result == PermissionDecision.DENY:
             return False, decision.reason or "denied by policy"

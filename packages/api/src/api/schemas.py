@@ -161,3 +161,7 @@ class HealthResponse(BaseModel):
     status: str
     repository: str
     tracks: list[str]
+    degraded: list[str] = Field(
+        default_factory=list,
+        description="active explicit-degradation reasons (e.g. a configured durable store fell back); empty means fully healthy",
+    )

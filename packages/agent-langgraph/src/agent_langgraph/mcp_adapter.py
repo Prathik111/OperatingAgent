@@ -10,6 +10,7 @@ FastMCP directly. ToolRegistry sits on top of this.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 from common.interfaces import IMCPClient
@@ -34,10 +35,12 @@ class MCPAdapter(IMCPClient):
         *,
         stdio_command: str | None = None,
         stdio_args: list[str] | None = None,
+        stdio_env: dict[str, str] | None = None,
     ) -> None:
         self._client = Client(transport)
         self._stdio_command = stdio_command
         self._stdio_args = list(stdio_args or [])
+        self._stdio_env = dict(stdio_env) if stdio_env is not None else None
 
     @classmethod
     def from_stdio(
@@ -46,22 +49,32 @@ class MCPAdapter(IMCPClient):
         args: list[str],
         *,
         cwd: str | None = None,
+        env: dict[str, str] | None = None,
     ) -> MCPAdapter:
         """Connect to a FastMCP server launched as a subprocess over stdio."""
         return cls(
-            StdioTransport(command=command, args=args, cwd=cwd),
+            StdioTransport(command=command, args=args, cwd=cwd, env=env),
             stdio_command=command,
             stdio_args=args,
+            stdio_env=env,
         )
 
     def for_workspace(self, workspace: str) -> MCPAdapter:
         """Create an equivalent stdio client rooted at one task workspace."""
         if self._stdio_command is None:
             return self
+        # Inherit the configured stdio env — not the whole host environment —
+        # so its variables and restrictions survive, then pin the workspace.
+        if self._stdio_env is not None:
+            base = dict(self._stdio_env)
+        else:
+            base = dict(os.environ)
+        base["OPERATING_AGENT_WORKSPACE"] = workspace
         return self.from_stdio(
             self._stdio_command,
             list(self._stdio_args),
             cwd=workspace,
+            env=base,
         )
 
     async def aclose(self) -> None:

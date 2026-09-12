@@ -19,13 +19,7 @@ async def list_permissions(
     service: NativeServiceDep,
     session_id: str = "",
 ) -> list[PermissionResponse]:
-    # Pending is global in PermissionManager; filter by session if given
-    pending = service.pending_permissions()
-    if session_id:
-        # PermissionRequest doesn't carry session_id, so we filter via
-        # events that requested it — approximate by returning all when filtered
-        # and let frontend filter by its known session. Keep contract simple.
-        pass
+    pending = service.pending_permissions(session_id)
     return [PermissionResponse.from_native(r) for r in pending]
 
 

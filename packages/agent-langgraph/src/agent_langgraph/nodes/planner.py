@@ -5,11 +5,30 @@ import logging
 from agent_langgraph.graph.state import AgentPlan, AgentState, Finding
 from agent_langgraph.runtime.context import AgentContext
 from common.enums import TaskStatus, WorkflowPhase
+from common.events import AgentEvent
 from common.exceptions import PlanningException
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.runtime import Runtime
 
 log = logging.getLogger(__name__)
+
+
+async def _emit_event(ctx: AgentContext, event: AgentEvent) -> None:
+    """Deliver a best-effort observability event to the service sink.
+
+    Reasoning/plan events feed the UI's Thought-process view and the durable
+    history, but they must never turn a good plan into a failed run: a sink
+    failure is logged loudly and swallowed here. (Authoritative persistence
+    failures are surfaced by the service layer's own ``on_event`` wrapper.)
+    """
+    if ctx.event_sink is None:
+        return
+    try:
+        outcome = ctx.event_sink(event)
+        if outcome is not None and hasattr(outcome, "__await__"):
+            await outcome
+    except Exception as exc:  # noqa: BLE001 - observability is not load-bearing
+        log.warning("planner event sink raised: %s", exc)
 
 #: Per-finding detail cap when building the remediation prompt, so a large
 #: investigation cannot blow the model's context window.
@@ -26,6 +45,14 @@ def _format_findings(findings: list[Finding]) -> str:
         source = f" (via {finding.source_tool})" if finding.source_tool else ""
         lines.append(f"{n}. {finding.description}{source}\n   {detail}")
     return "\n".join(lines)
+
+
+def _current_task_findings(findings: list[Finding] | None, task_id: str) -> list[Finding]:
+    return [
+        finding
+        for finding in findings or []
+        if getattr(finding, "task_id", "") == task_id
+    ]
 
 
 def _phase_instruction(phase: WorkflowPhase, findings: list[Finding]) -> str:
@@ -115,9 +142,10 @@ async def planner_function(
         AgentPlan, method="json_schema"
     )
 
+    active_findings = _current_task_findings(findings, ctx.task_id)
     system_prompt = (
         ctx.prompt_manager.planner()
-        + _phase_instruction(phase, findings or [])
+        + _phase_instruction(phase, active_findings)
         + await _available_tools_hint(runtime)
     )
     full_messages = [
@@ -140,6 +168,38 @@ async def planner_function(
     log.info(
         "plan generated with provider %s for phase %s",
         ctx.config.llm.provider, phase.value,
+    )
+    # Surface the plan's rationale to the UI (Thought process) and the durable
+    # history, mirroring the native track's ``reasoning_delta`` stream. The
+    # ``plan_created`` record carries the full structure for Activity/history.
+    if validated_plan.reasoning and validated_plan.reasoning.strip():
+        await _emit_event(
+            ctx,
+            AgentEvent(
+                type="reasoning_delta",
+                payload={"text": validated_plan.reasoning.strip()},
+            ),
+        )
+    await _emit_event(
+        ctx,
+        AgentEvent(
+            type="plan_created",
+            payload={
+                "summary": validated_plan.summary,
+                "reasoning": validated_plan.reasoning,
+                "phase": phase.value,
+                "requires_remediation": validated_plan.requires_remediation,
+                "steps": [
+                    {
+                        "id": step.id,
+                        "description": step.description,
+                        "tool_name": step.tool_name,
+                        "arguments": step.arguments,
+                    }
+                    for step in validated_plan.steps
+                ],
+            },
+        ),
     )
     return validated_plan
 
@@ -186,7 +246,7 @@ async def PlannerNode(state: AgentState, runtime: Runtime[AgentContext]) -> dict
 
     # First entry establishes the phase; later entries come from the transition.
     phase = state.get("workflow_phase") or WorkflowPhase.INVESTIGATE
-    findings = state.get("findings", [])
+    findings = _current_task_findings(state.get("findings", []), runtime.context.task_id)
 
     plan = await planner_function(
         goal,

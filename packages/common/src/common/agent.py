@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from .enums import AgentTrack, RunStatus
@@ -16,7 +16,7 @@ class AgentTask:
 
     metadata: dict[str, Any] = field(default_factory=dict)
 
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     # Runtime-only execution controls.  They are deliberately not part of the
     # database task row: a task can have multiple attempts with different

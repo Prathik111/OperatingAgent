@@ -5,11 +5,24 @@ import logging
 from agent_langgraph.graph.state import AgentPlan, AgentState, PlanStep
 from agent_langgraph.runtime.context import AgentContext
 from common.enums import RunStatus, TaskStatus, VerificationResult
+from common.events import AgentEvent
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.runtime import Runtime
 from pydantic import BaseModel, Field
 
 log = logging.getLogger(__name__)
+
+
+async def _emit_event(ctx: AgentContext, event: AgentEvent) -> None:
+    """Best-effort observability event; never fails the run (see planner)."""
+    if ctx.event_sink is None:
+        return
+    try:
+        outcome = ctx.event_sink(event)
+        if outcome is not None and hasattr(outcome, "__await__"):
+            await outcome
+    except Exception as exc:  # noqa: BLE001 - observability is not load-bearing
+        log.warning("verifier event sink raised: %s", exc)
 
 
 class _Verdict(BaseModel):
@@ -92,6 +105,33 @@ async def VerifierNode(state: AgentState, runtime: Runtime[AgentContext]) -> dic
                 verdict = _Verdict(success=False, reason=f"verifier unavailable: {exc}")
         else:
             verdict = _Verdict(success=True, reason="verification disabled")
+
+    # Record the judgement for Activity/history and the Thought-process view.
+    # The reason is short by contract ("Keep the reason short and specific"),
+    # so it doubles as the reasoning stream for this step.
+    await _emit_event(
+        ctx,
+        AgentEvent(
+            type="verification_recorded",
+            payload={
+                "step_id": step.id,
+                "description": step.description,
+                "tool_name": step.tool_name,
+                "success": verdict.success,
+                "reason": verdict.reason,
+            },
+        ),
+    )
+    if verdict.reason and verdict.reason.strip():
+        await _emit_event(
+            ctx,
+            AgentEvent(
+                type="reasoning_delta",
+                payload={
+                    "text": f"Step {step.id} {'verified' if verdict.success else 'rejected'}: {verdict.reason.strip()}"
+                },
+            ),
+        )
 
     # --- Accept: mark verified and advance. This advance is the commit. -----
     if verdict.success:
