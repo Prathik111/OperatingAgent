@@ -115,6 +115,31 @@ async def test_lists_threads_and_tasks_newest_first_with_pagination():
     assert [task.id for task, _status in paged] == ["task-1"]
 
 
+async def test_list_tasks_normalizes_legacy_naive_timestamps():
+    repo = InMemoryTaskRepository()
+    naive = AgentTask(
+        id="legacy",
+        goal="legacy",
+        thread_id="mixed",
+        track=AgentTrack.NATIVE,
+        created_at=datetime(2026, 1, 1, tzinfo=UTC).replace(tzinfo=None),
+    )
+    aware = AgentTask(
+        id="current",
+        goal="current",
+        thread_id="mixed",
+        track=AgentTrack.NATIVE,
+        created_at=datetime(2026, 1, 2, tzinfo=UTC),
+    )
+    await repo.save_task(naive)
+    await repo.save_task(aware)
+
+    tasks = await repo.list_tasks_by_thread("mixed", limit=10, offset=0)
+
+    assert [task.id for task, _status in tasks] == ["current", "legacy"]
+    assert all(task.created_at.tzinfo is not None for task, _status in tasks)
+
+
 async def test_list_tasks_for_unknown_thread_raises():
     repo = InMemoryTaskRepository()
     with pytest.raises(ThreadNotFound):

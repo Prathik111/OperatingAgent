@@ -23,6 +23,13 @@ from ..errors import TaskNotFound, ThreadNotFound
 from .base import OPEN_RUN_STATUSES, OpenRun, RunSummary, ThreadRecord
 
 
+def _utc(value: datetime) -> datetime:
+    """Normalize legacy naive UTC timestamps before comparison."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
 @dataclass(slots=True)
 class _Run:
     id: str
@@ -62,11 +69,10 @@ class InMemoryTaskRepository:
         self._tools: dict[tuple[str, str], tuple[str, dict]] = {}
 
     async def save_task(self, task: AgentTask) -> None:
+        task.created_at = _utc(task.created_at)
         self._tasks[task.id] = task
         # Normalize legacy naive task timestamps before storing or comparing.
         created_at = task.created_at
-        if created_at.tzinfo is None:
-            created_at = created_at.replace(tzinfo=UTC)
         thread = self._threads.get(task.thread_id)
         if thread is None:
             self._threads[task.thread_id] = _Thread(
@@ -76,10 +82,8 @@ class InMemoryTaskRepository:
                 updated_at=created_at,
             )
         else:
-            if thread.updated_at.tzinfo is None:
-                thread.updated_at = thread.updated_at.replace(tzinfo=UTC)
-            if thread.created_at.tzinfo is None:
-                thread.created_at = thread.created_at.replace(tzinfo=UTC)
+            thread.updated_at = _utc(thread.updated_at)
+            thread.created_at = _utc(thread.created_at)
             thread.updated_at = max(thread.updated_at, created_at)
         self._task_status.setdefault(task.id, TaskStatus.PLANNING)
 
@@ -116,6 +120,9 @@ class InMemoryTaskRepository:
             raise TaskNotFound(task_id) from None
 
     async def list_threads(self, *, limit: int, offset: int) -> list[ThreadRecord]:
+        for thread in self._threads.values():
+            thread.created_at = _utc(thread.created_at)
+            thread.updated_at = _utc(thread.updated_at)
         threads = sorted(
             self._threads.values(),
             key=lambda thread: (thread.updated_at, thread.id),
@@ -140,8 +147,13 @@ class InMemoryTaskRepository:
     ) -> list[tuple[AgentTask, RunStatus | None]]:
         if thread_id not in self._threads:
             raise ThreadNotFound(thread_id)
+        tasks = [
+            task for task in self._tasks.values() if task.thread_id == thread_id
+        ]
+        for task in tasks:
+            task.created_at = _utc(task.created_at)
         tasks = sorted(
-            (task for task in self._tasks.values() if task.thread_id == thread_id),
+            tasks,
             key=lambda task: (task.created_at, task.id),
             reverse=True,
         )

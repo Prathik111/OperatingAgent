@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC
+
 import httpx
 from agent_native.conversation import Session, user_message
 from agent_native.database import MemoryDatabase
@@ -43,6 +45,40 @@ async def test_api_sqlite_repository_survives_reopen(tmp_path) -> None:
     receipt = await second.get_latest_run(task.id)
     assert receipt is not None
     assert receipt.output == "persisted result"
+    await second.close()
+
+
+async def test_api_sqlite_repository_normalizes_legacy_timestamps_on_reopen(
+    tmp_path,
+) -> None:
+    path = tmp_path / "legacy.db"
+    first = SQLiteTaskRepository(path)
+    await first.save_task(
+        AgentTask(
+            id="legacy-task",
+            goal="legacy",
+            thread_id="legacy-thread",
+            track=AgentTrack.LANGGRAPH,
+        )
+    )
+    first._tasks["legacy-task"].created_at = first._tasks[
+        "legacy-task"
+    ].created_at.replace(tzinfo=None)
+    first._threads["legacy-thread"].created_at = first._threads[
+        "legacy-thread"
+    ].created_at.replace(tzinfo=None)
+    first._threads["legacy-thread"].updated_at = first._threads[
+        "legacy-thread"
+    ].updated_at.replace(tzinfo=None)
+    await first.close()
+
+    second = SQLiteTaskRepository(path)
+    task = await second.get_task("legacy-task")
+    thread = (await second.list_threads(limit=10, offset=0))[0]
+
+    assert task.created_at.tzinfo is UTC
+    assert thread.created_at.tzinfo is UTC
+    assert thread.updated_at.tzinfo is UTC
     await second.close()
 
 

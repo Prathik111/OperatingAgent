@@ -48,10 +48,8 @@ def build_native_database(
 ) -> tuple[Any, Any]:
     """Return (Database, pool_or_None) for the native track.
 
-    Uses the configured SQLite path for desktop persistence, reuses
-    ``DATABASE_URL`` for PostgreSQL, and falls back to ``MemoryDatabase`` only
-    when explicitly configured. Returns a pool handle only for the postgres
-    branch so lifespan can await open/close.
+    Uses the explicitly configured backend for both API tracks. Returns a pool
+    handle only for the postgres branch so lifespan can await open/close.
 
     A configured durable store that cannot even be constructed fails here
     unless ``repository_fallback`` explicitly names a fallback — silently
@@ -74,9 +72,17 @@ def build_native_database(
             getattr(settings, "sqlite_database_path", str(DEFAULT_SQLITE_DATABASE_PATH))
         ), None
 
-    # If a real Postgres DSN is present, use the native PostgresDatabase
+    if backend in _MEMORY_BACKENDS:
+        from agent_native.database import MemoryDatabase
+
+        return MemoryDatabase(), None
+
+    if backend != "postgres":
+        raise ValueError(f"unknown repository backend: {backend!r}")
+
+    # Use the PostgreSQL database only for the explicit postgres backend.
     # even when repository_backend is still 'memory' for the Task API — the
-    # two stores are independent and native should be durable when it can be.
+    # The API and native stores therefore follow the same explicit selection.
     if database_url:
         try:
             from agent_native.postgres import PostgresDatabase

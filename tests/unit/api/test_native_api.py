@@ -549,6 +549,32 @@ async def test_native_settings_model_failure_leaves_toggle_untouched(native_clie
 
 
 @pytest.mark.regression
+async def test_native_environment_redacts_secrets(native_client, monkeypatch) -> None:
+    client, _service, _runtime = native_client
+    monkeypatch.setenv("LLM_PROVIDER", "groq")
+    monkeypatch.setenv("GROQ_API_KEY", "super-secret")
+    monkeypatch.setenv("LLM_MODEL", "")
+    monkeypatch.setenv("LLM_BASE_URL", "https://user:password@example.test")
+    monkeypatch.setenv("MCP_GATEWAY_ARGS", "--token super-secret")
+
+    response = await client.get("/native/environment")
+    assert response.status_code == 200
+    by_name = {v["name"]: v for v in response.json()["variables"]}
+
+    provider = by_name["LLM_PROVIDER"]
+    assert provider == {"name": "LLM_PROVIDER", "value": "groq", "secret": False, "set": True}
+    assert by_name["LLM_MODEL"] == {"name": "LLM_MODEL", "value": None, "secret": False, "set": False}
+
+    for name in ("LLM_BASE_URL", "MCP_GATEWAY_ARGS"):
+        assert by_name[name] == {"name": name, "value": None, "secret": True, "set": True}
+
+    key = by_name["GROQ_API_KEY"]
+    assert key["secret"] is True and key["set"] is True
+    assert key["value"] is None
+    assert "super-secret" not in response.text
+
+
+@pytest.mark.regression
 async def test_native_sandbox_reports_live_probe(native_client) -> None:
     client, _service, runtime = native_client
 

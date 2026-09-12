@@ -97,6 +97,9 @@ class SQLiteTaskRepository(InMemoryTaskRepository):
                 thread.created_at = thread.created_at.replace(tzinfo=UTC)
             if thread.updated_at.tzinfo is None:
                 thread.updated_at = thread.updated_at.replace(tzinfo=UTC)
+        for task in self._tasks.values():
+            if task.created_at.tzinfo is None:
+                task.created_at = task.created_at.replace(tzinfo=UTC)
         max_order = max(
             (getattr(run, "order", -1) for run in self._runs.values()),
             default=-1,

@@ -23,6 +23,23 @@ def test_build_native_database_defaults_to_memory() -> None:
     assert pool is None
 
 
+def test_build_native_database_explicit_memory_ignores_database_url() -> None:
+    database, pool = build_native_database(
+        ApiSettings(
+            repository_backend="memory",
+            database_url="postgresql://configured-but-not-selected",
+        )
+    )
+
+    assert isinstance(database, MemoryDatabase)
+    assert pool is None
+
+
+def test_build_native_database_rejects_unknown_backend() -> None:
+    with pytest.raises(ValueError, match="unknown repository backend"):
+        build_native_database(ApiSettings(repository_backend="unknown"))
+
+
 def test_build_native_database_requires_dsn_for_explicit_postgres() -> None:
     with pytest.raises(ValueError, match="DATABASE_URL is not set"):
         build_native_database(ApiSettings(repository_backend="postgres"))

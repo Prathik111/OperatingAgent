@@ -2,6 +2,7 @@ import type {
   ApprovalResponse,
   CreateSessionRequest,
   CreateTaskRequest,
+  EnvironmentResponse,
   EventResponse,
   HealthResponse,
   NativeHealthResponse,
@@ -86,6 +87,7 @@ export const nativeApi = {
     `${apiBase()}/native/sessions/${encodeURIComponent(sessionId)}/events?from=${from}&stream=${stream}`,
 
   getSandbox: () => req<SandboxStatusResponse>("/native/sandbox"),
+  getEnvironment: () => req<EnvironmentResponse>("/native/environment"),
 
   listRuns: (sessionId: string) => req<RunResponse[]>(`/native/sessions/${encodeURIComponent(sessionId)}/runs`),
   getRun: (runId: string) => req<RunResponse>(`/native/runs/${encodeURIComponent(runId)}`),

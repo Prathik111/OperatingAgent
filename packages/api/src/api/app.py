@@ -38,6 +38,7 @@ from .services.task_service import TaskService
 # even if agent-native is not installed; the lifespan will degrade gracefully.
 try:
     from .native import settings as native_settings
+    from .native.routers import environment as native_environment
     from .native.routers import events as native_events
     from .native.routers import health as native_health
     from .native.routers import messages as native_messages
@@ -51,6 +52,7 @@ except ImportError:  # pragma: no cover
     _NATIVE_ROUTERS_AVAILABLE = False
     native_events = native_health = native_messages = native_permissions = None  # type: ignore
     native_runs = native_sandbox_router = native_sessions = native_settings = None  # type: ignore
+    native_environment = None  # type: ignore
 
 log = logging.getLogger(__name__)
 
@@ -416,6 +418,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         assert native_events is not None
         assert native_permissions is not None
         assert native_runs is not None
+        assert native_environment is not None
         assert native_sandbox_router is not None
         app.include_router(native_health.router)
         app.include_router(native_sessions.router)
@@ -424,5 +427,6 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         app.include_router(native_events.router)
         app.include_router(native_permissions.router)
         app.include_router(native_runs.router)
+        app.include_router(native_environment.router)
         app.include_router(native_sandbox_router.router)
     return app
