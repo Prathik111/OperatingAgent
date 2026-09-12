@@ -234,8 +234,9 @@ export function ChatWorkspace({
   // open-state onto the wrong event.
   const eventKeyRef = useRef(0);
   const eventSigRef = useRef(new Map<string, number>());
-  const keyForActivity = useCallback((type: string, data: unknown): number => {
-    const sig = activitySignature(type, data);
+  const streamActivityIndexRef = useRef(0);
+  const keyForActivity = useCallback((type: string, data: unknown, identity?: string | number): number => {
+    const sig = activitySignature(type, data, identity);
     const known = eventSigRef.current.get(sig);
     if (known !== undefined) return known;
     eventKeyRef.current += 1;
@@ -246,6 +247,7 @@ export function ChatWorkspace({
   useEffect(() => {
     eventKeyRef.current = 0;
     eventSigRef.current = new Map();
+    streamActivityIndexRef.current = 0;
   }, [selected, track]);
 
   // Workspace adopted from a task below: saveSettings dispatches synchronously,
@@ -497,9 +499,10 @@ export function ChatWorkspace({
             const filtered = ev.filter(
               (e) => (!latestTaskId || e.task_id === latestTaskId) && isActivityEvent(e.type),
             );
+            const start = Math.max(0, filtered.length - 100);
             setEvents(
-              filtered.slice(-100).map((e) => ({
-                sequence: keyForActivity(e.type, e.payload),
+              filtered.slice(start).map((e, index) => ({
+                sequence: keyForActivity(e.type, e.payload, start + index),
                 type: e.type,
                 session_id: id,
                 run_id: e.task_id,
@@ -811,6 +814,7 @@ export function ChatWorkspace({
         setTimeout(scrollToEnd, 50);
         // stream via SSE for a bit
         const url = taskApi.streamEventsUrl(task.thread_id, task.id);
+        streamActivityIndexRef.current = 0;
         let closeStream = () => {};
         closeStream = sseSubscribe(
           url,
@@ -825,7 +829,13 @@ export function ChatWorkspace({
             // Same content signature as the refresh path: replayed history and
             // the 2s poll map to identical keys instead of duplicating rows.
             if (isActivityEvent(event.event)) {
-              const key = keyForActivity(event.event, data);
+              const identity = event.id || (
+                typeof data.sequence === "number" || typeof data.sequence === "string"
+                  ? data.sequence
+                  : streamActivityIndexRef.current
+              );
+              streamActivityIndexRef.current += 1;
+              const key = keyForActivity(event.event, data, identity);
               setEvents((prev) =>
                 prev.some((p) => p.sequence === key)
                   ? prev

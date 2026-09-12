@@ -154,7 +154,7 @@ export function AnalyticsView({
         <h3 className="text-[13px] font-semibold font-display">Usage</h3>
 
         <div className="grid grid-cols-1 gap-2">
-        <Stat label="Total tasks" value={String(totalTasks)} sub={`${byStatus["completed"] || 0} completed`} />
+        <Stat label="Loaded tasks" value={String(totalTasks)} sub={`${byStatus["completed"] || 0} completed`} />
       </div>
 
       <div className="rounded-xl p-3" style={{ background: "var(--bg-1)", border: "1px solid var(--bg-4)" }}>

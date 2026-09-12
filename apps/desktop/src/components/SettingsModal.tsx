@@ -167,8 +167,16 @@ export function SettingsModal({
       try {
         const status = await nativeApi.getSandbox();
         if (!cancelled) setSandbox(status);
-      } catch {
-        if (!cancelled) setSandbox(null);
+      } catch (cause) {
+        if (!cancelled) {
+          const reason = cause instanceof Error ? cause.message : String(cause);
+          setSandbox({
+            available: false,
+            image: "",
+            status: "sandbox: unavailable",
+            reason: reason || "sandbox probe failed",
+          });
+        }
       }
     };
     void load();
@@ -185,23 +193,29 @@ export function SettingsModal({
   const handleSave = async () => {
     setError("");
     const previous = loadSettings();
-    const normalized = { ...settings, provider };
+    const providerChanged = provider !== settings.provider;
+    const normalized = {
+      ...settings,
+      provider,
+      model: providerChanged ? "" : settings.model,
+      baseUrl: providerChanged ? "" : settings.baseUrl,
+    };
     setSettings(normalized);
     saveSettings(normalized);
     try {
       const body = {
         provider: normalized.provider,
-        model: settings.model,
-        base_url: settings.baseUrl || null,
-        temperature: Number(settings.temperature || 0),
-        top_p: Number(settings.topP || 1),
-        max_tokens: settings.maxTokens ? Number(settings.maxTokens) : null,
+        model: normalized.model,
+        base_url: normalized.baseUrl || null,
+        temperature: Number(normalized.temperature || 0),
+        top_p: Number(normalized.topP || 1),
+        max_tokens: normalized.maxTokens ? Number(normalized.maxTokens) : null,
         timeout_seconds: 60,
-        auto_approve_all: settings.autoApproveAll,
+        auto_approve_all: normalized.autoApproveAll,
       };
       if (track === "native") await nativeApi.updateSettings(body);
       else await taskApi.updateSettings(body);
-      onSaved(settings);
+      onSaved(normalized);
       setSaved(true);
       window.setTimeout(onClose, 700);
     } catch (cause) {

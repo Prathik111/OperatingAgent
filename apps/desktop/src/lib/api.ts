@@ -251,14 +251,18 @@ export function summarizeEventData(type: string, data: unknown): string {
 }
 
 /** Stable signature for one activity row, for keying across refresh + live. */
-export function activitySignature(type: string, data: unknown): string {
+export function activitySignature(
+  type: string,
+  data: unknown,
+  identity?: string | number,
+): string {
   let rendered: string;
   try {
     rendered = JSON.stringify(data) ?? "null";
   } catch {
     rendered = String(data);
   }
-  return `${type}|${rendered}`;
+  return `${type}|${identity ?? ""}|${rendered}`;
 }
 
 function parseSSEFrame(frame: string): SSEMessage | null {
