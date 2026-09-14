@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 
 from agent_native.tools.base import ToolResult
-from sandbox import ContainerPool
+from sandbox import DEFAULT_IMAGE, ContainerPool
 
 
 class _Process:
@@ -39,6 +39,28 @@ async def test_probe_rejects_a_missing_image(monkeypatch) -> None:
 
     assert await pool.probe() is False
     assert "No such image" in pool.status_line()
+
+
+async def test_selector_loop_uses_threaded_docker_probe(monkeypatch) -> None:
+    """Windows' psycopg-compatible selector loop still probes Docker."""
+    calls: list[list[str]] = []
+
+    def run(args, **_kwargs):
+        calls.append(list(args))
+        return subprocess.CompletedProcess(args, 0, stdout=b"28.0\n", stderr=b"")
+
+    import subprocess
+
+    monkeypatch.setattr("sandbox._threaded_subprocess_required", lambda: True)
+    monkeypatch.setattr("sandbox.subprocess.run", run)
+    monkeypatch.setattr("sandbox.shutil.which", lambda _name: "docker")
+    pool = ContainerPool()
+
+    assert await pool.probe() is True
+    assert calls == [
+        ["docker", "info", "--format", "{{.ServerVersion}}"],
+        ["docker", "image", "inspect", DEFAULT_IMAGE],
+    ]
 
 
 async def test_invalid_workspace_does_not_start_a_container(monkeypatch, tmp_path) -> None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -85,6 +86,34 @@ class MetricsOrchestrator:
 async def test_memory_repository_satisfies_expanded_protocol():
     repository = InMemoryTaskRepository()
     assert isinstance(repository, TaskRepository)
+
+
+@pytest.mark.asyncio
+async def test_evaluation_normalizes_workspace_and_exposes_execution_chat():
+    repository = InMemoryTaskRepository()
+    orchestrator = MetricsOrchestrator()
+    service = TaskService(
+        orchestrators={AgentTrack.NATIVE: orchestrator},
+        repository=repository,
+        broker=EventBroker(),
+        approvals=ApprovalGateway(),
+        settings=ApiSettings(default_track=AgentTrack.NATIVE, sandbox_workspace="."),
+        background=set(),
+    )
+
+    await service.start_evaluation(
+        name="workspace-check",
+        version="1",
+        tracks=[AgentTrack.NATIVE],
+        cases=[{"id": "case-1", "goal": "say hello", "working_directory": "."}],
+    )
+    await service.wait_idle()
+
+    dashboard = await service.evaluation_dashboard()
+    execution = dashboard["executions"][0]
+    assert execution["track"] == "native"
+    assert execution["goal"] == "say hello"
+    assert execution["workspace"] == str(Path.cwd().resolve())
 
 
 @pytest.mark.asyncio

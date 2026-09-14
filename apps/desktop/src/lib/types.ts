@@ -68,6 +68,15 @@ export interface SandboxStatusResponse {
   image: string;
   status: string;
   reason: string;
+  containers?: SandboxContainerResponse[];
+}
+
+export interface SandboxContainerResponse {
+  session_id: string;
+  workspace: string;
+  container_id: string;
+  image: string;
+  status: string;
 }
 
 export interface EnvVariableResponse {
@@ -86,6 +95,72 @@ export interface HealthResponse {
   status: string;
   repository: string;
   tracks: string[];
+}
+
+export interface EvaluationMetricSummary {
+  metric: string;
+  average: number | null;
+  count: number;
+}
+
+export interface EvaluationRunSummary {
+  id: string;
+  suite: string;
+  track: AgentTrack;
+  started_at: string;
+  finished_at: string | null;
+  result_count: number;
+  passed_count: number;
+  pass_rate: number | null;
+  average_score: number | null;
+  avg_latency_ms?: number | null;
+  total_tokens?: number | null;
+  total_cost?: number | null;
+  tool_success_rate?: number | null;
+  status?: string;
+}
+
+export interface EvaluationExecution {
+  id: string;
+  evaluation_run_id: string;
+  agent_run_id: string;
+  task_id: string;
+  thread_id: string;
+  suite: string;
+  track: AgentTrack;
+  case_id: string;
+  goal: string;
+  workspace: string;
+  status: string;
+  output: string | null;
+  error: string | null;
+  success: boolean;
+  created_at: string;
+}
+
+export interface EvaluationDashboard {
+  available: boolean;
+  reason: string | null;
+  suites: number;
+  cases: number;
+  runs: number;
+  results: number;
+  pass_rate: number | null;
+  average_score: number | null;
+  avg_latency_ms: number | null;
+  total_tokens: number | null;
+  total_cost: number | null;
+  tool_success_rate: number | null;
+  metrics: EvaluationMetricSummary[];
+  run_breakdown: EvaluationRunSummary[];
+  comparison: Array<EvaluationRunSummary & { avg_latency_ms?: number | null; total_tokens?: number | null; total_cost?: number | null; tool_success_rate?: number | null; status?: string }>;
+  executions: EvaluationExecution[];
+  sources: { database: boolean; langfuse: boolean };
+}
+
+export interface StartEvaluationResponse {
+  evaluation_run_ids: string[];
+  status: string;
 }
 
 export interface TaskResponse {

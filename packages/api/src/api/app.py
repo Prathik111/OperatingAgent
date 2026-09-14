@@ -28,7 +28,7 @@ from .orchestration.factory import build_orchestrators
 from .repository.factory import build_repository
 from .repository.memory import InMemoryTaskRepository
 from .repository.sqlite import SQLiteTaskRepository
-from .routers import approvals, health, stream, tasks, threads
+from .routers import approvals, evaluations, health, stream, tasks, threads
 from .security import SecurityHeadersMiddleware
 from .services.approval_gateway import ApprovalGateway
 from .services.event_broker import EventBroker
@@ -261,7 +261,8 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                             native_sandbox.status_line(),
                         )
                     except Exception as exc:  # noqa: BLE001 - sandbox is optional
-                        log.warning("Native sandbox probe failed; terminal commands will fail closed: %s", exc)
+                        detail = str(exc) or type(exc).__name__
+                        log.warning("Native sandbox probe failed; terminal commands will fail closed: %s", detail)
                 native_runtime = AgentRuntime(
                     database=native_db,
                     agents=[native_config],
@@ -409,6 +410,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     app.include_router(threads.router)
     app.include_router(stream.router)
     app.include_router(approvals.router)
+    app.include_router(evaluations.router)
     app.include_router(langgraph_settings_router)
     # Native-track routes — mounted separately so existing paths are untouched
     if _NATIVE_ROUTERS_AVAILABLE:

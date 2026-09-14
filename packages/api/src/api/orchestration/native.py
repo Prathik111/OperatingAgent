@@ -152,6 +152,13 @@ class NativeAgentOrchestrator(IAgentOrchestrator):
             "native_status": native_status,
             "model": str(getattr(result, "model", "") or ""),
             "trace_id": str(getattr(result, "trace_id", "") or ""),
+            # Keep the terminal receipt self-contained. The native runtime may
+            # persist detailed usage in its own database, but the API evaluation
+            # tables only see this shared run.
+            "llm_calls": int(getattr(result, "turns", 0) or 0),
+            "tool_calls": tool_calls,
+            "total_tokens": int(getattr(usage, "total_tokens", 0) or 0),
+            "cost": float(getattr(result, "cost_usd", 0.0) or 0.0),
         }
         error = str(getattr(result, "error", "") or "")
         if error:

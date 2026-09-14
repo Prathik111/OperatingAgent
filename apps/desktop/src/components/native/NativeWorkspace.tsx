@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { nativeApi, readSSEStream } from "../../lib/api";
-import type { EventResponse, PermissionResponse, RunResponse, SessionResponse } from "../../lib/types";
+import type { EventResponse, PermissionResponse, RunResponse, SandboxStatusResponse, SessionResponse } from "../../lib/types";
 import { loadSettings, saveSettings } from "../SettingsModal";
 import { Card, Label } from "../layout/Shell";
+import { folderName, isTauri, pickDirectory } from "../../lib/pickFolder";
 
 function useNativeHealth() {
   const [data, setData] = useState<{ status: string; database: string; agents: string[]; models: string[]; langfuse_enabled: boolean } | null>(null);
@@ -18,6 +19,8 @@ function useNativeHealth() {
 
 export function NativeWorkspace() {
   const health = useNativeHealth();
+  const [sandbox, setSandbox] = useState<SandboxStatusResponse | null>(null);
+  const [sandboxLoading, setSandboxLoading] = useState(false);
   const [sessions, setSessions] = useState<SessionResponse[]>([]);
   const [sessionsErr, setSessionsErr] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
@@ -68,13 +71,43 @@ export function NativeWorkspace() {
   }, []);
   const [newAgent, setNewAgent] = useState("build");
   const [forkTitle, setForkTitle] = useState("");
+  const browseWorkspace = async () => {
+    const dir = await pickDirectory(newWorkspace);
+    if (!dir) return;
+    setNewWorkspace(dir);
+    lastSavedWorkspaceRef.current = dir;
+    saveSettings({ ...loadSettings(), workspace: dir });
+    setSelected(null);
+    setDetail(null);
+    setConversation(null);
+    setEvents([]);
+    setRuns([]);
+  };
   const [activeTab, setActiveTab] = useState<"conversation" | "events" | "runs" | "permissions">("conversation");
   const esRef = useRef<EventSource | null>(null);
 
+  const refreshSandbox = useCallback(async () => {
+    setSandboxLoading(true);
+    try {
+      setSandbox(await nativeApi.getSandbox());
+    } catch (error) {
+      setSandbox({ available: false, image: "", status: "sandbox: unavailable", reason: (error as Error).message, containers: [] });
+    } finally {
+      setSandboxLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshSandbox();
+    const timer = window.setInterval(() => void refreshSandbox(), 4000);
+    return () => window.clearInterval(timer);
+  }, [refreshSandbox]);
+
   const refreshSessions = useCallback(async () => {
     try {
-      const list = await nativeApi.listSessions({ workspace: newWorkspace, limit: 100 });
-      setSessions(list);
+      const list = await nativeApi.listSessions({ limit: 100 });
+      const scoped = list.filter((session) => session.workspace === newWorkspace || session.id.startsWith("evaluation-"));
+      setSessions(scoped);
       setSessionsErr(null);
       if (!selected && list[0]) setSelected(list[0].id);
     } catch (e) {
@@ -131,6 +164,27 @@ export function NativeWorkspace() {
       setSelected(null);
     } catch (e) {
       alert((e as Error).message);
+    }
+  };
+
+  const onCreateSandbox = async () => {
+    if (!selected || !sandbox?.available) return;
+    try {
+      await nativeApi.createSandboxContainer(selected);
+      await refreshSandbox();
+    } catch (error) {
+      alert((error as Error).message);
+    }
+  };
+
+  const onDeleteSandbox = async () => {
+    if (!selected || !sandbox?.containers?.some((container) => container.session_id === selected)) return;
+    if (!confirm("Stop the sandbox container for this session? Any running command will be terminated.")) return;
+    try {
+      await nativeApi.deleteSandboxContainer(selected);
+      await refreshSandbox();
+    } catch (error) {
+      alert((error as Error).message);
     }
   };
 
@@ -230,7 +284,9 @@ export function NativeWorkspace() {
           <div className="grid gap-2">
             <input value={newTitle} onChange={(e) => setNewTitle(e.target.value)} placeholder="Title (optional)" className="h-8 px-2 rounded-lg text-[12px] outline-none" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)", color: "var(--fg-0)" }} />
             <div className="flex gap-2">
-              <input value={newWorkspace} onChange={(e) => setNewWorkspace(e.target.value)} onBlur={() => { const next = newWorkspace.trim() || "."; lastSavedWorkspaceRef.current = next; saveSettings({ ...loadSettings(), workspace: next }); }} onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} placeholder="workspace" className="flex-1 h-8 px-2 rounded-lg text-[12px] font-mono outline-none" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)", color: "var(--fg-0)" }} />
+              <button type="button" onClick={browseWorkspace} disabled={!isTauri()} className="flex-1 h-8 px-2 rounded-lg text-left text-[11px] font-mono truncate disabled:opacity-60" title="Choose native workspace folder" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)", color: "var(--fg-0)" }}>
+                {newWorkspace === "." ? "Choose workspace folder" : folderName(newWorkspace)}
+              </button>
               <input value={newAgent} onChange={(e) => setNewAgent(e.target.value)} placeholder="agent" className="w-20 h-8 px-2 rounded-lg text-[12px] outline-none" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)", color: "var(--fg-0)" }} />
             </div>
             <button onClick={onCreate} className="btn-grad h-8 rounded-lg text-[12px] font-medium" style={{ color: "white", border: "1px solid transparent" }}>
@@ -246,6 +302,35 @@ export function NativeWorkspace() {
               <span className="px-1.5 py-0.5 rounded" style={{ background: "var(--bg-3)", border: "1px solid var(--bg-4)" }}>langfuse: {health.data?.langfuse_enabled ? "on" : "off"}</span>
             </div>
           </div>
+          <div className="rounded-lg p-2.5 space-y-2" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)" }}>
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-semibold">Docker sandbox</span>
+              <span className="ml-auto text-[10px] font-mono" style={{ color: sandbox?.available ? "var(--success)" : "var(--warning)" }}>
+                {sandboxLoading && !sandbox ? "checking" : sandbox?.available ? "connected" : "unavailable"}
+              </span>
+              <button type="button" onClick={() => void refreshSandbox()} title="Refresh Docker sandbox status" className="h-6 w-6 rounded grid place-items-center text-[12px]" style={{ background: "var(--bg-3)", border: "1px solid var(--bg-4)", color: "var(--fg-1)" }}>↻</button>
+            </div>
+            <div className="text-[10px] font-mono truncate" style={{ color: "var(--fg-3)" }}>{sandbox?.image || sandbox?.reason || "Docker status is being checked"}</div>
+            {sandbox?.available ? (
+              <>
+                <div className="text-[10px]" style={{ color: "var(--fg-3)" }}>{sandbox.containers?.length || 0} active session container{sandbox.containers?.length === 1 ? "" : "s"}</div>
+                <div className="flex gap-1.5">
+                  <button type="button" onClick={() => void onCreateSandbox()} disabled={!selected || sandbox.containers?.some((container) => container.session_id === selected)} className="flex-1 h-7 rounded text-[10px] font-medium disabled:opacity-50" style={{ background: "var(--accent-soft)", border: "1px solid var(--accent-ring)", color: "var(--accent)" }}>
+                    {sandbox.containers?.some((container) => container.session_id === selected) ? "Container ready" : "Create for selected"}
+                  </button>
+                  <button type="button" onClick={() => void onDeleteSandbox()} disabled={!selected || !sandbox.containers?.some((container) => container.session_id === selected)} title="Stop selected session container" className="h-7 px-2 rounded text-[10px] disabled:opacity-50" style={{ background: "var(--bg-3)", border: "1px solid var(--bg-4)", color: "var(--danger)" }}>Delete</button>
+                </div>
+                {sandbox.containers?.map((container) => (
+                  <button key={`${container.session_id}:${container.container_id}`} type="button" onClick={() => setSelected(container.session_id)} className="w-full text-left rounded px-2 py-1.5" style={{ background: selected === container.session_id ? "var(--accent-soft)" : "var(--bg-3)", border: `1px solid ${selected === container.session_id ? "var(--accent-ring)" : "var(--bg-4)"}` }} title={container.workspace}>
+                    <div className="text-[10px] font-mono truncate" style={{ color: "var(--fg-1)" }}>{folderName(container.workspace)} · {container.container_id.slice(0, 12)}</div>
+                    <div className="text-[9px]" style={{ color: "var(--fg-3)" }}>session {container.session_id.slice(0, 16)}</div>
+                  </button>
+                ))}
+              </>
+            ) : (
+              <div className="text-[10px] leading-relaxed" style={{ color: "var(--fg-3)" }}>Start Docker Desktop and build the configured image before creating a session container.</div>
+            )}
+          </div>
         </div>
         <div className="flex-1 overflow-auto p-2 space-y-1">
           {sessions.map((s) => (
@@ -259,7 +344,7 @@ export function NativeWorkspace() {
               }}
             >
               <div className="text-[12px] font-medium truncate" style={{ color: "var(--fg-0)" }}>{s.title || s.id}</div>
-              <div className="text-[11px] font-mono truncate" style={{ color: "var(--fg-2)" }}>{s.id} · {s.agent} · {s.workspace}</div>
+              <div className="text-[11px] font-mono truncate" style={{ color: "var(--fg-2)" }}>{s.id} · {s.agent} · {folderName(s.workspace)}</div>
             </button>
           ))}
           {sessions.length === 0 && <div className="text-[11px] p-3" style={{ color: "var(--fg-3)" }}>No sessions — create one above (POST /native/sessions)</div>}
@@ -280,7 +365,7 @@ export function NativeWorkspace() {
             <div className="px-4 py-3 border-b flex flex-wrap gap-2 items-center" style={{ borderColor: "var(--bg-4)", background: "var(--bg-0)" }}>
               <div className="min-w-0">
                 <div className="text-[13px] font-semibold truncate">{selectedMeta?.title || selected}</div>
-                <div className="text-[11px] font-mono truncate" style={{ color: "var(--fg-2)" }}>{selected} · {selectedMeta?.workspace} · {selectedMeta?.agent} · {detail?.message_count ?? 0} msgs</div>
+                <div className="text-[11px] font-mono truncate" style={{ color: "var(--fg-2)" }}>{selected} · {selectedMeta?.workspace ? folderName(selectedMeta.workspace) : ""} · {selectedMeta?.agent} · {detail?.message_count ?? 0} msgs</div>
               </div>
               <div className="ml-auto flex flex-wrap gap-1.5">
                 <button onClick={onDelete} className="h-7 px-2.5 rounded-lg text-[11px] font-medium" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)", color: "var(--danger)" }}>DELETE /sessions/{"{id}"}</button>

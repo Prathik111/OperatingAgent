@@ -67,7 +67,144 @@ class InMemoryTaskRepository:
         self._approvals: dict[str, ApprovalRecord] = {}
         self._order = itertools.count()
         self._tools: dict[tuple[str, str], tuple[str, dict]] = {}
+        self._evaluations: dict[str, dict] = {}
 
+    async def get_evaluation_dashboard(self) -> dict:
+        runs = list(self._evaluations.values())
+        results = [result for run in runs for result in run["results"]]
+        scores = [score for result in results for score in result["scores"] if score.get("value") is not None]
+        correctness = [float(score["value"]) for score in scores if score.get("metric") == "correctness"]
+        metrics: dict[str, list[float]] = {}
+        for item in scores:
+            metrics.setdefault(item["metric"], []).append(float(item["value"]))
+        passed = sum(1 for result in results if result["success"])
+        tool_rates = [float(r["tool_success_rate"]) for r in results if r.get("tool_success_rate") is not None]
+        unique_cases = {(run["suite_id"], case_id) for run in runs for case_id in run["case_ids"]}
+        run_breakdown = [{
+                "id": run["id"], "suite": f'{run["name"]} v{run["version"]}', "track": run["track"],
+                "started_at": run["started_at"], "finished_at": run.get("finished_at"),
+                "result_count": len(run["results"]), "passed_count": sum(1 for r in run["results"] if r["success"]),
+                "pass_rate": (sum(1 for r in run["results"] if r["success"]) / len(run["results"])) if run["results"] else None,
+                "average_score": (sum(float(s["value"]) for r in run["results"] for s in r["scores"] if s.get("metric") == "correctness" and s.get("value") is not None) / max(1, sum(1 for r in run["results"] for s in r["scores"] if s.get("metric") == "correctness" and s.get("value") is not None))),
+                "avg_latency_ms": (sum(float(r.get("latency_ms", 0) or 0) for r in run["results"]) / len(run["results"])) if run["results"] else None,
+                "total_tokens": sum(int(r.get("total_tokens", 0) or 0) for r in run["results"]),
+                "total_cost": sum(float(r.get("cost", 0) or 0) for r in run["results"]),
+                "tool_success_rate": (sum(float(r["tool_success_rate"]) for r in run["results"] if r.get("tool_success_rate") is not None) / len([r for r in run["results"] if r.get("tool_success_rate") is not None])) if any(r.get("tool_success_rate") is not None for r in run["results"]) else None,
+                "status": "completed" if run.get("finished_at") else "running",
+            } for run in runs]
+        comparison = []
+        for track in ("native", "langgraph"):
+            candidates = [run for run in run_breakdown if run["track"] == track]
+            if not candidates:
+                continue
+            latest = max(candidates, key=lambda run: run["started_at"])
+            comparison.append({"track": track, **{key: latest.get(key) for key in ("id", "suite", "pass_rate", "average_score", "avg_latency_ms", "total_tokens", "total_cost", "tool_success_rate", "result_count", "status")}})
+        executions = []
+        for evaluation in sorted(runs, key=lambda run: run["started_at"], reverse=True):
+            case_keys = {
+                case_id: str(case.get("id") or case_id)
+                for case_id, case in zip(evaluation["case_ids"], evaluation["cases"])
+            }
+            for result in evaluation["results"]:
+                agent_run = self._runs.get(result["agent_run_id"])
+                if agent_run is None:
+                    continue
+                task = self._tasks.get(agent_run.task_id)
+                if task is None:
+                    continue
+                executions.append({
+                    "id": result["id"],
+                    "evaluation_run_id": evaluation["id"],
+                    "agent_run_id": agent_run.id,
+                    "task_id": task.id,
+                    "thread_id": task.thread_id,
+                    "suite": f'{evaluation["name"]} v{evaluation["version"]}',
+                    "track": evaluation["track"],
+                    "case_id": case_keys.get(result["case_id"], result["case_id"]),
+                    "goal": task.goal,
+                    "workspace": str(task.metadata.get("workspace") or ""),
+                    "status": agent_run.status.value,
+                    "output": agent_run.output,
+                    "error": agent_run.last_error,
+                    "success": bool(result["success"]),
+                    "created_at": task.created_at.isoformat(),
+                })
+        executions = executions[:100]
+        return {
+            "available": bool(runs),
+            "reason": None if runs else "Run an evaluation to populate this dashboard.",
+            "suites": len({run["suite_id"] for run in runs}),
+            "cases": len(unique_cases),
+            "runs": len(runs),
+            "results": len(results),
+            "pass_rate": passed / len(results) if results else None,
+            "average_score": sum(correctness) / len(correctness) if correctness else None,
+            "avg_latency_ms": sum(float(r.get("latency_ms", 0) or 0) for r in results) / len(results) if results else None,
+            "total_tokens": sum(int(r.get("total_tokens", 0)) for r in results) if results else None,
+            "total_cost": sum(float(r.get("cost", 0)) for r in results) if results else None,
+            "tool_success_rate": sum(tool_rates) / len(tool_rates) if tool_rates else None,
+            "metrics": [{"metric": key, "average": sum(values) / len(values), "count": len(values)} for key, values in sorted(metrics.items())],
+            "run_breakdown": run_breakdown,
+            "comparison": comparison,
+            "executions": executions,
+            "sources": {"database": True, "langfuse": False},
+        }
+
+    async def create_evaluation_run(self, name: str, version: str, track: str, cases: list[dict]) -> dict:
+        run_id, suite_id = str(uuid4()), str(uuid4())
+        # Reuse the logical suite/case identity for repeated benchmark runs.
+        # PostgreSQL enforces this with unique constraints; the memory/SQLite
+        # backends mirror that behavior so the dashboard does not inflate the
+        # suite and case totals every time the same comparison is rerun.
+        existing = next(
+            (run for run in self._evaluations.values()
+             if run["name"] == name and run["version"] == version),
+            None,
+        )
+        if existing is not None and len(existing.get("cases", [])) == len(cases):
+            suite_id = existing["suite_id"]
+            case_ids = list(existing["case_ids"])
+        else:
+            case_ids = [str(uuid4()) for _ in cases]
+        self._evaluations[run_id] = {"id": run_id, "suite_id": suite_id, "name": name, "version": version, "track": track, "case_ids": case_ids, "cases": cases, "results": [], "started_at": datetime.now(UTC).isoformat(), "finished_at": None}
+        return {"id": run_id, "suite_id": suite_id, "case_ids": case_ids}
+
+    async def save_evaluation_result(self, evaluation_run_id: str, suite_id: str, case_id: str, agent_run_id: str, success: bool, failure_reason: str | None) -> str:
+        result_id = str(uuid4())
+        self._evaluations[evaluation_run_id]["results"].append({"id": result_id, "case_id": case_id, "agent_run_id": agent_run_id, "success": success, "failure_reason": failure_reason, "scores": []})
+        return result_id
+
+    async def save_evaluation_score(self, result_id: str, metric: str, value: float | None, unit: str | None = None, comment: str | None = None) -> None:
+        for run in self._evaluations.values():
+            for result in run["results"]:
+                if result["id"] == result_id:
+                    result["scores"].append({"metric": metric, "value": value, "unit": unit, "comment": comment})
+                    if metric == "latency":
+                        result["latency_ms"] = value
+                    elif metric == "tokens":
+                        result["total_tokens"] = value
+                    elif metric == "cost":
+                        result["cost"] = value
+                    elif metric == "tool_success":
+                        result["tool_success_rate"] = value
+                    return
+
+    async def finish_evaluation_run(self, evaluation_run_id: str) -> None:
+        self._evaluations[evaluation_run_id]["finished_at"] = datetime.now(UTC).isoformat()
+
+    async def get_run_metrics(self, run_id: str) -> dict:
+        run = self._runs[run_id]
+        tool_total = len(run.tool_calls)
+        succeeded = sum(1 for call in run.tool_calls if call.success is True)
+        return {
+            "latency_ms": run.metadata.get("duration_ms"),
+            "llm_calls": len(run.llm_calls),
+            "tool_calls": tool_total,
+            "tool_calls_succeeded": succeeded,
+            "tool_success_rate": succeeded / tool_total if tool_total else None,
+            "total_tokens": sum((call.prompt_tokens or 0) + (call.completion_tokens or 0) for call in run.llm_calls),
+            "cost": sum((float(call.cost) if call.cost is not None else 0.0) for call in run.llm_calls),
+        }
     async def save_task(self, task: AgentTask) -> None:
         task.created_at = _utc(task.created_at)
         self._tasks[task.id] = task
@@ -287,6 +424,7 @@ class InMemoryTaskRepository:
         run.output = result.output
         run.last_error = result.metadata.get("error")
         run.metadata.update(result.metadata)
+        run.metadata["duration_ms"] = result.duration_ms
 
     async def update_task_status(self, task_id: str, status: TaskStatus) -> None:
         self._task_status[task_id] = status

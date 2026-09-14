@@ -5,9 +5,12 @@ import type {
   EnvironmentResponse,
   EventResponse,
   HealthResponse,
+  EvaluationDashboard,
+  StartEvaluationResponse,
   NativeHealthResponse,
   PermissionResponse,
   RunResponse,
+  SandboxContainerResponse,
   SandboxStatusResponse,
   SessionResponse,
   SessionWithRunsResponse,
@@ -87,6 +90,13 @@ export const nativeApi = {
     `${apiBase()}/native/sessions/${encodeURIComponent(sessionId)}/events?from=${from}&stream=${stream}`,
 
   getSandbox: () => req<SandboxStatusResponse>("/native/sandbox"),
+  createSandboxContainer: (sessionId: string) =>
+    req<SandboxContainerResponse>("/native/sandbox/containers", {
+      method: "POST",
+      body: JSON.stringify({ session_id: sessionId }),
+    }),
+  deleteSandboxContainer: (sessionId: string) =>
+    req<{ session_id: string; deleted: number }>(`/native/sandbox/containers/${encodeURIComponent(sessionId)}`, { method: "DELETE" }),
   getEnvironment: () => req<EnvironmentResponse>("/native/environment"),
 
   listRuns: (sessionId: string) => req<RunResponse[]>(`/native/sessions/${encodeURIComponent(sessionId)}/runs`),
@@ -115,6 +125,9 @@ export const nativeApi = {
 // ——— Task / LangGraph ———
 export const taskApi = {
   health: () => req<HealthResponse>("/health"),
+  evaluationDashboard: () => req<EvaluationDashboard>("/evaluations/dashboard"),
+  startEvaluation: (body: { name: string; version: string; tracks: Array<"native" | "langgraph">; cases: Array<{ id: string; goal: string; working_directory?: string; expected_output_contains?: string; metadata?: Record<string, unknown> }> }) =>
+    req<StartEvaluationResponse>("/evaluations/runs", { method: "POST", body: JSON.stringify(body) }),
 
   createTask: (body: CreateTaskRequest) =>
     req<TaskResponse>("/tasks", { method: "POST", body: JSON.stringify(body) }),

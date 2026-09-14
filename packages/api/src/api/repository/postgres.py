@@ -45,6 +45,260 @@ class PostgresTaskRepository:
     def __init__(self, pool: AsyncConnectionPool[Any]) -> None:
         self._pool = pool
 
+    async def create_evaluation_run(self, name: str, version: str, track: str, cases: list[dict]) -> dict:
+        import uuid
+        suite_id, run_id = str(uuid.uuid4()), str(uuid.uuid4())
+        case_ids = [str(uuid.uuid4()) for _ in cases]
+        async with self._pool.connection() as conn, conn.transaction(), conn.cursor() as cur:
+            await cur.execute("INSERT INTO evaluation_suites (id, name, version) VALUES (%s, %s, %s) ON CONFLICT (name, version) DO UPDATE SET description = evaluation_suites.description RETURNING id", (suite_id, name, version))
+            row = await cur.fetchone()
+            suite_id = str(row[0]) if row else suite_id
+            for case_id, case in zip(case_ids, cases):
+                await cur.execute("INSERT INTO evaluation_cases (id, suite_id, case_key, goal, expected_outcome, metadata) VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT (suite_id, case_key) DO UPDATE SET goal = EXCLUDED.goal RETURNING id", (case_id, suite_id, str(case.get("id") or case_id), str(case.get("goal") or ""), str(case.get("expected_output_contains") or "") or None, Jsonb(dict(case.get("metadata") or {}))))
+                case_row = await cur.fetchone()
+                if case_row:
+                    case_ids[case_ids.index(case_id)] = str(case_row[0])
+            await cur.execute("INSERT INTO evaluation_runs (id, suite_id, track) VALUES (%s, %s, %s::agent_track)", (run_id, suite_id, track))
+        return {"id": run_id, "suite_id": suite_id, "case_ids": case_ids}
+
+    async def save_evaluation_result(self, evaluation_run_id: str, suite_id: str, case_id: str, agent_run_id: str, success: bool, failure_reason: str | None) -> str:
+        import uuid
+        result_id = str(uuid.uuid4())
+        async with self._pool.connection() as conn, conn.cursor() as cur:
+            await cur.execute("INSERT INTO evaluation_results (id, evaluation_run_id, case_id, suite_id, agent_run_id, success, failure_reason) VALUES (%s, %s, %s, %s, %s, %s, %s)", (result_id, evaluation_run_id, case_id, suite_id, agent_run_id, success, failure_reason))
+        return result_id
+
+    async def save_evaluation_score(self, result_id: str, metric: str, value: float | None, unit: str | None = None, comment: str | None = None) -> None:
+        async with self._pool.connection() as conn, conn.cursor() as cur:
+            await cur.execute("INSERT INTO evaluation_scores (result_id, metric, value, unit, comment) VALUES (%s, %s, %s, %s, %s) ON CONFLICT (result_id, metric) DO UPDATE SET value = EXCLUDED.value, unit = EXCLUDED.unit, comment = EXCLUDED.comment", (result_id, metric, value, unit, comment))
+
+    async def finish_evaluation_run(self, evaluation_run_id: str) -> None:
+        async with self._pool.connection() as conn, conn.cursor() as cur:
+            await cur.execute("UPDATE evaluation_runs SET finished_at = now() WHERE id = %s", (evaluation_run_id,))
+
+    async def get_run_metrics(self, run_id: str) -> dict:
+        async with self._pool.connection() as conn, conn.cursor() as cur:
+            await cur.execute("SELECT latency_ms, llm_calls, tool_calls, tool_calls_succeeded, total_tokens, cost FROM v_run_metrics_extended WHERE run_id = %s", (run_id,))
+            row = await cur.fetchone()
+        if not row:
+            return {}
+        latency, llm_calls, tool_calls, succeeded, tokens, cost = row
+        return {
+            "latency_ms": float(latency) if latency is not None else None,
+            "llm_calls": int(llm_calls or 0),
+            "tool_calls": int(tool_calls or 0),
+            "tool_calls_succeeded": int(succeeded or 0),
+            "tool_success_rate": (float(succeeded) / float(tool_calls)) if tool_calls else None,
+            "total_tokens": int(tokens) if tokens is not None else None,
+            "cost": float(cost) if cost is not None else None,
+        }
+
+    async def get_evaluation_dashboard(self) -> dict:
+        """Aggregate the normalized evaluation tables for the desktop UI."""
+        suites_sql = "SELECT count(*) FROM evaluation_suites"
+        cases_sql = "SELECT count(*) FROM evaluation_cases"
+        runs_sql = "SELECT count(*) FROM evaluation_runs"
+        results_sql = "SELECT count(*) FROM evaluation_results"
+        overall_sql = """
+            SELECT
+                count(DISTINCT er.id) FILTER (WHERE er.success) AS passed,
+                count(DISTINCT er.id) AS total,
+                avg(es.value) FILTER (WHERE es.metric = 'correctness') AS average_score
+            FROM evaluation_results er
+            LEFT JOIN evaluation_scores es ON es.result_id = er.id
+        """
+        operational_sql = """
+            SELECT
+                avg(metrics.latency_ms),
+                sum(metrics.total_tokens),
+                sum(metrics.cost),
+                CASE WHEN sum(metrics.tool_calls) > 0
+                     THEN sum(metrics.tool_calls_succeeded)::numeric / sum(metrics.tool_calls)
+                     ELSE NULL END
+            FROM evaluation_results result
+            JOIN v_run_metrics_extended metrics ON metrics.run_id = result.agent_run_id
+        """
+        metrics_sql = """
+            SELECT es.metric, avg(es.value), count(*)
+            FROM evaluation_scores es
+            GROUP BY es.metric
+            ORDER BY es.metric
+        """
+        runs_breakdown_sql = """
+            SELECT
+                erun.id,
+                suite.name,
+                suite.version,
+                erun.track::text,
+                erun.started_at,
+                erun.finished_at,
+                count(DISTINCT result.id) AS result_count,
+                count(DISTINCT result.id) FILTER (WHERE result.success) AS passed_count,
+                avg(score.value) FILTER (WHERE score.metric = 'correctness') AS average_score,
+                run_metrics.avg_latency_ms,
+                run_metrics.total_tokens,
+                run_metrics.total_cost,
+                run_metrics.tool_success_rate
+            FROM evaluation_runs erun
+            JOIN evaluation_suites suite ON suite.id = erun.suite_id
+            LEFT JOIN evaluation_results result ON result.evaluation_run_id = erun.id
+            LEFT JOIN evaluation_scores score ON score.result_id = result.id
+            LEFT JOIN (
+                SELECT evaluation_run_id,
+                       avg(metrics.latency_ms) AS avg_latency_ms,
+                       sum(metrics.total_tokens) AS total_tokens,
+                       sum(metrics.cost) AS total_cost,
+                       CASE WHEN sum(metrics.tool_calls) > 0
+                            THEN sum(metrics.tool_calls_succeeded)::numeric / sum(metrics.tool_calls)
+                            ELSE NULL END AS tool_success_rate
+                FROM evaluation_results result
+                JOIN v_run_metrics_extended metrics ON metrics.run_id = result.agent_run_id
+                GROUP BY evaluation_run_id
+            ) run_metrics ON run_metrics.evaluation_run_id = erun.id
+            GROUP BY erun.id, suite.name, suite.version, erun.track,
+                     erun.started_at, erun.finished_at,
+                     run_metrics.avg_latency_ms, run_metrics.total_tokens,
+                     run_metrics.total_cost, run_metrics.tool_success_rate
+            ORDER BY erun.started_at DESC
+            LIMIT 100
+        """
+        executions_sql = """
+            SELECT
+                result.id,
+                erun.id,
+                agent_run.id,
+                task.id,
+                task.thread_id,
+                suite.name,
+                suite.version,
+                erun.track::text,
+                evaluation_case.case_key,
+                task.goal,
+                task.metadata->>'workspace',
+                agent_run.status::text,
+                agent_run.output,
+                agent_run.last_error,
+                result.success,
+                task.created_at
+            FROM evaluation_results result
+            JOIN evaluation_runs erun ON erun.id = result.evaluation_run_id
+            JOIN evaluation_suites suite ON suite.id = erun.suite_id
+            JOIN evaluation_cases evaluation_case ON evaluation_case.id = result.case_id
+            JOIN agent_runs agent_run ON agent_run.id = result.agent_run_id
+            JOIN agent_tasks task ON task.id = agent_run.task_id
+            ORDER BY erun.started_at DESC, task.created_at DESC
+            LIMIT 100
+        """
+        try:
+            async with self._pool.connection() as conn, conn.cursor() as cur:
+                async def scalar(statement: str) -> int:
+                    await cur.execute(statement)
+                    row = await cur.fetchone()
+                    return int(row[0] or 0) if row else 0
+
+                suites = await scalar(suites_sql)
+                cases = await scalar(cases_sql)
+                runs = await scalar(runs_sql)
+                results = await scalar(results_sql)
+                await cur.execute(overall_sql)
+                overall = await cur.fetchone() or (0, 0, None)
+                await cur.execute(operational_sql)
+                operational = await cur.fetchone() or (None, None, None, None)
+                await cur.execute(metrics_sql)
+                metric_rows = await cur.fetchall()
+                await cur.execute(runs_breakdown_sql)
+                run_rows = await cur.fetchall()
+                await cur.execute(executions_sql)
+                execution_rows = await cur.fetchall()
+        except Exception:  # noqa: BLE001 - desktop fallback spans DB driver failures
+            # A desktop API can run on SQLite/memory or against an older schema.
+            # Surface that state to the UI instead of turning the whole app 500.
+            return {
+                "available": False,
+                "reason": "Evaluation tables are not available in the configured database.",
+                "suites": 0,
+                "cases": 0,
+                "runs": 0,
+                "results": 0,
+                "pass_rate": None,
+                "average_score": None,
+                "avg_latency_ms": None,
+                "total_tokens": None,
+                "total_cost": None,
+                "tool_success_rate": None,
+                "metrics": [],
+                "run_breakdown": [],
+                "executions": [],
+                "sources": {"database": False, "langfuse": False},
+            }
+
+        passed, total, average_score = overall
+        avg_latency_ms, total_tokens, total_cost, tool_success_rate = operational
+        return {
+            "available": True,
+            "reason": None,
+            "suites": suites,
+            "cases": cases,
+            "runs": runs,
+            "results": results,
+            "pass_rate": (float(passed) / float(total)) if total else None,
+            "average_score": float(average_score) if average_score is not None else None,
+            "avg_latency_ms": float(avg_latency_ms) if avg_latency_ms is not None else None,
+            "total_tokens": int(total_tokens) if total_tokens is not None else None,
+            "total_cost": float(total_cost) if total_cost is not None else None,
+            "tool_success_rate": float(tool_success_rate) if tool_success_rate is not None else None,
+            "metrics": [
+                {"metric": metric, "average": float(avg) if avg is not None else None, "count": int(count)}
+                for metric, avg, count in metric_rows
+            ],
+            "run_breakdown": [
+                {
+                    "id": str(run_id),
+                    "suite": f"{name} v{version}",
+                    "track": track,
+                    "started_at": started_at,
+                    "finished_at": finished_at,
+                    "result_count": int(result_count),
+                    "passed_count": int(passed_count),
+                    "pass_rate": (float(passed_count) / float(result_count)) if result_count else None,
+                    "average_score": float(avg) if avg is not None else None,
+                    "avg_latency_ms": float(latency) if latency is not None else None,
+                    "total_tokens": int(tokens) if tokens is not None else None,
+                    "total_cost": float(cost) if cost is not None else None,
+                    "tool_success_rate": float(tool_success) if tool_success is not None else None,
+                    "status": "completed" if finished_at is not None else "running",
+                }
+                for run_id, name, version, track, started_at, finished_at,
+                result_count, passed_count, avg, latency, tokens, cost, tool_success in run_rows
+            ],
+            "comparison": [],
+            "executions": [
+                {
+                    "id": str(result_id),
+                    "evaluation_run_id": str(evaluation_run_id),
+                    "agent_run_id": str(agent_run_id),
+                    "task_id": str(task_id),
+                    "thread_id": thread_id,
+                    "suite": f"{name} v{version}",
+                    "track": track,
+                    "case_id": case_key,
+                    "goal": goal,
+                    "workspace": workspace or "",
+                    "status": status,
+                    "output": output,
+                    "error": error,
+                    "success": bool(success),
+                    "created_at": created_at,
+                }
+                for (
+                    result_id, evaluation_run_id, agent_run_id, task_id, thread_id,
+                    name, version, track, case_key, goal, workspace, status,
+                    output, error, success, created_at,
+                ) in execution_rows
+            ],
+            "sources": {"database": True, "langfuse": False},
+        }
+
     async def create_thread(self, thread_id: str, title: str | None = None) -> ThreadRecord:
         async with (
             self._pool.connection() as conn,

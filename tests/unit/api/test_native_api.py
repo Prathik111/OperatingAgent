@@ -607,6 +607,7 @@ async def test_native_sandbox_reports_live_probe(native_client) -> None:
             "image": "test-image:1",
             "status": "sandbox: on - Docker container (test-image:1)",
             "reason": "",
+            "containers": [],
         }
         # Probed fresh on every call: starting Docker flips this with no restart.
         second = await client.get("/native/sandbox")

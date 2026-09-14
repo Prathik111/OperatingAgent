@@ -73,10 +73,39 @@ start a separate HTTP MCP process for normal API use.
 | `AGENT_REQUIRE_VERIFICATION` / `AGENT_REQUIRE_HUMAN_APPROVAL` | `false` / `true` | semantic verification and approval gates |
 | `AGENT_CHECKPOINT_BACKEND` / `AGENT_CHECKPOINT_NAMESPACE` | `auto` / `default` | checkpoint storage and namespace |
 | `AGENT_SANDBOX_ENABLED` / `AGENT_WORKSPACE` | `true` / `./workspace` | filesystem tool confinement |
+| `AGENT_SANDBOX_IMAGE` | `operating-agent-sandbox:py312` | Docker image used for terminal tools |
 | `AGENT_PERMISSION_*` | `true` | category switches for filesystem, terminal, git, search, knowledge, and memory tools |
 
 Langfuse tracing follows the shared `observability` package: it is enabled only
 when both `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` are present.
+
+## Enable the Docker sandbox
+
+The sandbox is enabled by default for both agent tracks, but Docker Desktop and
+the project image must be available to the API process. From the repository
+root, run:
+
+```powershell
+docker desktop start
+docker build -t operating-agent-sandbox:py312 .\infra\sandbox-images
+New-Item -ItemType Directory -Force .\workspace
+```
+
+In `.env`, keep these values (or point them at an existing directory and a
+custom image):
+
+```dotenv
+AGENT_SANDBOX_ENABLED=true
+AGENT_WORKSPACE=./workspace
+AGENT_SANDBOX_IMAGE=operating-agent-sandbox:py312
+```
+
+Restart `uv run api` after changing environment values. The desktop Settings
+panel polls `GET /native/sandbox`; it should show the image and `sandbox: on`.
+Terminal commands are then executed in a disposable container with the chosen
+workspace mounted at `/workspace`, no network, a read-only root filesystem,
+and the configured resource limits. If Docker or the image is unavailable, the
+command fails closed instead of running on the host.
 
 ## HTTP security
 

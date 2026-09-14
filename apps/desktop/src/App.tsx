@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { AgentSelect } from "./components/AgentSelect";
 import { ChatWorkspace } from "./components/chat/ChatWorkspace";
 import { SettingsModal, loadSettings, type DesktopSettings } from "./components/SettingsModal";
+import { EvaluationView } from "./components/evaluation/EvaluationView";
 
 type AgentTrack = "native" | "langgraph";
 const STORAGE_KEY = "operating-agent:track";
@@ -52,6 +53,7 @@ export default function App() {
   const [track, setTrack] = useState<AgentTrack>(persisted || "native");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settings, setSettings] = useState<DesktopSettings>(loadSettings);
+  const [view, setView] = useState<"workspace" | "evaluation">("workspace");
 
   useEffect(() => {
     if (persisted) {
@@ -90,11 +92,17 @@ export default function App() {
 
   return (
     <div className="h-[100vh] flex flex-col overflow-hidden" style={{ background: "var(--bg-0)", color: "var(--fg-0)" }}>
-      <ChatWorkspace
-        track={track}
-        onOpenSettings={() => setSettingsOpen(true)}
-        onBackToPicker={handleBackToPicker}
-      />
+      <div className="h-10 shrink-0 flex items-center gap-1 px-3 border-b" style={{ borderColor: "var(--bg-4)", background: "var(--bg-1)" }}>
+        <span className="text-[11px] font-semibold tracking-wide mr-3" style={{ color: "var(--fg-1)" }}>OperatingAgent</span>
+        <button onClick={() => setView("workspace")} className="h-7 px-3 rounded-lg text-[11px] font-medium" style={{ background: view === "workspace" ? "var(--accent-grad)" : "var(--bg-2)", color: view === "workspace" ? "white" : "var(--fg-2)", border: "1px solid var(--bg-4)" }}>Workspace</button>
+        <button onClick={() => setView("evaluation")} className="h-7 px-3 rounded-lg text-[11px] font-medium" style={{ background: view === "evaluation" ? "var(--accent-grad)" : "var(--bg-2)", color: view === "evaluation" ? "white" : "var(--fg-2)", border: "1px solid var(--bg-4)" }}>Evaluate</button>
+        <span className="ml-auto text-[10px] font-mono" style={{ color: "var(--fg-3)" }}>{track}</span>
+      </div>
+      {view === "evaluation" ? <EvaluationView /> : <ChatWorkspace
+          track={track}
+          onOpenSettings={() => setSettingsOpen(true)}
+          onBackToPicker={handleBackToPicker}
+        />}
       {settingsOpen && <SettingsModal track={track} onClose={() => setSettingsOpen(false)} onSaved={(next) => setSettings(next)} />}
     </div>
   );

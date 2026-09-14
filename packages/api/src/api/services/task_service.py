@@ -21,6 +21,7 @@ from common.agent import AgentRunResult, AgentTask
 from common.enums import AgentTrack, RunStatus, TaskStatus
 from common.events import AgentEvent, LLMCallRecord, ToolCallRecord
 from common.interfaces import IAgentOrchestrator
+from observability import fetch_trace_metrics, get_client
 
 from ..config import ApiSettings
 from ..errors import TaskAlreadyRunning, TaskNotInThread, ThreadNotFound, UnknownTrack
@@ -94,6 +95,41 @@ class TaskService:
     def execution_owner(self) -> str:
         """This process's execution-claim token (see ``recover_stale_executions``)."""
         return self._execution_owner
+
+    async def evaluation_dashboard(self) -> dict:
+        """Return repository-backed evaluation aggregates for API consumers."""
+        getter = getattr(self._repo, "get_evaluation_dashboard", None)
+        if not callable(getter):
+            return {
+                "available": False,
+                "reason": "Evaluation data is unavailable for this repository backend.",
+                "suites": 0,
+                "cases": 0,
+                "runs": 0,
+                "results": 0,
+                "pass_rate": None,
+                "average_score": None,
+                "avg_latency_ms": None,
+                "total_tokens": None,
+                "total_cost": None,
+                "tool_success_rate": None,
+                "metrics": [],
+                "run_breakdown": [],
+                "comparison": [],
+                "sources": {"database": False, "langfuse": False},
+            }
+        data = await getter()
+        if not data.get("comparison"):
+            latest_by_track: dict[str, dict] = {}
+            for run in data.get("run_breakdown") or []:
+                track = str(run.get("track") or "")
+                if track and (track not in latest_by_track or str(run.get("started_at", "")) > str(latest_by_track[track].get("started_at", ""))):
+                    latest_by_track[track] = run
+            data["comparison"] = [{"track": track, **{key: run.get(key) for key in ("id", "suite", "pass_rate", "average_score", "avg_latency_ms", "total_tokens", "total_cost", "tool_success_rate", "result_count", "status")}} for track, run in latest_by_track.items()]
+        sources = dict(data.get("sources") or {})
+        sources["langfuse"] = get_client() is not None
+        data["sources"] = sources
+        return data
 
     async def recover_stale_executions(self) -> list[str]:
         """Reap runs left non-terminal by a dead process.
@@ -193,6 +229,8 @@ class TaskService:
         thread_id: str | None = None,
         metadata: dict[str, Any] | None = None,
         workspace: str | None = None,
+        *,
+        _require_existing_thread: bool = False,
     ) -> AgentTask:
         resolved_track = track or self._settings.default_track
         if resolved_track not in self._orchestrators:
@@ -218,6 +256,8 @@ class TaskService:
                     )
                     continuing_thread = bool(existing_tasks)
                 except ThreadNotFound:
+                    if _require_existing_thread:
+                        raise
                     # ``save_task`` creates a new thread in the Postgres backend;
                     # an unknown explicit id therefore represents its first turn.
                     continuing_thread = False
@@ -281,18 +321,18 @@ class TaskService:
         workspace: str | None = None,
     ) -> AgentTask:
         """Create a new turn in an existing thread after ownership validation."""
-        existing = await self._repo.list_tasks_by_thread(thread_id, limit=1, offset=0)
-        if workspace is None and existing:
-            previous = existing[0][0].metadata
-            workspace = str(
-                previous.get("workspace") or previous.get("working_directory") or ""
-            ) or None
+        # Do not inspect the repository before create_task claims the
+        # per-thread lifecycle lock. A concurrent delete could otherwise pass
+        # this read and remove the thread before the task is persisted. The
+        # locked create_task path performs the same workspace inheritance and
+        # validation atomically.
         return await self.create_task(
             goal=goal,
             track=track,
             thread_id=thread_id,
             metadata=metadata,
             workspace=workspace,
+            _require_existing_thread=True,
         )
 
     async def resume_task(
@@ -463,10 +503,89 @@ class TaskService:
         while self._background:
             await asyncio.gather(*list(self._background), return_exceptions=True)
 
+    async def start_evaluation(self, *, name: str, version: str, tracks: list[AgentTrack], cases: list[dict[str, Any]]) -> list[str]:
+        """Start a persisted benchmark run for each selected track."""
+        if not cases:
+            raise ValueError("evaluation requires at least one case")
+        evaluation_ids: list[str] = []
+        for track in tracks:
+            if track not in self._orchestrators:
+                raise UnknownTrack(track.value)
+            record = await self._repo.create_evaluation_run(name, version, track.value, cases)
+            evaluation_ids.append(str(record["id"]))
+            task = asyncio.create_task(self._execute_evaluation(record, track, cases))
+            self._background.add(task)
+            task.add_done_callback(self._background.discard)
+        return evaluation_ids
+
+    async def _execute_evaluation(self, record: dict[str, Any], track: AgentTrack, cases: list[dict[str, Any]]) -> None:
+        try:
+            for index, case in enumerate(cases):
+                # Evaluation requests do not travel through ``create_task``,
+                # so they must perform the same workspace normalization here.
+                # Native sessions are listed by exact, absolute workspace; a
+                # literal "." would create a real transcript that the desktop
+                # can never find under its resolved workspace filter.
+                workspace = resolve_workspace(
+                    str(case.get("working_directory") or ""),
+                    default=self._settings.sandbox_workspace,
+                )
+                task = AgentTask(
+                    id=str(uuid4()),
+                    goal=str(case.get("goal", "")),
+                    thread_id=f"evaluation-{record['id']}-{index}",
+                    track=track,
+                    metadata={
+                        **dict(case.get("metadata") or {}),
+                        "workspace": workspace,
+                        "working_directory": workspace,
+                        "evaluation_run_id": record["id"],
+                        "evaluation_suite": f"{record.get('name', 'evaluation')} v{record.get('version', '1')}",
+                        "evaluation_case_id": str(case.get("id") or record["case_ids"][index]),
+                        "title": f"Evaluation · {record.get('name', 'suite')} · {case.get('id') or index + 1}",
+                    },
+                )
+                await self._repo.save_task(task)
+                agent_run_id = await self._repo.create_run(task.id, self._settings.build_agent_config(track), {"evaluation_run_id": record["id"]})
+                await self._run(task, agent_run_id)
+                summary = await self._repo.get_latest_run(task.id)
+                run_metrics = await self._repo.get_run_metrics(agent_run_id)
+                # Native runs carry provider usage on AgentRunResult metadata,
+                # while LangGraph usage may arrive through persisted llm_call
+                # rows or Langfuse. Keep the repository values authoritative,
+                # but fill gaps from the terminal receipt so evaluations do not
+                # report empty metrics on the desktop backend.
+                metadata = dict(summary.metadata if summary else {})
+                fallback_metrics = {
+                    "latency_ms": metadata.get("duration_ms"),
+                    "total_tokens": metadata.get("total_tokens"),
+                    "cost": metadata.get("cost"),
+                    "tool_calls": metadata.get("tool_calls"),
+                }
+                for key, value in fallback_metrics.items():
+                    if run_metrics.get(key) is None and value is not None:
+                        run_metrics[key] = value
+                trace_id = str(metadata.get("langfuse_trace_id") or metadata.get("trace_id") or "")
+                if trace_id:
+                    run_metrics = {**run_metrics, **{key: value for key, value in (await fetch_trace_metrics(trace_id)).items() if value is not None}}
+                output = (summary.output if summary else None) or ""
+                expected = str(case.get("expected_output_contains") or "").lower()
+                success = bool(output) and (not expected or expected in output.lower()) and bool(summary and summary.status is RunStatus.COMPLETED)
+                result_id = await self._repo.save_evaluation_result(record["id"], record["suite_id"], record["case_ids"][index], agent_run_id, success, None if success else (summary.error if summary else "run failed"))
+                await self._repo.save_evaluation_score(result_id, "correctness", 1.0 if success else 0.0, "ratio", "Expected output and completed-run check")
+                await self._repo.save_evaluation_score(result_id, "latency", run_metrics.get("latency_ms"), "ms", "Measured agent run latency")
+                await self._repo.save_evaluation_score(result_id, "tokens", run_metrics.get("total_tokens"), "tokens", "Provider-reported token usage")
+                await self._repo.save_evaluation_score(result_id, "cost", run_metrics.get("cost"), "usd", "Provider-reported generation cost")
+                if run_metrics.get("tool_success_rate") is not None:
+                    await self._repo.save_evaluation_score(result_id, "tool_success", run_metrics["tool_success_rate"], "ratio", "Successful tool calls / tool calls")
+        finally:
+            await self._repo.finish_evaluation_run(record["id"])
+
     # -- background run ----------------------------------------------------
 
     async def _run(self, task: AgentTask, run_id: str) -> None:
         sequence = itertools.count()
+        phase_sequence = itertools.count()
 
         # A resumed attempt can reuse successful side-effecting tool results
         # recorded by an earlier attempt. This is intentionally event-based so
@@ -496,16 +615,37 @@ class TaskService:
                 await self._repo.save_llm_call(
                     run_id, LLMCallRecord.from_payload(event.payload)
                 )
-            elif event.type == "tool_call":
-                await self._repo.save_tool_call(
-                    run_id, ToolCallRecord.from_payload(event.payload)
-                )
+            elif event.type in {"tool_call", "tool_finished"}:
+                # Both orchestrators expose completed calls as tool_finished;
+                # native payloads call the field `name`, LangGraph calls it
+                # `tool`. Persisting at completion gives the SQL view a concrete
+                # success value and avoids counting the start event twice.
+                payload = dict(event.payload)
+                payload["tool_name"] = str(payload.get("tool_name") or payload.get("tool") or payload.get("name") or "unknown_tool")
+                payload.setdefault("arguments", payload.get("args") or {})
+                await self._repo.save_tool_call(run_id, ToolCallRecord.from_payload(payload))
             elif event.type == "phase_entered":
                 await self._repo.save_phase(run_id, event.payload)
             elif event.type == "phase_exited":
                 await self._repo.close_phase(run_id, event.payload)
             elif event.type == "plan_created":
-                await self._repo.save_plan(run_id, event.payload)
+                # Planner events intentionally carry a portable plan shape, but
+                # the normalized tables also require a phase FK and revision.
+                # Materialize the missing phase here so observability cannot
+                # fail with a bare `phase_id` KeyError.
+                plan_payload = dict(event.payload)
+                if not plan_payload.get("phase_id"):
+                    phase_id = await self._repo.save_phase(
+                        run_id,
+                        {
+                            "sequence": next(phase_sequence),
+                            "phase": str(plan_payload.get("phase") or "investigate"),
+                            "entry_reason": "planner emitted plan",
+                        },
+                    )
+                    plan_payload["phase_id"] = phase_id
+                plan_payload.setdefault("revision", int(plan_payload.get("sequence", 0) or 0))
+                await self._repo.save_plan(run_id, plan_payload)
             elif event.type == "finding_recorded":
                 await self._repo.save_finding(run_id, event.payload)
             elif event.type == "verification_recorded":

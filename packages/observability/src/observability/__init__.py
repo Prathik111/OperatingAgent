@@ -14,7 +14,9 @@ from .client import (
     get_callback_handler,
     get_client,
     get_trace_url,
+    fetch_trace_metrics,
     init_tracing,
+    reload_tracing,
     shutdown,
 )
 from .masking import mask
@@ -26,7 +28,9 @@ __all__ = [
     "get_callback_handler",
     "get_client",
     "get_trace_url",
+    "fetch_trace_metrics",
     "init_tracing",
+    "reload_tracing",
     "mask",
     "shutdown",
 ]

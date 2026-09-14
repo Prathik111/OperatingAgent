@@ -4,6 +4,7 @@ import type { ApprovalResponse, HealthResponse, TaskResponse, ThreadEventRespons
 import { formatLocalDateTime } from "../../lib/time";
 import { loadSettings, saveSettings } from "../SettingsModal";
 import { Card, Label } from "../layout/Shell";
+import { folderName, isTauri, pickDirectory } from "../../lib/pickFolder";
 
 function useHealth() {
   const [data, setData] = useState<HealthResponse | null>(null);
@@ -51,6 +52,16 @@ export function LangGraphWorkspace() {
   }, [workspace]);
   const [streamLog, setStreamLog] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState<"tasks" | "events" | "approvals" | "stream">("tasks");
+  const browseWorkspace = async () => {
+    const dir = await pickDirectory(workspace);
+    if (!dir) return;
+    setWorkspace(dir);
+    saveSettings({ ...loadSettings(), workspace: dir });
+    setSelectedThread(null);
+    setSelectedTask(null);
+    setTasks([]);
+    setThreadEvents([]);
+  };
 
   const refreshThreads = useCallback(async () => {
     try {
@@ -218,7 +229,9 @@ export function LangGraphWorkspace() {
                 <option value="langgraph">langgraph</option>
                 <option value="native">native</option>
               </select>
-              <input value={workspace} onChange={(e) => { const next = e.target.value; setWorkspace(next); saveSettings({ ...loadSettings(), workspace: next || "." }); }} placeholder="workspace" className="flex-1 h-8 px-2 rounded-lg text-[11px] font-mono outline-none" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)" }} />
+              <button type="button" onClick={browseWorkspace} disabled={!isTauri()} className="flex-1 h-8 px-2 rounded-lg text-left text-[11px] font-mono truncate disabled:opacity-60" title="Choose task workspace folder" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)" }}>
+                {workspace === "." ? "Choose workspace folder" : folderName(workspace)}
+              </button>
             </div>
             <div className="flex gap-2">
               <button onClick={() => onCreateTask()} className="btn-grad flex-1 h-8 rounded-lg text-[11px] font-medium" style={{ color: "white", border: "1px solid transparent" }}>POST /tasks</button>
@@ -280,7 +293,7 @@ export function LangGraphWorkspace() {
                       </div>
                       <div className="text-[12px] font-medium mt-1">{t.goal}</div>
                       <div className="text-[11px] font-mono truncate" style={{ color: "var(--fg-2)" }}>{t.final_message || t.error || "—"} {t.trace_id ? `· trace ${t.trace_id.slice(0, 8)}` : ""}</div>
-                      <div className="text-[10px] font-mono mt-1" style={{ color: "var(--fg-3)" }}>{formatLocalDateTime(t.created_at)} · {t.workspace || ""}</div>
+                      <div className="text-[10px] font-mono mt-1" style={{ color: "var(--fg-3)" }}>{formatLocalDateTime(t.created_at)} · {t.workspace ? folderName(t.workspace) : ""}</div>
                     </button>
                   ))}
                   {tasks.length === 0 && <div className="text-[11px]" style={{ color: "var(--fg-3)" }}>No tasks in this thread — POST /threads/{selectedThread}/tasks</div>}

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -15,6 +16,8 @@ from ..settings import (
     normalize_provider,
     provider_models,
     resolve_model,
+    apply_langfuse_settings,
+    current_langfuse_settings,
 )
 from .dependencies import get_native_runtime
 
@@ -29,6 +32,7 @@ _LLM_PATCH_FIELDS = frozenset(
     {
         "provider",
         "model",
+        "api_key",
         "base_url",
         "temperature",
         "top_p",
@@ -69,6 +73,10 @@ async def get_native_settings(runtime: NativeRuntimeDep) -> dict[str, Any]:
         "track": "native",
         "model": getattr(config, "model", "") if config else "",
         "provider": provider,
+        "api_key_set": bool(
+            getattr(provider_client, "has_key", False)
+            or getattr(provider_client, "api_key", "")
+        ),
         "base_url": configured_host,
         "models": models,
         "default_model": default_model(provider, downloaded or None),
@@ -77,6 +85,7 @@ async def get_native_settings(runtime: NativeRuntimeDep) -> dict[str, Any]:
         "max_tokens": getattr(config, "max_output_tokens", None),
         "timeout_seconds": getattr(config, "timeout_seconds", 60),
         "auto_approve_all": bool(auto_approve),
+        **current_langfuse_settings(),
     }
 
 
@@ -101,6 +110,7 @@ async def update_native_settings(
     body: RuntimeLLMSettings,
     runtime: NativeRuntimeDep,
 ) -> dict[str, Any]:
+    langfuse_info = apply_langfuse_settings(body.langfuse_mode, body.langfuse_host, body.langfuse_public_key, body.langfuse_secret_key) if any(value is not None for value in (body.langfuse_mode, body.langfuse_host, body.langfuse_public_key, body.langfuse_secret_key)) else {}
     if not (set(body.model_fields_set) & _LLM_PATCH_FIELDS):
         # Flags-only patch (e.g. just the allow-all toggle): nothing about the
         # model changes, so provider validation must not block it.
@@ -115,6 +125,7 @@ async def update_native_settings(
             "track": "native",
             "auto_approve_all": bool(getattr(runtime, "auto_approve_all", False)),
             "applies_to": "new runs",
+            **langfuse_info,
         }
     agents = list(getattr(runtime, "agents", {}).values())
     current = agents[0] if agents else None
@@ -127,6 +138,7 @@ async def update_native_settings(
         except (KeyError, AttributeError):
             pass
     provider = normalize_provider(body.provider or current_provider)
+    provider_changed = provider != normalize_provider(current_provider)
     if provider not in _NATIVE_PROVIDERS:
         raise HTTPException(
             status_code=422,
@@ -164,6 +176,15 @@ async def update_native_settings(
         models = runtime.reconfigure_models(
             provider=provider,
             model=model,
+            api_key=(
+                ((body.api_key or "").strip() or os.getenv("GROQ_API_KEY", ""))
+                if "api_key" in body.model_fields_set
+                else (
+                    os.getenv("GROQ_API_KEY", "")
+                    if provider_changed and provider == "groq"
+                    else getattr(current_client, "api_key", None)
+                )
+            ),
             base_url=base_url,
             temperature=(
                 body.temperature
@@ -201,10 +222,15 @@ async def update_native_settings(
         if name not in models:
             models.append(name)
     effective = runtime.config_for("build")
+    provider_client = runtime.models.get_provider(model)
     return {
         "track": "native",
         "provider": provider,
         "model": model,
+        "api_key_set": bool(
+            getattr(provider_client, "has_key", False)
+            or getattr(provider_client, "api_key", "")
+        ),
         "base_url": base_url,
         "models": models,
         "default_model": default_model(provider, downloaded or None),
@@ -214,4 +240,5 @@ async def update_native_settings(
         "timeout_seconds": effective.timeout_seconds,
         "auto_approve_all": bool(getattr(runtime, "auto_approve_all", False)),
         "applies_to": "new runs",
+        **langfuse_info,
     }

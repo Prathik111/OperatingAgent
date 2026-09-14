@@ -9,6 +9,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import shutil
+import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -25,6 +27,21 @@ DEFAULT_PIDS_LIMIT = "256"
 #: keeps it from becoming a staging ground for dropped binaries.
 DEFAULT_TMPFS = ("/tmp:rw,noexec,nosuid,size=64m",)
 log = logging.getLogger(__name__)
+
+
+def _threaded_subprocess_required() -> bool:
+    """Return whether the active event loop cannot spawn subprocesses.
+
+    Windows' selector loop is required by psycopg, but it deliberately does not
+    implement asyncio subprocess transports.  Docker commands are still safe
+    to run from a worker thread using ``subprocess.run`` in that configuration.
+    """
+    if sys.platform != "win32":
+        return False
+    try:
+        return isinstance(asyncio.get_running_loop(), asyncio.SelectorEventLoop)
+    except RuntimeError:
+        return False
 
 
 @dataclass(slots=True)
@@ -58,6 +75,28 @@ class ContainerRunner:
             args.extend(["sh", "-lc", command])
         else:
             args.extend(str(part) for part in command)
+        if _threaded_subprocess_required():
+            try:
+                completed = await asyncio.to_thread(
+                    subprocess.run,
+                    args,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=timeout,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired:
+                if self._on_timeout_destroy is not None:
+                    try:
+                        await self._on_timeout_destroy()
+                    except Exception as exc:  # noqa: BLE001 - destroy is best effort
+                        log.debug("could not destroy timed-out container: %s", exc)
+                return CommandOutput(-1, timed_out=True)
+            return CommandOutput(
+                completed.returncode or 0,
+                completed.stdout.decode(errors="replace"),
+                completed.stderr.decode(errors="replace"),
+            )
         process = await asyncio.create_subprocess_exec(
             *args,
             stdout=asyncio.subprocess.PIPE,
@@ -130,6 +169,7 @@ class ContainerPool:
         self.user = user
         self.reason = ""
         self._runners: dict[str, ContainerRunner] = {}
+        self._runner_meta: dict[str, tuple[str, str]] = {}
         self._lock = asyncio.Lock()
         self._available: bool | None = None
 
@@ -138,6 +178,27 @@ class ContainerPool:
             self.reason = "Docker CLI is not installed"
             self._available = False
             return False
+        if _threaded_subprocess_required():
+            try:
+                completed = await asyncio.to_thread(
+                    subprocess.run,
+                    ["docker", "info", "--format", "{{.ServerVersion}}"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=5,
+                    check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                self.reason = str(exc) or "Docker daemon is unavailable"
+                self._available = False
+                return False
+            if completed.returncode != 0:
+                self.reason = completed.stderr.decode(errors="replace").strip() or "Docker daemon is unavailable"
+                self._available = False
+                return False
+            self.reason = ""
+            self._available = True
+            return True
         try:
             process = await asyncio.create_subprocess_exec(
                 "docker", "info", "--format", "{{.ServerVersion}}",
@@ -166,6 +227,25 @@ class ContainerPool:
         """
         if not await self.available():
             return False
+        if _threaded_subprocess_required():
+            try:
+                completed = await asyncio.to_thread(
+                    subprocess.run,
+                    ["docker", "image", "inspect", self.image],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    timeout=10,
+                    check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                self.reason = str(exc) or "could not inspect sandbox image"
+                self._available = False
+                return False
+            if completed.returncode != 0:
+                self.reason = completed.stderr.decode(errors="replace").strip() or f"sandbox image {self.image!r} is not available"
+                self._available = False
+                return False
+            return True
         try:
             process = await asyncio.create_subprocess_exec(
                 "docker", "image", "inspect", self.image,
@@ -217,6 +297,37 @@ class ContainerPool:
                 return None
             name = f"operating-agent-{uuid4().hex[:12]}"
             args = self._run_args(name, root)
+            if _threaded_subprocess_required():
+                try:
+                    completed = await asyncio.to_thread(
+                        subprocess.run,
+                        args,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        timeout=30,
+                        check=False,
+                    )
+                except (OSError, subprocess.TimeoutExpired) as exc:
+                    await self._stop(name)
+                    self.reason = str(exc) or "could not start Docker container"
+                    return None
+                if completed.returncode != 0:
+                    self.reason = completed.stderr.decode(errors="replace").strip() or "could not start Docker container"
+                    return None
+                container_id = completed.stdout.decode(errors="replace").strip()
+                if not container_id:
+                    self.reason = "Docker returned an empty container id"
+                    await self._stop(name)
+                    return None
+                runner = ContainerRunner(
+                    container_id,
+                    self.image,
+                    on_timeout_destroy=lambda: self._destroy_runner(key, container_id),
+                )
+                self._runners[key] = runner
+                self._runner_meta[key] = (session_id, str(root))
+                log.info("created sandbox container=%s session=%s workspace=%s", container_id, session_id, root)
+                return runner
             try:
                 process = await asyncio.create_subprocess_exec(
                     *args,
@@ -244,8 +355,44 @@ class ContainerPool:
                 on_timeout_destroy=lambda: self._destroy_runner(key, container_id),
             )
             self._runners[key] = runner
+            self._runner_meta[key] = (session_id, str(root))
             log.info("created sandbox container=%s session=%s workspace=%s", container_id, session_id, root)
             return runner
+
+    def list_containers(self) -> list[dict[str, str]]:
+        """Return the live containers owned by this pool for UI/API inspection."""
+        rows: list[dict[str, str]] = []
+        for key, runner in self._runners.items():
+            session_id, workspace = self._runner_meta.get(
+                key, key.split(":", 1) if ":" in key else (key, "")
+            )
+            rows.append(
+                {
+                    "session_id": session_id,
+                    "workspace": workspace,
+                    "container_id": runner.container_id,
+                    "image": runner.image,
+                    "status": "running",
+                }
+            )
+        return rows
+
+    async def destroy_session(self, session_id: str) -> int:
+        """Stop all containers owned by this pool for one agent session."""
+        async with self._lock:
+            matches = [
+                (key, runner)
+                for key, runner in self._runners.items()
+                if self._runner_meta.get(key, (key.split(":", 1)[0], ""))[0] == session_id
+            ]
+            for key, _runner in matches:
+                self._runners.pop(key, None)
+                self._runner_meta.pop(key, None)
+        await asyncio.gather(
+            *(self._stop(runner.container_id) for _key, runner in matches),
+            return_exceptions=True,
+        )
+        return len(matches)
 
     def _run_args(self, name: str, root: Path) -> list[str]:
         """The ``docker run`` argv for one session container. Pure function of
@@ -285,6 +432,7 @@ class ContainerPool:
             if current is None or current.container_id != container_id:
                 return
             del self._runners[key]
+            self._runner_meta.pop(key, None)
         await self._stop(container_id)
 
     async def run(
@@ -339,6 +487,7 @@ class ContainerPool:
     async def stop_all(self) -> None:
         async with self._lock:
             runners, self._runners = self._runners, {}
+            self._runner_meta.clear()
         await asyncio.gather(
             *(self._stop(runner.container_id) for runner in runners.values()),
             return_exceptions=True,
@@ -349,6 +498,19 @@ class ContainerPool:
         await self.stop_all()
 
     async def _stop(self, container_id: str) -> None:
+        if _threaded_subprocess_required():
+            try:
+                await asyncio.to_thread(
+                    subprocess.run,
+                    ["docker", "rm", "-f", container_id],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=10,
+                    check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                log.debug("could not remove sandbox container=%s: %s", container_id, exc)
+            return
         try:
             process = await asyncio.create_subprocess_exec(
                 "docker", "rm", "-f", container_id,
