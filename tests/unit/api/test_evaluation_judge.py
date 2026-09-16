@@ -59,7 +59,7 @@ class ScriptedJudgeFactory:
         self.prompts: list[str] = []
         self.instances = 0
 
-    def __call__(self, model_name: str) -> LLMJudge:
+    def __call__(self, provider: str, model_name: str) -> LLMJudge:
         self.instances += 1
         factory = self
 
@@ -273,7 +273,7 @@ async def test_judge_scores_case_without_deterministic_checks() -> None:
 
 async def test_judge_model_without_factory_is_rejected_up_front() -> None:
     service, _ = _service(StaticOrchestrator(GOOD_OUTPUT), judge_factory=None)
-    with pytest.raises(ValueError, match="no judge-capable model registry"):
+    with pytest.raises(ValueError, match="judge provider is unavailable"):
         await service.start_evaluation(
             name="no-judge",
             version="1",
@@ -284,7 +284,7 @@ async def test_judge_model_without_factory_is_rejected_up_front() -> None:
 
 
 async def test_unknown_judge_model_is_rejected_up_front() -> None:
-    def factory(model_name: str) -> LLMJudge:
+    def factory(provider: str, model_name: str) -> LLMJudge:
         raise KeyError(
             "judge model 'nope' is not registered (available: judge-x)"
         )

@@ -16,13 +16,13 @@ Design notes:
 
 from __future__ import annotations
 
-import logging
 import asyncio
 import base64
 import json
+import logging
 import threading
-from urllib.request import Request, urlopen
 from typing import TYPE_CHECKING, Any
+from urllib.request import Request, urlopen
 
 from .masking import mask, mask_otel_spans
 from .settings import LangfuseSettings
@@ -126,14 +126,14 @@ async def fetch_trace_metrics(trace_id: str | None) -> dict[str, Any]:
     def request_json(path: str) -> dict[str, Any]:
         token = base64.b64encode(f"{settings.public_key}:{settings.secret_key}".encode()).decode()
         request = Request(f"{settings.host.rstrip('/')}/api/public/{path}", headers={"Authorization": f"Basic {token}"})
-        with urlopen(request, timeout=2.5) as response:  # noqa: S310 - host is operator-configured
+        with urlopen(request, timeout=2.5) as response:
             payload = json.loads(response.read().decode("utf-8"))
         return payload if isinstance(payload, dict) else {}
 
     try:
         trace = await asyncio.to_thread(request_json, f"traces/{trace_id}")
         observations = await asyncio.to_thread(request_json, f"observations?traceId={trace_id}&limit=100")
-    except Exception as exc:  # noqa: BLE001 - external observability is optional
+    except Exception as exc:
         log.debug("Langfuse trace enrichment unavailable: %s", exc)
         return {}
     total_tokens = 0

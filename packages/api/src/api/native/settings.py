@@ -9,15 +9,16 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ..settings import (
     RuntimeLLMSettings,
+    apply_langfuse_settings,
     clean_base_url,
+    current_langfuse_settings,
     default_model,
     normalize_base_url,
     normalize_model,
     normalize_provider,
     provider_models,
     resolve_model,
-    apply_langfuse_settings,
-    current_langfuse_settings,
+    validate_langfuse_settings,
 )
 from .dependencies import get_native_runtime
 
@@ -40,6 +41,29 @@ _LLM_PATCH_FIELDS = frozenset(
         "timeout_seconds",
     }
 )
+
+
+def _apply_langfuse(body: RuntimeLLMSettings) -> dict[str, Any]:
+    """Apply Langfuse settings when any were provided, mapping errors to 422."""
+    if not any(
+        value is not None
+        for value in (
+            body.langfuse_mode,
+            body.langfuse_host,
+            body.langfuse_public_key,
+            body.langfuse_secret_key,
+        )
+    ):
+        return {}
+    try:
+        return apply_langfuse_settings(
+            body.langfuse_mode,
+            body.langfuse_host,
+            body.langfuse_public_key,
+            body.langfuse_secret_key,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @router.get("")
@@ -105,12 +129,24 @@ async def list_native_models(
     }
 
 
+def _validate_langfuse(body: RuntimeLLMSettings) -> None:
+    """Fail fast on a bad Langfuse selection before any setting is applied.
+
+    Validating here (side-effect free) before the reconfigure means a 422 can
+    never leave the provider or the allow-all toggle half-applied.
+    """
+    try:
+        validate_langfuse_settings(body.langfuse_mode, body.langfuse_host)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.patch("")
 async def update_native_settings(
     body: RuntimeLLMSettings,
     runtime: NativeRuntimeDep,
 ) -> dict[str, Any]:
-    langfuse_info = apply_langfuse_settings(body.langfuse_mode, body.langfuse_host, body.langfuse_public_key, body.langfuse_secret_key) if any(value is not None for value in (body.langfuse_mode, body.langfuse_host, body.langfuse_public_key, body.langfuse_secret_key)) else {}
+    _validate_langfuse(body)
     if not (set(body.model_fields_set) & _LLM_PATCH_FIELDS):
         # Flags-only patch (e.g. just the allow-all toggle): nothing about the
         # model changes, so provider validation must not block it.
@@ -121,6 +157,7 @@ async def update_native_settings(
                 runtime.set_auto_approve_all(bool(body.auto_approve_all))
             except (AttributeError, TypeError, ValueError) as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
+        langfuse_info = _apply_langfuse(body)
         return {
             "track": "native",
             "auto_approve_all": bool(getattr(runtime, "auto_approve_all", False)),
@@ -209,8 +246,9 @@ async def update_native_settings(
         )
     except (ValueError, RuntimeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    # A model PATCH applies the toggle only after the reconfigure succeeds:
-    # a 422 above must leave every setting untouched, not half-applied.
+    # A model PATCH applies the toggle (and Langfuse settings) only after the
+    # reconfigure succeeds: a 422 above must leave every setting untouched,
+    # not half-applied.
     if body.auto_approve_all is not None and hasattr(
         runtime, "set_auto_approve_all"
     ):
@@ -218,6 +256,7 @@ async def update_native_settings(
             runtime.set_auto_approve_all(bool(body.auto_approve_all))
         except (AttributeError, TypeError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+    langfuse_info = _apply_langfuse(body)
     for name in downloaded:
         if name not in models:
             models.append(name)

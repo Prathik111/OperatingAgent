@@ -108,7 +108,11 @@ def retry_router(state: AgentState) -> NodeType:
     Returns:
         NodeType: The node to transition to after an error.
     """
-    budget = state.get("max_replans") or MAX_RETRIES
+    budget = state.get("max_replans")
+    if budget is None:
+        # States that predate the field fall back to the module default; an
+        # explicit 0 (never replan) is preserved instead of collapsing to it.
+        budget = MAX_RETRIES
     if state.get("retry_count", 0) >= budget:
         return RESPONDER
     if str(state.get("last_error") or "").startswith("human rejected "):

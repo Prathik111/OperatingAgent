@@ -99,24 +99,43 @@ function splitTableRow(line: string): string[] | null {
   const trimmed = line.trim();
   if (!trimmed.includes("|")) return null;
   const source = trimmed.startsWith("|") ? trimmed.slice(1) : trimmed;
-  const content = source.endsWith("|") ? source.slice(0, -1) : source;
+  // A trailing pipe only acts as the row's right edge when it is not itself
+  // escaped (preceded by an even run of backslashes). With an odd run it is
+  // part of the last cell, e.g. `a \|` renders an escaped pipe, so the escape
+  // parser below must still see it.
+  let backslashes = 0;
+  let cursor = source.length - 1;
+  while (cursor > 0 && source[cursor - 1] === "\\") {
+    backslashes += 1;
+    cursor -= 1;
+  }
+  const content =
+    source.endsWith("|") && backslashes % 2 === 0 ? source.slice(0, -1) : source;
   const cells: string[] = [];
   let cell = "";
-  let escaped = false;
-  for (const character of content) {
-    if (escaped) {
-      cell += character;
-      escaped = false;
-    } else if (character === "\\") {
-      escaped = true;
+  let index = 0;
+  while (index < content.length) {
+    const character = content[index];
+    if (character === "\\") {
+      const next = content[index + 1];
+      // A backslash only escapes a cell separator (or another backslash).
+      // Otherwise it stays verbatim so inline formatting is not corrupted.
+      if (next === "|" || next === "\\") {
+        cell += next;
+        index += 2;
+      } else {
+        cell += character;
+        index += 1;
+      }
     } else if (character === "|") {
       cells.push(cell.trim());
       cell = "";
+      index += 1;
     } else {
       cell += character;
+      index += 1;
     }
   }
-  if (escaped) cell += "\\";
   cells.push(cell.trim());
   return cells;
 }

@@ -19,6 +19,7 @@ from .settings import (
     normalize_provider,
     provider_models,
     resolve_model,
+    validate_langfuse_settings,
 )
 
 router = APIRouter(prefix="/settings/langgraph", tags=["langgraph-settings"])
@@ -101,14 +102,50 @@ def _apply_auto_approve(agent: Any, value: bool | None) -> None:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
+def _apply_langfuse(body: RuntimeLLMSettings) -> dict[str, Any]:
+    """Apply Langfuse settings when any were provided, mapping errors to 422."""
+    if not any(
+        value is not None
+        for value in (
+            body.langfuse_mode,
+            body.langfuse_host,
+            body.langfuse_public_key,
+            body.langfuse_secret_key,
+        )
+    ):
+        return {}
+    try:
+        return apply_langfuse_settings(
+            body.langfuse_mode,
+            body.langfuse_host,
+            body.langfuse_public_key,
+            body.langfuse_secret_key,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _validate_langfuse(body: RuntimeLLMSettings) -> None:
+    """Fail fast on a bad Langfuse selection before any setting is applied.
+
+    Validating here (side-effect free) before ``reconfigure``/``_apply_auto_approve``
+    means a 422 can never leave the provider or the toggle half-applied.
+    """
+    try:
+        validate_langfuse_settings(body.langfuse_mode, body.langfuse_host)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.patch("")
 async def update_langgraph_settings(body: RuntimeLLMSettings, request: Request) -> dict[str, Any]:
     agent = _orchestrator(request)
-    langfuse_info = apply_langfuse_settings(body.langfuse_mode, body.langfuse_host, body.langfuse_public_key, body.langfuse_secret_key) if any(value is not None for value in (body.langfuse_mode, body.langfuse_host, body.langfuse_public_key, body.langfuse_secret_key)) else {}
+    _validate_langfuse(body)
     if not (set(body.model_fields_set) & _LLM_PATCH_FIELDS):
         # Flags-only patch: nothing about the model changes, so provider
         # validation must not block it.
         _apply_auto_approve(agent, body.auto_approve_all)
+        langfuse_info = _apply_langfuse(body)
         return {
             "track": "langgraph",
             "auto_approve_all": bool(getattr(agent, "auto_approve_all", False)),
@@ -183,9 +220,11 @@ async def update_langgraph_settings(body: RuntimeLLMSettings, request: Request) 
         await agent.reconfigure(config)
     except (ValueError, NotImplementedError, RuntimeError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    # A model PATCH applies the toggle only after the reconfigure succeeds:
-    # a 422 above must leave every setting untouched, not half-applied.
+    # A model PATCH applies the toggle (and Langfuse settings) only after the
+    # reconfigure succeeds: a 422 above must leave every setting untouched,
+    # not half-applied.
     _apply_auto_approve(agent, body.auto_approve_all)
+    langfuse_info = _apply_langfuse(body)
     models = await provider_models(provider, base_url)
     return {
         "track": "langgraph",

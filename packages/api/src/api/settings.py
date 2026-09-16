@@ -2,22 +2,71 @@
 
 from __future__ import annotations
 
+from urllib.parse import urlsplit
+
 from pydantic import BaseModel, Field
+
+#: Exact loopback hostnames (with or without brackets) that count as "local".
+#: ``urlsplit().hostname`` returns the bare hostname without port or brackets.
+_LOOPBACK_HOSTNAMES = frozenset({"localhost", "127.0.0.1", "::1", "[::1]"})
+
+
+def is_loopback_langfuse_host(host: str | None) -> bool:
+    """Whether a Langfuse host targets a loopback endpoint.
+
+    Parses host/port and compares the *exact* hostname, so prefixes like
+    ``localhost.example.com`` or ``127.0.0.1.evil.com`` never count as local.
+    Both ``http`` and ``https`` schemes are accepted; a bare host without a
+    scheme is treated as ``http``.
+    """
+    href = (host or "").strip().lower()
+    if not href:
+        return False
+    if "://" not in href:
+        href = f"http://{href}"
+    try:
+        parts = urlsplit(href)
+    except ValueError:
+        return False
+    if parts.scheme not in {"http", "https"}:
+        return False
+    hostname = (parts.hostname or "").strip("[]").lower()
+    return hostname in _LOOPBACK_HOSTNAMES
+
+
+def validate_langfuse_settings(mode: str | None, host: str | None) -> None:
+    """Validate Langfuse fields without applying them (for pre-reconfigure checks).
+
+    Purposely side-effect free: callers run it before mutating a model so a
+    bad Langfuse selection fails hard without leaving any half-applied state.
+    """
+    selected = (mode or "").strip().lower()
+    if selected not in {"", "disabled", "cloud", "local"}:
+        raise ValueError("langfuse_mode must be disabled, cloud, or local")
+    if selected == "local" and not is_loopback_langfuse_host(host):
+        raise ValueError(
+            "langfuse_mode local requires a loopback langfuse_host "
+            "(http:// or https:// on localhost, 127.0.0.1, or ::1)"
+        )
 
 
 def apply_langfuse_settings(mode: str | None, host: str | None, public_key: str | None, secret_key: str | None) -> dict[str, object]:
     """Apply desktop Langfuse settings to this API process and reload tracing."""
     import os
+
     from observability import LangfuseSettings, reload_tracing
 
+    validate_langfuse_settings(mode, host)
     selected = (mode or "").strip().lower()
-    if selected not in {"", "disabled", "cloud", "local"}:
-        raise ValueError("langfuse_mode must be disabled, cloud, or local")
     if selected == "disabled":
         os.environ.pop("LANGFUSE_PUBLIC_KEY", None)
         os.environ.pop("LANGFUSE_SECRET_KEY", None)
     else:
-        if host is not None and host.strip():
+        if selected == "local":
+            # "local" pointed at the cloud default would silently export
+            # private traces off-host; require an explicit host instead.
+            os.environ["LANGFUSE_HOST"] = host.strip().rstrip("/")
+        elif host is not None and host.strip():
             os.environ["LANGFUSE_HOST"] = host.strip().rstrip("/")
         if public_key is not None:
             os.environ["LANGFUSE_PUBLIC_KEY"] = public_key.strip()
@@ -25,8 +74,11 @@ def apply_langfuse_settings(mode: str | None, host: str | None, public_key: str 
             os.environ["LANGFUSE_SECRET_KEY"] = secret_key.strip()
     settings = LangfuseSettings.from_env()
     client = reload_tracing(settings)
+    is_local = is_loopback_langfuse_host(settings.host)
     return {
-        "langfuse_mode": "disabled" if client is None else (selected or "cloud"),
+        "langfuse_mode": (
+            "disabled" if client is None else ("local" if is_local else "cloud")
+        ),
         "langfuse_host": settings.host,
         "langfuse_enabled": client is not None,
         "langfuse_public_key_set": bool(settings.public_key),
@@ -40,7 +92,7 @@ def current_langfuse_settings() -> dict[str, object]:
 
     settings = LangfuseSettings.from_env()
     host = settings.host.rstrip("/")
-    local = host.startswith("http://localhost") or host.startswith("http://127.0.0.1") or host.startswith("http://[::1]")
+    local = host.startswith(("http://localhost", "http://127.0.0.1", "http://[::1]"))
     return {
         "langfuse_mode": "disabled" if not settings.enabled else ("local" if local else "cloud"),
         "langfuse_host": settings.host,

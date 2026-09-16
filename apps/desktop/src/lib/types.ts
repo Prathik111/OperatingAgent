@@ -181,6 +181,17 @@ export interface StartEvaluationResponse {
   status: string;
 }
 
+export interface JudgeSettings {
+  provider: string;
+  model: string;
+  base_url: string | null;
+  api_key_set: boolean;
+  providers: string[];
+  models: string[];
+  default_model: string;
+  credentials: Record<string, { api_key_set: boolean; base_url: string | null }>;
+}
+
 export interface TaskResponse {
   id: string;
   goal: string;

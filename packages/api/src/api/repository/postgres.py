@@ -37,6 +37,46 @@ _API_ACTOR_EXTERNAL_ID = "system:api"
 _API_ACTOR_DISPLAY_NAME = "API service"
 
 
+def _comparison_runs(run_breakdown: list[dict]) -> list[tuple[dict, str]]:
+    """Latest comparable run per track, both from the same suite cohort.
+
+    The dashboard's side-by-side must contrast like with like: the newest run
+    of each track can come from different suites when runs are interleaved, so
+    the runs are grouped by suite and the most recent cohort (by its latest
+    run) that contains both tracks wins. A single-track store still reports
+    that track's latest run on its own.
+    """
+    native_runs = [run for run in run_breakdown if run["track"] == "native"]
+    langgraph_runs = [run for run in run_breakdown if run["track"] == "langgraph"]
+    if native_runs and langgraph_runs:
+        cohorts: dict[str, list[dict]] = {}
+        for run in run_breakdown:
+            cohorts.setdefault(run["suite"], []).append(run)
+        shared = sorted(
+            (
+                group
+                for group in cohorts.values()
+                if any(r["track"] == "native" for r in group)
+                and any(r["track"] == "langgraph" for r in group)
+            ),
+            key=lambda group: max(r["started_at"] for r in group),
+            reverse=True,
+        )
+        rows: list[tuple[dict, str]] = []
+        for group in shared[:1]:
+            for track in ("native", "langgraph"):
+                latest = max(
+                    (run for run in group if run["track"] == track),
+                    key=lambda run: run["started_at"],
+                )
+                rows.append((latest, track))
+        return rows
+    if native_runs or langgraph_runs:
+        latest = max(native_runs or langgraph_runs, key=lambda run: run["started_at"])
+        return [(latest, str(latest["track"]))]
+    return []
+
+
 async def _fetch_scalar(cur) -> object:
     row = await cur.fetchone()
     if row is None:
@@ -508,15 +548,12 @@ class PostgresTaskRepository:
                 avg, latency, tokens, cost, tool_success,
                 judge_average, judge_judged, judge_errors in run_rows
         ]
-        # The per-track side-by-side the desktop reports render. Latest run per
-        # track, judged and running runs alike — a running run shows its live
-        # numbers, and the UI labels it as such.
+# The per-track side-by-side the desktop reports render. Latest run per
+        # track from the same suite cohort (see _comparison_runs), judged and
+        # running runs alike — a running run shows its live numbers, and the UI
+        # labels it as such.
         comparison = []
-        for track in ("native", "langgraph"):
-            candidates = [run for run in run_breakdown if run["track"] == track]
-            if not candidates:
-                continue
-            latest = max(candidates, key=lambda run: run["started_at"])
+        for latest, track in _comparison_runs(run_breakdown):
             comparison.append({"track": track, **{key: latest.get(key) for key in ("id", "suite", "pass_rate", "average_score", "avg_latency_ms", "total_tokens", "total_cost", "tool_success_rate", "judge_average", "judge_judged", "judge_errors", "result_count", "excluded_count", "rate_limited_count", "status")}})
         executions = [
             {
@@ -548,8 +585,9 @@ class PostgresTaskRepository:
                 "agent_run_id": str(agent_run_id), "task_id": str(task_id),
                 "thread_id": thread_id, "suite": f"{name} v{version}", "track": track,
                 "case_id": case_key, "goal": goal, "workspace": workspace or "",
-                "status": status, "output": output, "error": error, "success": False,
-                "loading": True, "judge_score": None, "judge_comment": "", "judge_error": "",
+"status": status, "output": output, "error": error, "success": False,
+                "loading": True, "excluded": False, "outcome": "running",
+                "judge_score": None, "judge_comment": "", "judge_error": "",
                 "created_at": created_at, "finished_at": finished_at,
             }
             for (

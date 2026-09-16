@@ -10,11 +10,11 @@ Public API:
 """
 
 from .client import (
+    fetch_trace_metrics,
     flush,
     get_callback_handler,
     get_client,
     get_trace_url,
-    fetch_trace_metrics,
     init_tracing,
     reload_tracing,
     shutdown,
@@ -24,14 +24,14 @@ from .settings import LangfuseSettings
 
 __all__ = [
     "LangfuseSettings",
+    "fetch_trace_metrics",
     "flush",
     "get_callback_handler",
     "get_client",
     "get_trace_url",
-    "fetch_trace_metrics",
     "init_tracing",
-    "reload_tracing",
     "mask",
+    "reload_tracing",
     "shutdown",
 ]
 

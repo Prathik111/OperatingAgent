@@ -72,14 +72,25 @@ class EvaluationCaseRequest(BaseModel):
 class StartEvaluationRequest(BaseModel):
     name: str = Field(default="desktop-suite", min_length=1)
     version: str = Field(default="1", min_length=1)
-    tracks: list[AgentTrack] = Field(default_factory=lambda: [AgentTrack.LANGGRAPH])
+    tracks: list[AgentTrack] = Field(
+        default_factory=lambda: [AgentTrack.LANGGRAPH],
+        min_length=1,
+        description="Tracks to run this suite on (at least one is required).",
+    )
     cases: list[EvaluationCaseRequest] = Field(min_length=1)
     judge_model: str = Field(
         default="",
         description=(
-            "Optional LLM judge: a model name from the runtime registry. One "
+            "Optional LLM judge: a model name from the judge provider. One "
             "judge instance is shared by every track; scores are recorded "
             "under judge.* metrics, separate from deterministic correctness."
+        ),
+    )
+    judge_provider: str = Field(
+        default="",
+        description=(
+            "Optional judge provider override (ollama, groq, openai, "
+            "anthropic). Empty uses the active backend judge setting."
         ),
     )
 
@@ -104,6 +115,7 @@ async def start_evaluation(body: StartEvaluationRequest, service: TaskServiceDep
             tracks=[track for track in body.tracks],
             cases=[case.model_dump() for case in body.cases],
             judge_model=body.judge_model,
+            judge_provider=body.judge_provider,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

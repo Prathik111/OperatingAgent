@@ -71,9 +71,8 @@ export function NativeWorkspace() {
   }, []);
   const [newAgent, setNewAgent] = useState("build");
   const [forkTitle, setForkTitle] = useState("");
-  const browseWorkspace = async () => {
-    const dir = await pickDirectory(newWorkspace);
-    if (!dir) return;
+const applyWorkspace = (value: string) => {
+    const dir = value.trim().replace(/[\\/]+$/, "") || ".";
     setNewWorkspace(dir);
     lastSavedWorkspaceRef.current = dir;
     saveSettings({ ...loadSettings(), workspace: dir });
@@ -82,6 +81,10 @@ export function NativeWorkspace() {
     setConversation(null);
     setEvents([]);
     setRuns([]);
+  };
+  const browseWorkspace = async () => {
+    const dir = await pickDirectory(newWorkspace);
+    if (dir) applyWorkspace(dir);
   };
   const [activeTab, setActiveTab] = useState<"conversation" | "events" | "runs" | "permissions">("conversation");
   const esRef = useRef<EventSource | null>(null);
@@ -109,7 +112,7 @@ export function NativeWorkspace() {
       const scoped = list.filter((session) => session.workspace === newWorkspace || session.id.startsWith("evaluation-"));
       setSessions(scoped);
       setSessionsErr(null);
-      if (!selected && list[0]) setSelected(list[0].id);
+      if (!selected && scoped[0]) setSelected(scoped[0].id);
     } catch (e) {
       setSessionsErr((e as Error).message);
     }
@@ -283,10 +286,22 @@ export function NativeWorkspace() {
           </div>
           <div className="grid gap-2">
             <input value={newTitle} onChange={(e) => setNewTitle(e.target.value)} placeholder="Title (optional)" className="h-8 px-2 rounded-lg text-[12px] outline-none" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)", color: "var(--fg-0)" }} />
-            <div className="flex gap-2">
-              <button type="button" onClick={browseWorkspace} disabled={!isTauri()} className="flex-1 h-8 px-2 rounded-lg text-left text-[11px] font-mono truncate disabled:opacity-60" title="Choose native workspace folder" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)", color: "var(--fg-0)" }}>
-                {newWorkspace === "." ? "Choose workspace folder" : folderName(newWorkspace)}
-              </button>
+<div className="flex gap-2">
+              {isTauri() ? (
+                <button type="button" onClick={browseWorkspace} className="flex-1 h-8 px-2 rounded-lg text-left text-[11px] font-mono truncate" title="Choose native workspace folder" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)", color: "var(--fg-0)" }}>
+                  {newWorkspace === "." ? "Choose workspace folder" : folderName(newWorkspace)}
+                </button>
+              ) : (
+                <input
+                  value={newWorkspace}
+                  onChange={(e) => setNewWorkspace(e.target.value)}
+                  onBlur={() => applyWorkspace(newWorkspace)}
+                  onKeyDown={(e) => e.key === "Enter" && applyWorkspace(newWorkspace)}
+                  placeholder="Workspace folder path"
+                  className="flex-1 h-8 px-2 rounded-lg text-[11px] font-mono outline-none"
+                  style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)", color: "var(--fg-0)" }}
+                />
+              )}
               <input value={newAgent} onChange={(e) => setNewAgent(e.target.value)} placeholder="agent" className="w-20 h-8 px-2 rounded-lg text-[12px] outline-none" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)", color: "var(--fg-0)" }} />
             </div>
             <button onClick={onCreate} className="btn-grad h-8 rounded-lg text-[12px] font-medium" style={{ color: "white", border: "1px solid transparent" }}>
