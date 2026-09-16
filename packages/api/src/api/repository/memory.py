@@ -9,6 +9,7 @@ changes nothing above the repository seam.
 from __future__ import annotations
 
 import itertools
+import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -28,6 +29,53 @@ def _utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
+
+
+def _cases_fingerprint(cases: list) -> str:
+    """Canonical content fingerprint; a changed case must not reuse its id."""
+    return json.dumps(cases, sort_keys=True, default=str)
+
+
+def _comparison_runs(run_breakdown: list[dict]) -> list[tuple[dict, str]]:
+    """Latest comparable run per track, both from the same suite cohort.
+
+    The dashboard's side-by-side must contrast like with like: the newest run
+    of each track can come from different suites when runs are interleaved, so
+    the runs are grouped by suite and the most recent cohort (by its latest
+    run) that contains both tracks wins. Grouping uses the non-display
+    ``suite_id`` so variants that only share a name/version label do not merge.
+    A single-track store still reports that track's latest run on its own.
+    """
+    native_runs = [run for run in run_breakdown if run["track"] == "native"]
+    langgraph_runs = [run for run in run_breakdown if run["track"] == "langgraph"]
+    if native_runs and langgraph_runs:
+        cohorts: dict[str, list[dict]] = {}
+        for run in run_breakdown:
+            cohort = str(run.get("suite_id") or run.get("suite") or "")
+            cohorts.setdefault(cohort, []).append(run)
+        shared = sorted(
+            (
+                group
+                for group in cohorts.values()
+                if any(r["track"] == "native" for r in group)
+                and any(r["track"] == "langgraph" for r in group)
+            ),
+            key=lambda group: max(r["started_at"] for r in group),
+            reverse=True,
+        )
+        rows: list[tuple[dict, str]] = []
+        for group in shared[:1]:
+            for track in ("native", "langgraph"):
+                latest = max(
+                    (run for run in group if run["track"] == track),
+                    key=lambda run: run["started_at"],
+                )
+                rows.append((latest, track))
+        return rows
+    if native_runs or langgraph_runs:
+        latest = max(native_runs or langgraph_runs, key=lambda run: run["started_at"])
+        return [(latest, str(latest["track"]))]
+    return []
 
 
 @dataclass(slots=True)
@@ -118,11 +166,11 @@ class InMemoryTaskRepository:
                 latest = await self.get_latest_run(task.id)
                 if latest is None or latest.status not in OPEN_RUN_STATUSES:
                     continue
-                metrics = await self.get_run_metrics(latest.run_id)
+                run_metrics = await self.get_run_metrics(latest.run_id)
                 aggregate["runs"] += 1
-                aggregate["latency_ms"] += float(metrics.get("latency_ms") or 0)
-                aggregate["tokens"] += float(metrics.get("total_tokens") or 0)
-                aggregate["cost"] += float(metrics.get("cost") or 0)
+                aggregate["latency_ms"] += float(run_metrics.get("latency_ms") or 0)
+                aggregate["tokens"] += float(run_metrics.get("total_tokens") or 0)
+                aggregate["cost"] += float(run_metrics.get("cost") or 0)
             active_metrics[evaluation["id"]] = aggregate
         run_breakdown = []
         for run in runs:
@@ -146,6 +194,7 @@ class InMemoryTaskRepository:
             ]
             run_breakdown.append({
                 "id": run["id"],
+                "suite_id": run["suite_id"],
                 "suite": f'{run["name"]} v{run["version"]}',
                 "track": run["track"],
                 "started_at": run["started_at"],
@@ -195,11 +244,7 @@ class InMemoryTaskRepository:
                 / max(1, completed_count + active_count)
             )
         comparison = []
-        for track in ("native", "langgraph"):
-            candidates = [run for run in run_breakdown if run["track"] == track]
-            if not candidates:
-                continue
-            latest = max(candidates, key=lambda run: run["started_at"])
+        for latest, track in _comparison_runs(run_breakdown):
             comparison.append({"track": track, **{key: latest.get(key) for key in ("id", "suite", "pass_rate", "average_score", "avg_latency_ms", "total_tokens", "total_cost", "tool_success_rate", "judge_average", "judge_judged", "judge_errors", "result_count", "excluded_count", "rate_limited_count", "status")}})
         executions = []
         for evaluation in sorted(runs, key=lambda run: run["started_at"], reverse=True):
@@ -284,10 +329,12 @@ class InMemoryTaskRepository:
                     "goal": task.goal,
                     "workspace": str(task.metadata.get("workspace") or ""),
                     "status": agent_run.status.value,
-                    "output": agent_run.output,
+"output": agent_run.output,
                     "error": agent_run.last_error,
                     "success": False,
                     "loading": True,
+                    "excluded": False,
+                    "outcome": "running",
                     "judge_score": None,
                     "judge_comment": "",
                     "judge_error": "",
@@ -314,7 +361,10 @@ class InMemoryTaskRepository:
             "judge_judged": sum(v[1] for v in judge_stats.values()),
             "judge_errors": sum(v[2] for v in judge_stats.values()),
             "metrics": [{"metric": key, "average": sum(values) / len(values), "count": len(values)} for key, values in sorted(metrics.items())],
-            "run_breakdown": run_breakdown,
+            "run_breakdown": [
+                {key: value for key, value in summary.items() if key != "suite_id"}
+                for summary in run_breakdown
+            ],
             "comparison": comparison,
             "executions": executions,
             "sources": {"database": True, "langfuse": False},
@@ -325,13 +375,22 @@ class InMemoryTaskRepository:
         # Reuse the logical suite/case identity for repeated benchmark runs.
         # PostgreSQL enforces this with unique constraints; the memory/SQLite
         # backends mirror that behavior so the dashboard does not inflate the
-        # suite and case totals every time the same comparison is rerun.
+        # suite and case totals every time the same comparison is rerun. A
+        # suite is identified by (name, version, case content): only the stored
+        # variant whose cases fingerprint matches is reused, so an edited suite
+        # gets a fresh cohort instead of one being recycled for a different
+        # case set that happens to share the first matching label.
+        fingerprint = _cases_fingerprint(cases)
         existing = next(
-            (run for run in self._evaluations.values()
-             if run["name"] == name and run["version"] == version),
+            (
+                run for run in self._evaluations.values()
+                if run["name"] == name
+                and run["version"] == version
+                and _cases_fingerprint(run.get("cases", [])) == fingerprint
+            ),
             None,
         )
-        if existing is not None and len(existing.get("cases", [])) == len(cases):
+        if existing is not None:
             suite_id = existing["suite_id"]
             case_ids = list(existing["case_ids"])
         else:

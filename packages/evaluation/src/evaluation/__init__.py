@@ -12,6 +12,7 @@ from .compare import (
     compare_results,
     render_comparison_markdown,
     render_full_comparison_markdown,
+    validate_compatible_suites,
 )
 from .execution import run_suite
 from .runner import EvaluationResult, EvaluationRunner, run_case
@@ -22,6 +23,8 @@ from .suite import (
     default_suite,
     load_suite,
     save_suite,
+    suite_from_snapshot,
+    suite_snapshot,
 )
 
 
@@ -77,6 +80,9 @@ def main() -> None:
         return
 
     if args.command == "compare":
+        left_payload = json.loads(Path(args.left).read_text(encoding="utf-8"))
+        right_payload = json.loads(Path(args.right).read_text(encoding="utf-8"))
+        validate_compatible_suites(left_payload, right_payload)
         left = load_results(Path(args.left))
         right = load_results(Path(args.right))
         markdown = render_full_comparison_markdown(
@@ -96,6 +102,7 @@ def main() -> None:
         results = asyncio.run(run_suite(suite, judge_model=args.judge_model))
         payload = {
             "suite": suite.id,
+            "suite_snapshot": suite_snapshot(suite),
             "results": [asdict(result) for result in results],
         }
         Path(args.out).write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -117,13 +124,16 @@ def _resolve_judge_suite(payload: object, suite_path: Path | None):
     """Pick the checks source for re-judging.
 
     An explicit ``--suite`` file always wins. Otherwise, when the results file
-    records that it ran the built-in default suite, that suite is used so the
-    common ``run`` -> ``judge`` path works without repeating ``--suite``.
+    recorded a suite snapshot (the normal harness run), that suite is used so
+    re-judging and comparing stay in sync with what actually ran. Finally, the
+    built-in default suite covers legacy files from before snapshots existed.
     """
-    from .suite import default_suite, load_suite
+    from .suite import default_suite, load_suite, suite_from_snapshot
 
     if suite_path is not None:
         return load_suite(suite_path)
+    if isinstance(payload, dict) and payload.get("suite_snapshot") is not None:
+        return suite_from_snapshot(payload["suite_snapshot"])
     suite_id = payload.get("suite") if isinstance(payload, dict) else None
     if suite_id == "default":
         return default_suite()
@@ -143,11 +153,12 @@ async def _judge_results_file(
     beside them, so the deterministic record stays exactly what it was.
     """
     from .execution import open_evaluation_environment
+    from .runner import _case_checks
 
     payload = json.loads(results_path.read_text(encoding="utf-8"))
     rows = payload.get("results", []) if isinstance(payload, dict) else payload
     suite = _resolve_judge_suite(payload, suite_path)
-    checks_by_case = {case.id: case.checks for case in suite.cases} if suite else {}
+    checks_by_case = {case.id: _case_checks(case) for case in suite.cases} if suite else {}
     goals_by_case = {case.id: case.goal for case in suite.cases} if suite else {}
 
     async with open_evaluation_environment() as environment:
@@ -198,5 +209,8 @@ __all__ = [
     "run_case",
     "run_suite",
     "save_suite",
+    "suite_from_snapshot",
+    "suite_snapshot",
     "summarize_judgments",
+    "validate_compatible_suites",
 ]

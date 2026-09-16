@@ -6,7 +6,7 @@ from api.repository.memory import InMemoryTaskRepository
 from api.services.approval_gateway import ApprovalGateway
 from api.services.event_broker import EventBroker
 from api.services.task_service import TaskService
-from common.agent import AgentRunResult
+from common.agent import AgentRunResult, AgentTask
 from common.enums import AgentTrack, RunStatus
 
 
@@ -166,6 +166,35 @@ async def test_dashboard_handles_unjudged_runs_without_crashing() -> None:
     assert dashboard["judge_average"] is None
     assert dashboard["judge_judged"] == 0
     assert dashboard["available"] is True
+
+
+async def test_dashboard_with_live_execution_does_not_corrupt_metric_series() -> None:
+    repository = InMemoryTaskRepository()
+    record = await repository.create_evaluation_run(
+        "live",
+        "1",
+        AgentTrack.NATIVE.value,
+        [{"id": "c1", "goal": "say hello"}],
+    )
+    task = AgentTask(
+        id="live-task",
+        goal="say hello",
+        thread_id="th",
+        track=AgentTrack.NATIVE,
+        metadata={
+            "evaluation_run_id": record["id"],
+            "evaluation_case_id": record["case_ids"][0],
+            "workspace": ".",
+        },
+    )
+    await repository.save_task(task)
+    await repository.create_run(task.id, None)
+
+    dashboard = await repository.get_evaluation_dashboard()
+
+    assert dashboard["available"] is True
+    assert dashboard["metrics"] == []
+    assert len(dashboard["executions"]) == 1
 
 
 async def test_evaluation_mount_workspace_is_normalized_and_passed_to_agent() -> None:

@@ -61,6 +61,17 @@ class UsageTracker(BaseCallbackHandler):
 
     def on_llm_end(self, response: Any, **kwargs: Any) -> None:
         try:
+            def record(usage: Any) -> None:
+                prompt = usage.get("input_tokens", usage.get("prompt_tokens", 0)) or 0
+                completion = usage.get("output_tokens", usage.get("completion_tokens", 0)) or 0
+                if not prompt and not completion:
+                    # A few providers report only the aggregate. Keep
+                    # the total visible rather than dropping the call.
+                    completion = usage.get("total_tokens", 0) or 0
+                self.prompt_tokens += int(prompt)
+                self.completion_tokens += int(completion)
+                self.calls += 1
+
             captured = False
             for generations in response.generations or []:
                 for generation in generations:
@@ -69,34 +80,24 @@ class UsageTracker(BaseCallbackHandler):
                     if not usage and message is not None:
                         response_metadata = getattr(message, "response_metadata", {}) or {}
                         usage = response_metadata.get("token_usage") or response_metadata.get("usage") or {}
-                    if not usage:
-                        usage = getattr(response, "usage_metadata", None) or {}
                     if usage:
-                        prompt = usage.get("input_tokens", usage.get("prompt_tokens", 0)) or 0
-                        completion = usage.get("output_tokens", usage.get("completion_tokens", 0)) or 0
-                        if not prompt and not completion:
-                            # A few providers report only the aggregate. Keep
-                            # the total visible rather than dropping the call.
-                            completion = usage.get("total_tokens", 0) or 0
-                        self.prompt_tokens += int(prompt)
-                        self.completion_tokens += int(completion)
-                        self.calls += 1
+                        record(usage)
                         captured = True
-            # Some LangChain integrations expose usage on llm_output rather
-            # than the returned AIMessage. Capture that shape as a fallback so
-            # provider choice does not silently turn usage into an empty dash.
-            if not captured:
-                raw = getattr(response, "llm_output", None) or {}
-                usage = raw.get("token_usage") if isinstance(raw, dict) else None
-                usage = usage or (raw.get("usage") if isinstance(raw, dict) else None)
-                if isinstance(usage, dict):
-                    prompt = usage.get("prompt_tokens", usage.get("input_tokens", 0))
-                    completion = usage.get("completion_tokens", usage.get("output_tokens", 0))
-                    if not prompt and not completion:
-                        completion = usage.get("total_tokens", 0) or 0
-                    self.prompt_tokens += int(prompt or 0)
-                    self.completion_tokens += int(completion or 0)
-                    self.calls += 1
+            if captured:
+                return
+            # Response-level shapes (usage_metadata or the llm_output aggregate)
+            # are read once, outside the per-generation loop, and only count
+            # when no generation carried its own numbers, so provider choice
+            # does not silently turn usage into an empty dash or double-count.
+            usage = getattr(response, "usage_metadata", None) or {}
+            if usage:
+                record(usage)
+                return
+            raw = getattr(response, "llm_output", None) or {}
+            usage = raw.get("token_usage") if isinstance(raw, dict) else None
+            usage = usage or (raw.get("usage") if isinstance(raw, dict) else None)
+            if isinstance(usage, dict):
+                record(usage)
         except Exception as exc:  # noqa: BLE001 - usage capture must never break a run
             log.debug("could not read usage from an LLM result: %s", exc)
 

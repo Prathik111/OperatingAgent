@@ -182,7 +182,7 @@ sidecar on `127.0.0.1:8000` and the Vite frontend on `127.0.0.1:1420`.
 
 ```powershell
 cd apps/desktop
-cargo pnpm run tauri -- dev
+pnpm run tauri -- dev
 ```
 
 The LangGraph track launches `gateway_server` through FastMCP stdio when it

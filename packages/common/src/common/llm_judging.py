@@ -386,8 +386,12 @@ def _consume_usage(complete: Complete) -> tuple[int, float]:
     return tracker.consume()
 
 
-class _UsageTracker:
-    """Accumulates provider-reported judge usage between calls."""
+class JudgeUsageTracker:
+    """Accumulates provider-reported judge usage between calls.
+
+    Public so non-native adapters (e.g. the LangChain-based judge used by the
+    API) can attach the same ``usage_tracker`` contract ``LLMJudge`` consumes.
+    """
 
     def __init__(self) -> None:
         self._tokens = 0
@@ -409,7 +413,7 @@ async def _registry_complete(
     messages: list[dict[str, str]],
     *,
     temperature: float = 0.0,
-    usage_tracker: _UsageTracker | None = None,
+    usage_tracker: JudgeUsageTracker | None = None,
 ) -> str:
     """Adapt an ``agent_native`` ModelRegistry into the judge's callable.
 
@@ -452,7 +456,7 @@ def judge_from_registry(registry: Any, model_name: str) -> LLMJudge:
             f"judge model {model_name!r} is not registered "
             f"(available: {', '.join(registry.list_model_names())})"
         )
-    usage_tracker = _UsageTracker()
+    usage_tracker = JudgeUsageTracker()
 
     async def complete(messages: list[dict[str, str]]) -> str:
         return await _registry_complete(

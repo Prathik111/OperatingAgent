@@ -130,26 +130,9 @@ def default_suite() -> EvaluationSuite:
     )
 
 
-def load_suite(path: Path) -> EvaluationSuite:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    cases = tuple(
-        EvaluationCase(
-            id=str(item["id"]),
-            goal=str(item["goal"]),
-            working_directory=str(item.get("working_directory", ".")),
-            expected_output_contains=str(item.get("expected_output_contains", "")),
-            checks=tuple(
-                OutputCheck.from_dict(check) for check in (item.get("checks") or [])
-            ),
-            metadata=dict(item.get("metadata", {}) or {}),
-        )
-        for item in payload.get("cases", [])
-    )
-    return EvaluationSuite(id=str(payload.get("id", path.stem)), cases=cases)
-
-
-def save_suite(suite: EvaluationSuite, path: Path) -> None:
-    payload = {
+def suite_snapshot(suite: EvaluationSuite) -> dict[str, Any]:
+    """A JSON-safe snapshot of the suite, enough to re-judge or verify later."""
+    return {
         "id": suite.id,
         "cases": [
             {
@@ -163,4 +146,34 @@ def save_suite(suite: EvaluationSuite, path: Path) -> None:
             for case in suite.cases
         ],
     }
-    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def suite_from_snapshot(payload: object) -> EvaluationSuite:
+    """Rebuild a suite from the JSON produced by :func:`suite_snapshot`."""
+    if not isinstance(payload, dict):
+        raise TypeError("suite snapshot must be an object")
+    cases = tuple(
+        EvaluationCase(
+            id=str(item["id"]),
+            goal=str(item["goal"]),
+            working_directory=str(item.get("working_directory", ".")),
+            expected_output_contains=str(item.get("expected_output_contains", "")),
+            checks=tuple(
+                OutputCheck.from_dict(check) for check in (item.get("checks") or [])
+            ),
+            metadata=dict(item.get("metadata", {}) or {}),
+        )
+        for item in payload.get("cases", [])
+    )
+    return EvaluationSuite(id=str(payload.get("id", "")), cases=cases)
+
+
+def load_suite(path: Path) -> EvaluationSuite:
+    suite = suite_from_snapshot(json.loads(path.read_text(encoding="utf-8")))
+    if not suite.id:
+        return EvaluationSuite(id=path.stem, cases=suite.cases)
+    return suite
+
+
+def save_suite(suite: EvaluationSuite, path: Path) -> None:
+    path.write_text(json.dumps(suite_snapshot(suite), indent=2), encoding="utf-8")

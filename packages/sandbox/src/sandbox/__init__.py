@@ -199,6 +199,7 @@ class ContainerPool:
             self.reason = ""
             self._available = True
             return True
+        process = None
         try:
             process = await asyncio.create_subprocess_exec(
                 "docker", "info", "--format", "{{.ServerVersion}}",
@@ -207,6 +208,12 @@ class ContainerPool:
             )
             _stdout, stderr = await asyncio.wait_for(process.communicate(), 5)
         except (OSError, TimeoutError) as exc:
+            if process is not None:
+                try:
+                    process.kill()
+                    await asyncio.wait_for(process.communicate(), 10)
+                except (OSError, TimeoutError, ProcessLookupError):
+                    pass
             self.reason = str(exc) or "Docker daemon is unavailable"
             self._available = False
             return False
@@ -246,6 +253,7 @@ class ContainerPool:
                 self._available = False
                 return False
             return True
+        process = None
         try:
             process = await asyncio.create_subprocess_exec(
                 "docker", "image", "inspect", self.image,
@@ -254,6 +262,12 @@ class ContainerPool:
             )
             _stdout, stderr = await asyncio.wait_for(process.communicate(), 10)
         except (OSError, TimeoutError) as exc:
+            if process is not None:
+                try:
+                    process.kill()
+                    await asyncio.wait_for(process.communicate(), 10)
+                except (OSError, TimeoutError, ProcessLookupError):
+                    pass
             self.reason = str(exc) or "could not inspect sandbox image"
             self._available = False
             return False
@@ -328,6 +342,7 @@ class ContainerPool:
                 self._runner_meta[key] = (session_id, str(root))
                 log.info("created sandbox container=%s session=%s workspace=%s", container_id, session_id, root)
                 return runner
+            process = None
             try:
                 process = await asyncio.create_subprocess_exec(
                     *args,
@@ -337,7 +352,13 @@ class ContainerPool:
                 stdout, stderr = await asyncio.wait_for(process.communicate(), 30)
             except (OSError, TimeoutError) as exc:
                 # A half-created container would linger nameless-but-running;
-                # remove by name so timeouts cannot accumulate orphans.
+                # best-effort kill it before tearing it down by name.
+                if process is not None:
+                    try:
+                        process.kill()
+                        await asyncio.wait_for(process.communicate(), 10)
+                    except (OSError, TimeoutError, ProcessLookupError):
+                        pass
                 await self._stop(name)
                 self.reason = str(exc) or "could not start Docker container"
                 return None

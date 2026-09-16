@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import { nativeApi, taskApi } from "../lib/api";
+import { nativeApi, taskApi, judgeApi } from "../lib/api";
 import { folderName, isTauri, pickDirectory } from "../lib/pickFolder";
 import type { SandboxStatusResponse } from "../lib/types";
 
@@ -46,15 +46,20 @@ export function loadSettings(): DesktopSettings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
     if (!raw) return DEFAULT_SETTINGS;
-    return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+    const parsed = JSON.parse(raw) as DesktopSettings;
+    // The Langfuse secret key must never be persisted to localStorage; it is
+    // kept in memory only while the form is open and sent to the API on Apply.
+    const { langfuseSecretKey: _secret, ...safe } = parsed;
+    return { ...DEFAULT_SETTINGS, ...safe };
   } catch {
     return DEFAULT_SETTINGS;
   }
 }
 
 export function saveSettings(settings: DesktopSettings) {
-  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
-  window.dispatchEvent(new CustomEvent("operating-agent:settings", { detail: settings }));
+  const persisted = { ...settings, langfuseSecretKey: "" };
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(persisted));
+  window.dispatchEvent(new CustomEvent("operating-agent:settings", { detail: persisted }));
 }
 
 export function SettingsModal({
@@ -75,8 +80,13 @@ export function SettingsModal({
   const [modelsError, setModelsError] = useState("");
   const [sandbox, setSandbox] = useState<SandboxStatusResponse | null>(null);
   const [apiKeys, setApiKeys] = useState<Partial<Record<DesktopSettings["provider"], string>>>({});
-  const [apiKeySet, setApiKeySet] = useState(false);
+const [apiKeySet, setApiKeySet] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
+  const [judgeProvider, setJudgeProvider] = useState("");
+  const [judgeModel, setJudgeModel] = useState("");
+  const [judgeBaseUrl, setJudgeBaseUrl] = useState("");
+  const [judgeApiKey, setJudgeApiKey] = useState("");
+  const [judgeApiKeySet, setJudgeApiKeySet] = useState(false);
 
   // The native track only serves ollama/groq: a provider persisted from the
   // LangGraph track (openai/anthropic) is shown and saved as the native
@@ -135,6 +145,25 @@ export function SettingsModal({
       cancelled = true;
     };
   }, [track]);
+
+  // Judge provider defaults are shared across tracks and editable here.
+  useEffect(() => {
+    let cancelled = false;
+    const loadJudge = async () => {
+      try {
+        const current = await judgeApi.getSettings();
+        if (cancelled) return;
+        setJudgeProvider(typeof current.provider === "string" ? current.provider : "");
+        setJudgeModel(typeof current.model === "string" ? current.model : "");
+        setJudgeBaseUrl(typeof current.base_url === "string" ? current.base_url : "");
+        setJudgeApiKeySet(current.api_key_set === true);
+      } catch (cause) {
+        if (!cancelled) setError((cause as Error).message);
+      }
+    };
+    void loadJudge();
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -254,6 +283,22 @@ export function SettingsModal({
     }
   };
 
+  const handleJudgeSave = async () => {
+    setError("");
+    try {
+      await judgeApi.updateSettings({
+        provider: judgeProvider.trim() || undefined,
+        model: judgeModel.trim() || "",
+        api_key: judgeApiKey.trim() || "",
+        base_url: judgeBaseUrl.trim() || "",
+      });
+      setJudgeApiKey("");
+      window.setTimeout(onClose, 700);
+    } catch (cause) {
+      setError((cause as Error).message);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 anim-fade-in" style={{ background: "rgba(2,6,14,0.7)", backdropFilter: "blur(6px)" }} onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="w-full max-w-[680px] max-h-[90vh] overflow-auto rounded-2xl anim-scale-in" style={{ background: "var(--bg-1)", border: "1px solid var(--accent-ring)", boxShadow: "0 24px 64px rgba(2,8,20,0.7), var(--accent-glow)" }}>
@@ -272,25 +317,29 @@ export function SettingsModal({
               <input value={settings.apiUrl} onChange={(e) => set("apiUrl", e.target.value)} placeholder="http://127.0.0.1:8000" className="field" />
             </Field>
             <div className="grid sm:grid-cols-2 gap-3">
-              <Field label="Workspace" hint="Must be an existing directory">
-                <span className="flex gap-1.5">
-                  <button type="button" disabled={!isTauri()} onClick={async () => { const dir = await pickDirectory(settings.workspace); if (dir) set("workspace", dir); }} title="Choose workspace folder" className="field mono flex-1 min-w-0 text-left truncate disabled:opacity-60">
-                    {settings.workspace === "." ? "Choose workspace folder" : folderName(settings.workspace)}
-                  </button>
-                  {isTauri() && (
-                    <button
-                      onClick={async () => {
-                        const dir = await pickDirectory(settings.workspace);
-                        if (dir) set("workspace", dir);
-                      }}
-                      title="Choose folder in file explorer"
-                      className="hidden"
-                      style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)", color: "var(--fg-1)" }}
-                    >
-                      Browse…
+<Field label="Workspace" hint="Must be an existing directory">
+                {isTauri() ? (
+                  <span className="flex gap-1.5">
+                    <button type="button" onClick={async () => { const dir = await pickDirectory(settings.workspace); if (dir) set("workspace", dir); }} title="Choose workspace folder" className="field mono flex-1 min-w-0 text-left truncate">
+                      {settings.workspace === "." ? "Choose workspace folder" : folderName(settings.workspace)}
                     </button>
-                  )}
-                </span>
+                    {isTauri() && (
+                      <button
+                        onClick={async () => {
+                          const dir = await pickDirectory(settings.workspace);
+                          if (dir) set("workspace", dir);
+                        }}
+                        title="Choose folder in file explorer"
+                        className="hidden"
+                        style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)", color: "var(--fg-1)" }}
+                      >
+                        Browse…
+                      </button>
+                    )}
+                  </span>
+                ) : (
+                  <input value={settings.workspace} onChange={(e) => set("workspace", e.target.value)} placeholder="Workspace folder path" className="field mono" />
+                )}
               </Field>
               <Field label="Terminal isolation">
                 {sandbox ? (
@@ -491,6 +540,53 @@ export function SettingsModal({
               <Field label="Temperature"><input value={settings.temperature} onChange={(e) => set("temperature", e.target.value)} placeholder="0" className="field mono" /></Field>
               <Field label="Top P"><input value={settings.topP} onChange={(e) => set("topP", e.target.value)} placeholder="1" className="field mono" /></Field>
               <Field label="Max output tokens"><input value={settings.maxTokens} onChange={(e) => set("maxTokens", e.target.value)} placeholder="Provider default" className="field mono" /></Field>
+            </div>
+          </section>
+
+          <section className="space-y-3">
+            <SectionTitle>LLM judge (evaluations)</SectionTitle>
+            <div className="text-[11px] leading-relaxed" style={{ color: "var(--fg-3)" }}>
+              The evaluation judge can run on a different provider than the agents it scores. These are the shared defaults the Evaluation tab uses; you can still pick a per-run provider/model there. API keys are used by the backend only and never shown by the API.
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {(["ollama", "groq", "openai", "anthropic"] as const).map((id) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => { setJudgeProvider(id); setJudgeModel(""); setJudgeBaseUrl(""); setJudgeApiKey(""); }}
+                  className="rounded-xl px-3 py-2.5 text-left transition-all"
+                  style={{
+                    background: judgeProvider === id ? "var(--accent-soft)" : "var(--bg-2)",
+                    border: `1px solid ${judgeProvider === id ? "var(--accent-ring)" : "var(--bg-4)"}`,
+                  }}
+                >
+                  <span className="block text-[12px] font-semibold capitalize" style={{ color: judgeProvider === id ? "var(--accent)" : "var(--fg-1)" }}>{id}</span>
+                </button>
+              ))}
+            </div>
+            <div className="grid sm:grid-cols-2 gap-3">
+              <Field label="Model" hint="Empty uses the provider default">
+                <input value={judgeModel} onChange={(e) => setJudgeModel(e.target.value)} placeholder="Judge model (blank = provider default)" className="field mono" />
+              </Field>
+              <Field label="Base URL" hint="Optional. Ollama default: http://localhost:11434">
+                <input value={judgeBaseUrl} onChange={(e) => setJudgeBaseUrl(e.target.value)} placeholder="Provider default" className="field mono" />
+              </Field>
+            </div>
+            {judgeProvider && judgeProvider !== "ollama" && (
+              <Field label={`${judgeProvider} API key`} hint={judgeApiKey.trim() ? "Sent securely to the API on Apply" : "Leave blank to clear and fall back to the environment key"}>
+                <input
+                  type="password"
+                  value={judgeApiKey}
+                  onChange={(e) => setJudgeApiKey(e.target.value)}
+                  placeholder={judgeApiKeySet ? "Configured in API environment · enter to replace" : "Paste provider API key"}
+                  className="field mono"
+                  autoComplete="off"
+                />
+              </Field>
+            )}
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={handleJudgeSave} className="btn-grad h-8 px-4 rounded-lg text-[11px] font-semibold" style={{ color: "white", border: "1px solid transparent" }}>Apply judge settings</button>
+              <span className="text-[11px]" style={{ color: "var(--fg-3)" }}>{judgeProvider ? `${judgeProvider}${judgeModel.trim() ? ` · ${judgeModel.trim()}` : " · default model"}` : "No active judge provider"}</span>
             </div>
           </section>
 

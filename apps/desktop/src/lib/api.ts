@@ -4,8 +4,9 @@ import type {
   CreateTaskRequest,
   EnvironmentResponse,
   EventResponse,
-  HealthResponse,
+HealthResponse,
   EvaluationDashboard,
+  JudgeSettings,
   StartEvaluationResponse,
   NativeHealthResponse,
   PermissionResponse,
@@ -135,9 +136,9 @@ export const nativeApi = {
 
 // ——— Task / LangGraph ———
 export const taskApi = {
-  health: () => req<HealthResponse>("/health"),
+health: () => req<HealthResponse>("/health"),
   evaluationDashboard: () => req<EvaluationDashboard>("/evaluations/dashboard"),
-  startEvaluation: (body: { name: string; version: string; tracks: Array<"native" | "langgraph">; judge_model?: string; cases: Array<{ id: string; goal: string; working_directory?: string; expected_output_contains?: string; checks?: Array<Record<string, unknown>>; metadata?: Record<string, unknown> }> }) =>
+  startEvaluation: (body: { name: string; version: string; tracks: Array<"native" | "langgraph">; judge_model?: string; judge_provider?: string; cases: Array<{ id: string; goal: string; working_directory?: string; expected_output_contains?: string; checks?: Array<Record<string, unknown>>; metadata?: Record<string, unknown> }> }) =>
     req<StartEvaluationResponse>("/evaluations/runs", { method: "POST", body: JSON.stringify(body) }),
 
   createTask: (body: CreateTaskRequest) =>
@@ -191,6 +192,18 @@ export const taskApi = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+};
+
+// ——— LLM judge (shared across evaluations; separately configurable provider) ———
+export const judgeApi = {
+  getSettings: () => req<JudgeSettings>("/settings/judge"),
+  updateSettings: (body: { provider?: string; model?: string; api_key?: string; base_url?: string | null }) =>
+    req<JudgeSettings>("/settings/judge", { method: "PATCH", body: JSON.stringify(body) }),
+  listModels: (provider: string, baseUrl?: string) => {
+    const q = new URLSearchParams({ provider });
+    if (baseUrl?.trim()) q.set("base_url", baseUrl.trim());
+    return req<{ provider: string; models: string[]; default_model: string }>(`/settings/judge/models?${q}`);
+  },
 };
 
 export interface SSEMessage {

@@ -12,6 +12,7 @@ Two honesty rules are enforced here, mirroring the report contract:
 
 from __future__ import annotations
 
+import json
 from collections import Counter
 from dataclasses import dataclass
 
@@ -35,6 +36,28 @@ class ComparisonReport:
     left_label: str
     right_label: str
     rows: list[ComparisonRow]
+
+
+def validate_compatible_suites(left: object, right: object) -> None:
+    """Refuse to compare results recorded against different suites.
+
+    Both payloads embed a ``suite_snapshot`` (see ``suite.suite_snapshot``)
+    when the harness ran them; identical snapshots compare cleanly, while a
+    difference in any case's id, goal, or checks is a hard error. Payloads
+    from before the snapshot was recorded carry no snapshot and are accepted
+    so old result files keep comparing.
+    """
+    left_snapshot = left.get("suite_snapshot") if isinstance(left, dict) else None
+    right_snapshot = right.get("suite_snapshot") if isinstance(right, dict) else None
+    if left_snapshot is None or right_snapshot is None:
+        return
+    left_dump = json.dumps(left_snapshot, sort_keys=True)
+    right_dump = json.dumps(right_snapshot, sort_keys=True)
+    if left_dump != right_dump:
+        raise ValueError(
+            "evaluation results describe different suites; refusing to compare "
+            "(rerun each track against the same suite snapshot)"
+        )
 
 
 def compare_results(left: list[EvaluationResult], right: list[EvaluationResult]) -> ComparisonReport:

@@ -23,6 +23,8 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .config import ApiSettings
 from .environment import load_environment
 from .errors import register_exception_handlers
+from .judge import JudgeRuntimeConfig
+from .judge_settings import router as judge_settings_router
 from .langgraph_settings import router as langgraph_settings_router
 from .orchestration.factory import build_orchestrators
 from .repository.factory import build_repository
@@ -290,6 +292,8 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
         app.state.native_cancels = native_cancels
         app.state.native_pool = native_pool
 
+        judge_config = JudgeRuntimeConfig.from_env()
+        app.state.judge_config = judge_config
         # Build both tracks after native startup so the shared /tasks endpoint
         # receives the real AgentService-backed native adapter.
         orchestrators = build_orchestrators(
@@ -297,18 +301,14 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             approval_handler=approval_gateway,
             native_service=native_service,
         )
-        # The optional LLM judge is built from the native runtime's model
-        # registry: the same wired providers the agent itself uses. One
-        # factory per process; start_evaluation builds ONE judge instance per
-        # request and shares it across every track being compared.
-        judge_factory = None
-        native_registry = getattr(native_runtime, "models", None) if native_runtime is not None else None
-        if native_registry is not None and hasattr(native_registry, "list_model_names"):
+        # The optional LLM judge is built from a dedicated judge-provider
+        # config (env defaults + Settings runtime overrides) so the judge can
+        # run on a different provider than the agents it scores.  One factory
+        # per process; start_evaluation builds ONE judge instance per request
+        # and shares it across every track being compared.
+        from .judge import make_judge_factory
 
-            def judge_factory(model_name: str, _registry=native_registry):
-                from common.llm_judging import judge_from_registry
-
-                return judge_from_registry(_registry, model_name)
+        judge_factory = make_judge_factory(judge_config)
 
         app.state.settings = resolved_settings
         app.state.repository = repository
@@ -427,6 +427,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     app.include_router(approvals.router)
     app.include_router(evaluations.router)
     app.include_router(langgraph_settings_router)
+    app.include_router(judge_settings_router)
     # Native-track routes — mounted separately so existing paths are untouched
     if _NATIVE_ROUTERS_AVAILABLE:
         assert native_health is not None

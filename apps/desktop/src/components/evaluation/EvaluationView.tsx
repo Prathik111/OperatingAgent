@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import * as XLSX from "xlsx";
-import { taskApi } from "../../lib/api";
+import { taskApi, judgeApi } from "../../lib/api";
 import type { EvaluationDashboard, EvaluationExecution } from "../../lib/types";
 import { folderName, isTauri, pickDirectory } from "../../lib/pickFolder";
 import { MarkdownText } from "../MarkdownText";
@@ -116,10 +116,22 @@ export function EvaluationView() {
   const [suiteName, setSuiteName] = useState("desktop-suite");
   const [suiteVersion, setSuiteVersion] = useState("1");
   const [judgeModel, setJudgeModel] = useState("");
+  const [judgeProvider, setJudgeProvider] = useState("");
+  const [judgeProviders, setJudgeProviders] = useState<string[]>(["ollama", "groq", "openai", "anthropic"]);
+  const [judgeDefaultModel, setJudgeDefaultModel] = useState("");
   const [stallNote, setStallNote] = useState<string | null>(null);
   const [runProgress, setRunProgress] = useState<Array<{ id: string; track: string; status?: string; result_count: number; passed_count: number; judge_judged?: number; judge_errors?: number; finished_at: string | null }>>([]);
-  const [workspace, setWorkspace] = useState(loadEvaluationWorkspace);
+const [workspace, setWorkspace] = useState(loadEvaluationWorkspace);
   const canBrowse = isTauri();
+  // Blocks the run-wait polling loop after an unmount so a navigation away
+  // cannot keep issuing dashboard requests (or set state) in the background.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
   const [cases, setCases] = useState<Array<{ id: string; goal: string; working_directory?: string; expected_output_contains?: string; checks?: Array<Record<string, unknown>>; metadata?: Record<string, unknown> }>>([
     { id: "greeting", goal: "Reply with a short friendly greeting.", expected_output_contains: "hello" },
     { id: "capabilities", goal: "Summarize what you can do in one sentence." },
@@ -139,7 +151,7 @@ export function EvaluationView() {
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => {
+useEffect(() => {
     let cancelled = false;
     void taskApi.health()
       .then((health) => { if (!cancelled) setDegraded(health.degraded || []); })
@@ -148,6 +160,21 @@ export function EvaluationView() {
       .then((next) => { if (!cancelled) { setData(next); setError(null); } })
       .catch((cause: Error) => { if (!cancelled) setError(cause.message); })
       .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Seed the judge picker from the active backend setting (a provider can be
+  // selected even before any model name is typed).
+  useEffect(() => {
+    let cancelled = false;
+    judgeApi.getSettings()
+      .then((settings) => {
+        if (cancelled) return;
+        if (settings.providers?.length) setJudgeProviders(settings.providers);
+        if (settings.provider) setJudgeProvider(settings.provider);
+        if (settings.default_model) setJudgeDefaultModel(settings.default_model);
+      })
+      .catch(() => undefined);
     return () => { cancelled = true; };
   }, []);
 
@@ -163,6 +190,7 @@ export function EvaluationView() {
         version: suiteVersion.trim() || "1",
         tracks,
         judge_model: judgeModel.trim() || undefined,
+        judge_provider: judgeProvider.trim() || undefined,
         cases: cases.map((item) => ({
           ...item,
           working_directory: item.working_directory?.trim() || workspace.trim() || ".",
@@ -180,7 +208,7 @@ export function EvaluationView() {
       const STALL_AFTER_MS = 5 * 60 * 1000;
       let lastSignature = "";
       let lastProgressAt = Date.now();
-      while (Date.now() < deadline) {
+      while (Date.now() < deadline && mountedRef.current) {
         try {
           const next = await taskApi.evaluationDashboard();
           setData(next);
@@ -216,7 +244,8 @@ export function EvaluationView() {
     } catch (cause) {
       startFailed = true;
       setError((cause as Error).message);
-    } finally {
+} finally {
+      if (!mountedRef.current) return;
       // Fetch one final no-store snapshot so completed results and judge
       // verdicts appear immediately after the background task settles.
       if (startFailed) {
@@ -310,8 +339,8 @@ export function EvaluationView() {
           <>
             <section className="rounded-xl p-4 space-y-3" style={{ background: "var(--bg-1)", border: "1px solid var(--bg-4)" }}>
               <div className="flex items-center justify-between gap-3"><h2 className="text-[13px] font-semibold">Evaluation suite</h2><label className="text-[11px] cursor-pointer" style={{ color: "var(--accent)" }}>Import JSON/CSV/TSV/XLSX<input type="file" accept=".json,.csv,.tsv,.txt,.xlsx,.xls" className="hidden" onChange={(e) => { const file = e.target.files?.[0]; if (file) void importCases(file); e.currentTarget.value = ""; }} /></label></div>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-2"><input value={suiteName} onChange={(e) => setSuiteName(e.target.value)} placeholder="Suite name" className="field" /><input value={suiteVersion} onChange={(e) => setSuiteVersion(e.target.value)} placeholder="Version" className="field" /><input value={judgeModel} onChange={(e) => setJudgeModel(e.target.value)} placeholder="Judge model (blank = deterministic only)" className="field mono" title="Optional LLM judge: a runtime model name, e.g. gpt-oss-120b. One shared blind judge scores every track; results appear beside the deterministic pass rate." /><button type="button" onClick={chooseWorkspace} disabled={!canBrowse} className="field flex items-center justify-between gap-2 text-left disabled:opacity-60"><span className="truncate"><span className="mr-2" style={{ color: "var(--accent)" }}>Folder</span>{folderName(workspace)}</span><span className="text-[10px]" style={{ color: "var(--fg-3)" }}>{canBrowse ? "Choose…" : "Desktop only"}</span></button></div>
-              <div className="text-[10px]" style={{ color: "var(--fg-3)" }}>{canBrowse ? "Choose the folder once; both agents run every case in that same workspace." : "Folder selection is available in the Tauri desktop app."} Judge model: name a runtime model (e.g. gpt-oss-120b) to have one shared, track-blind LLM judge score every case; its scores are reported separately from the deterministic pass rate.</div>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-2"><input value={suiteName} onChange={(e) => setSuiteName(e.target.value)} placeholder="Suite name" className="field" /><input value={suiteVersion} onChange={(e) => setSuiteVersion(e.target.value)} placeholder="Version" className="field" /><div className="field flex items-center gap-2 p-0 pl-2" title="Optional LLM judge: pick a provider and a model on it. One shared blind judge scores every track on the same provider; results appear beside the deterministic pass rate. The API key is configured in Settings and never sent from the browser."><select value={judgeProvider} onChange={(e) => { const next = e.target.value; setJudgeProvider(next); setJudgeModel(""); setJudgeDefaultModel(""); if (next) { void judgeApi.listModels(next).then(({ default_model }) => setJudgeDefaultModel(default_model || "")).catch(() => undefined); } else { void judgeApi.getSettings().then((settings) => { if (settings.provider) setJudgeProvider(settings.provider); if (settings.default_model) setJudgeDefaultModel(settings.default_model); }).catch(() => undefined); } }} className="w-24 bg-transparent outline-none" aria-label="Judge provider"><option value="">default</option>{judgeProviders.map((provider) => <option key={provider} value={provider}>{provider}</option>)}</select><input value={judgeModel} onChange={(e) => setJudgeModel(e.target.value)} placeholder={judgeDefaultModel ? `Judge model (e.g. ${judgeDefaultModel})` : "Judge model (blank = none)"} className="mono flex-1 bg-transparent outline-none" /></div>{canBrowse ? <button type="button" onClick={chooseWorkspace} className="field flex items-center justify-between gap-2 text-left"><span className="truncate"><span className="mr-2" style={{ color: "var(--accent)" }}>Folder</span>{folderName(workspace)}</span><span className="text-[10px]" style={{ color: "var(--fg-3)" }}>Choose…</span></button> : <input value={workspace} onChange={(e) => { setWorkspace(e.target.value); saveEvaluationWorkspace(e.target.value.trim()); }} placeholder="Evaluation folder path" className="field mono" title="Workspace folder every case runs in (filled into blank working_directory cells)" />}</div>
+              <div className="text-[10px]" style={{ color: "var(--fg-3)" }}>{canBrowse ? "Choose the folder once; both agents run every case in that same workspace." : "Type a folder path; both agents run every case in that same workspace. Folder picking requires the Tauri desktop app."} Judge: pick a provider and model to have one shared, track-blind LLM judge score every case. The judge provider may differ from the agents'; its scores are reported separately from the deterministic pass rate.</div>
               <div className="text-[10px]" style={{ color: "var(--fg-3)" }}>Both agents receive every case below. Sheet columns: id, goal, working_directory (optional), expected_output_contains, checks (optional — "ui_bundle", "code+info+pacing+script", or check JSON), metadata (optional JSON). Blank directories use the selected evaluation folder.</div>
               <div className="space-y-2">{cases.map((item, index) => <div key={`${item.id}-${index}`} className="grid grid-cols-[110px_1fr_180px_auto] gap-2"><input value={item.id} onChange={(e) => setCases((all) => all.map((row, i) => i === index ? { ...row, id: e.target.value } : row))} placeholder="case id" className="field mono" /><input value={item.goal} onChange={(e) => setCases((all) => all.map((row, i) => i === index ? { ...row, goal: e.target.value } : row))} placeholder="Prompt / goal" className="field" /><input value={item.expected_output_contains || ""} onChange={(e) => setCases((all) => all.map((row, i) => i === index ? { ...row, expected_output_contains: e.target.value } : row))} placeholder={item.checks?.length ? `${item.checks.length} checks attached` : "Expected text"} className="field" /><button type="button" onClick={() => setCases((all) => all.filter((_, i) => i !== index))} className="btn-quiet px-2" aria-label="Remove case">x</button></div>)}</div>
               <button type="button" onClick={() => setCases((all) => [...all, { id: `case-${all.length + 1}`, goal: "", expected_output_contains: "" }])} className="btn-quiet h-7 px-2 text-[11px]">+ Add case</button>

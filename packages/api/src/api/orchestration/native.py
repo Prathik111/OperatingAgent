@@ -151,22 +151,26 @@ class NativeAgentOrchestrator(IAgentOrchestrator):
         output_tokens = int(getattr(usage, "output_tokens", 0) or getattr(result, "output_tokens", 0) or 0)
         cost = float(getattr(result, "cost_usd", 0.0) or 0.0)
         # Native stores detailed usage in its own runtime database. Mirror one
-        # normalized record into the shared API repository for evaluations.
+        # normalized record into the shared API repository for evaluations. When
+        # the callback is authoritative (the API service's persistence sink),
+        # deliver directly so a persistence failure fails the run instead of
+        # being swallowed by the best-effort forwarder.
         if int(getattr(result, "turns", 0) or 0) or input_tokens or output_tokens or cost:
-            await _emit(
-                on_event,
-                AgentEvent(
-                    type="llm_call",
-                    payload={
-                        "node_name": "native_run",
-                        "provider": "native",
-                        "model": str(getattr(result, "model", "") or ""),
-                        "prompt_tokens": input_tokens,
-                        "completion_tokens": output_tokens,
-                        "cost": cost,
-                    },
-                ),
+            usage_event = AgentEvent(
+                type="llm_call",
+                payload={
+                    "node_name": "native_run",
+                    "provider": "native",
+                    "model": str(getattr(result, "model", "") or ""),
+                    "prompt_tokens": input_tokens,
+                    "completion_tokens": output_tokens,
+                    "cost": cost,
+                },
             )
+            if getattr(on_event, "_authoritative", False):
+                await on_event(usage_event)
+            else:
+                await _emit(on_event, usage_event)
         metadata = {
             "native_run_id": str(getattr(result, "run_id", "") or ""),
             "native_status": native_status,

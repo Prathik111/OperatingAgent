@@ -43,23 +43,42 @@ _RATE_LIMIT_HINTS = (
     "quota exceeded",
     "resource exhausted",
 )
-_TRANSIENT_PROVIDER_HINTS = _RATE_LIMIT_HINTS + (
+_TRANSIENT_PROVIDER_HINTS = (
     "all connection attempts failed",
     "connection refused",
     "connection reset",
     "connection error",
     "connecterror",
-    "timeout",
-    "timed out",
     "temporarily unavailable",
     "overloaded",
-    "capacity",
     "bad gateway",
     "service unavailable",
-    "internal server error",
     "502",
     "503",
     "504",
+)
+#: Weak signals that only count toward provider_unavailable when a provider
+#: marker is also present (e.g. "API timed out"), so sandbox/harness errors
+#: like a tool timeout are not misclassified as upstream failures.
+_GENERIC_TRANSIENT_HINTS = (
+    "timeout",
+    "timed out",
+    "capacity",
+    "internal server error",
+)
+#: Words that tie a generic signal to the upstream provider rather than to
+#: the evaluation harness or sandbox code itself.
+_PROVIDER_MARKERS = (
+    "provider",
+    "upstream",
+    "api",
+    "groq",
+    "openai",
+    "anthropic",
+    "ollama",
+    "http",
+    "httpx",
+    "langchain",
 )
 _RETRY_WAIT = re.compile(r"try again in ([0-9.]+)\s*s", re.IGNORECASE)
 
@@ -69,7 +88,10 @@ def _provider_failure_kind(message: str) -> str | None:
     lowered = (message or "").lower()
     if any(hint in lowered for hint in _RATE_LIMIT_HINTS):
         return "rate_limited"
-    if any(hint in lowered for hint in _TRANSIENT_PROVIDER_HINTS):
+    matched = any(hint in lowered for hint in _TRANSIENT_PROVIDER_HINTS)
+    if any(hint in lowered for hint in _GENERIC_TRANSIENT_HINTS):
+        matched = matched or any(marker in lowered for marker in _PROVIDER_MARKERS)
+    if matched:
         return "provider_unavailable"
     return None
 
@@ -115,7 +137,7 @@ class TaskService:
         background: set[asyncio.Task],
         approvals: ApprovalGateway | None = None,
         execution_owner: str | None = None,
-        judge_factory: Callable[[str], LLMJudge] | None = None,
+        judge_factory: Callable[[str, str], LLMJudge] | None = None,
     ) -> None:
         self._orchestrators = orchestrators
         self._repo = repository
@@ -575,15 +597,18 @@ class TaskService:
         tracks: list[AgentTrack],
         cases: list[dict[str, Any]],
         judge_model: str = "",
+        judge_provider: str = "",
     ) -> list[str]:
         """Start a persisted benchmark run for each selected track.
 
-        ``judge_model`` optionally enables the LLM judge for this run. One
-        judge instance is built here — before any track executes — and shared
-        by every track's execution, so both tracks are scored by the same
-        model with the same prompt (fairness rule 1). The judge is blind to
-        track identity (rule 2) and its scores never touch the deterministic
-        ``correctness`` metric (rule 3).
+        ``judge_model`` optionally enables the LLM judge for this run;
+        ``judge_provider`` overrides the configured judge provider (an empty
+        value uses the active Settings default). One judge instance is built
+        here — before any track executes — and shared by every track's
+        execution, so both tracks are scored by the same model with the same
+        prompt (fairness rule 1). The judge is blind to track identity (rule
+        2) and its scores never touch the deterministic ``correctness`` metric
+        (rule 3).
         """
         if not cases:
             raise ValueError("evaluation requires at least one case")
@@ -600,11 +625,11 @@ class TaskService:
         if judge_model:
             if self._judge_factory is None:
                 raise ValueError(
-                    "LLM judge requested but no judge-capable model registry is configured"
+                    "LLM judge requested but the judge provider is unavailable"
                 )
             try:
-                judge = self._judge_factory(judge_model)
-            except KeyError as exc:
+                judge = self._judge_factory(judge_provider, judge_model)
+            except (KeyError, ValueError) as exc:
                 raise ValueError(str(exc)) from exc
         evaluation_ids: list[str] = []
         records: list[tuple[AgentTrack, dict[str, Any]]] = []

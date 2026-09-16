@@ -1028,10 +1028,21 @@ export function ChatWorkspace({
           </div>
           <label className="block">
             <span className="block text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: "var(--fg-3)" }}>Working directory</span>
-            <span className="flex gap-1.5">
-              <button type="button" onClick={browseWorkspace} disabled={!canBrowse} className="field !h-8 !text-[11px] mono flex-1 min-w-0 text-left truncate disabled:opacity-60" title="Choose working directory">
-                {workspace === "." ? "Choose workspace folder" : folderName(workspace)}
-              </button>
+<span className="flex gap-1.5">
+              {canBrowse ? (
+                <button type="button" onClick={browseWorkspace} className="field !h-8 !text-[11px] mono flex-1 min-w-0 text-left truncate" title="Choose working directory">
+                  {workspace === "." ? "Choose workspace folder" : folderName(workspace)}
+                </button>
+              ) : (
+                <input
+                  value={workspace}
+                  onChange={(e) => setWorkspace(e.target.value)}
+                  onBlur={() => selectWorkspace(workspace)}
+                  onKeyDown={(e) => e.key === "Enter" && selectWorkspace(workspace)}
+                  placeholder="Working directory"
+                  className="field mono !h-8 !text-[11px]"
+                />
+              )}
               {canBrowse && (
                 <button
                   onClick={browseWorkspace}

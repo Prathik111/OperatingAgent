@@ -1,4 +1,4 @@
-from common.config import AgentConfig
+from common.config import AgentConfig, LLMConfig
 from langchain_core.language_models import BaseChatModel
 from pydantic import SecretStr
 
@@ -24,73 +24,74 @@ class ModelProvider:
     """
 
     def __init__(self, config: AgentConfig) -> None:
-        self._model = self._create_model(config)
+        self._model = self.create_chat_model(config.llm)
 
     @staticmethod
-    def _create_model(config: AgentConfig) -> BaseChatModel:
+    def create_chat_model(config: LLMConfig) -> BaseChatModel:
         """
-        Centralized model construction.
+        Centralized model construction from an ``LLMConfig``.
 
-        Replace this implementation with the model backend
-        used by the project, e.g. Ollama, OpenAI, Groq, etc.
+        Shared by the graph nodes and the LLM judge so both resolve providers
+        identically (ollama, groq, openai, anthropic). Replace this
+        implementation with the model backend used by the project.
         """
 
-        provider = config.llm.provider.strip().lower()
+        provider = config.provider.strip().lower()
 
         if provider == "ollama":
             from langchain_ollama import ChatOllama
             return ChatOllama(
-                model=config.llm.model,
-                temperature=config.llm.temperature,
-                top_p=config.llm.top_p,
-                num_predict=config.llm.max_tokens,
-                base_url=_ollama_base_url(config.llm.base_url),
-                client_kwargs={"timeout": config.llm.timeout_seconds},
-                async_client_kwargs={"timeout": config.llm.timeout_seconds},
+                model=config.model,
+                temperature=config.temperature,
+                top_p=config.top_p,
+                num_predict=config.max_tokens,
+                base_url=_ollama_base_url(config.base_url),
+                client_kwargs={"timeout": config.timeout_seconds},
+                async_client_kwargs={"timeout": config.timeout_seconds},
             )
 
         if provider == "groq":
             from langchain_groq import ChatGroq
             return ChatGroq(
-                model=config.llm.model,
-                temperature=config.llm.temperature,
-                max_tokens=config.llm.max_tokens,
-                timeout=config.llm.timeout_seconds,
-                model_kwargs={"top_p": config.llm.top_p},
-                api_key=SecretStr(config.llm.api_key),
-                base_url=(config.llm.base_url or None),
-                max_retries=config.llm.max_retries,
+                model=config.model,
+                temperature=config.temperature,
+                max_tokens=config.max_tokens,
+                timeout=config.timeout_seconds,
+                model_kwargs={"top_p": config.top_p},
+                api_key=SecretStr(config.api_key),
+                base_url=(config.base_url or None),
+                max_retries=config.max_retries,
             )
 
         if provider == "anthropic":
             from langchain_anthropic import ChatAnthropic
             return ChatAnthropic(
-                model_name=config.llm.model,
-                timeout=config.llm.timeout_seconds,
-                temperature=config.llm.temperature,
-                max_tokens_to_sample=config.llm.max_tokens,
-                top_p=config.llm.top_p,
-                api_key=SecretStr(config.llm.api_key),
-                base_url=(config.llm.base_url or None),
+                model_name=config.model,
+                timeout=config.timeout_seconds,
+                temperature=config.temperature,
+                max_tokens_to_sample=config.max_tokens,
+                top_p=config.top_p,
+                api_key=SecretStr(config.api_key),
+                base_url=(config.base_url or None),
                 stop=None,
-                max_retries=config.llm.max_retries,
+                max_retries=config.max_retries,
             )
 
         if provider == "openai":
             from langchain_openai import ChatOpenAI
             return ChatOpenAI(
-                model=config.llm.model,
-                temperature=config.llm.temperature,
-                top_p=config.llm.top_p,
-                timeout=config.llm.timeout_seconds,
-                max_completion_tokens=config.llm.max_tokens,
-                api_key=SecretStr(config.llm.api_key),
-                base_url=(config.llm.base_url or None),
-                max_retries=config.llm.max_retries,
+                model=config.model,
+                temperature=config.temperature,
+                top_p=config.top_p,
+                timeout=config.timeout_seconds,
+                max_completion_tokens=config.max_tokens,
+                api_key=SecretStr(config.api_key),
+                base_url=(config.base_url or None),
+                max_retries=config.max_retries,
             )
 
         raise NotImplementedError(
-            f"unsupported LLM provider: {config.llm.provider!r}"
+            f"unsupported LLM provider: {config.provider!r}"
         )
 
     def get_model(self) -> BaseChatModel:
