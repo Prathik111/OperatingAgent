@@ -35,7 +35,10 @@ def build_file_server(root: str | Path | None = None) -> FastMCP:
     server = FastMCP(
         name="file-server",
         version=VERSION,
-        mask_error_details=True,
+        # Unmasked on purpose: the agent needs "path must be provided" or
+        # "File not found: x" to correct its next attempt. These tools are
+        # internal and their messages carry no secrets.
+        mask_error_details=False,
     )
     service = FileSystemService(root=Path(root).expanduser().resolve()) if root else FileSystemService()
 

@@ -113,6 +113,30 @@ def test_retry_router_gives_up_when_budget_spent() -> None:
     assert retry_router(state) == RESPONDER
 
 
+def test_retry_router_budget_comes_from_state_not_the_constant() -> None:
+    """The replan budget is configurable (execution.max_replans, seeded onto
+    state by the orchestrator): a state carrying a tighter budget gives up
+    sooner than the module default, and a looser one replans past it."""
+    tight = make_state(retry_count=1, max_replans=1)
+    assert retry_router(tight) == RESPONDER
+
+    loose = make_state(
+        plan=make_plan(make_step(1, status=RunStatus.FAILED)),
+        current_step=0,
+        retry_count=MAX_RETRIES,  # would give up under the default
+        max_replans=MAX_RETRIES + 2,
+    )
+    assert retry_router(loose) == PLANNER
+
+
+def test_retry_router_falls_back_to_default_for_legacy_state() -> None:
+    """Checkpoints written before the field existed carry no budget; the
+    module default applies."""
+    legacy = make_state(retry_count=MAX_RETRIES)
+    legacy.pop("max_replans", None)
+    assert retry_router(legacy) == RESPONDER
+
+
 def test_retry_router_replans_on_execution_failure() -> None:
     """A tool that threw leaves the step FAILED -> replan around it. A verbatim
     re-run would just fail again, and transient faults were already retried

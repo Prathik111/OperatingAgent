@@ -21,7 +21,8 @@ VERSION: Final[str] = "0.1.0"
 mcp = FastMCP(
     name="search-server",
     version=VERSION,
-    mask_error_details=True,
+    # Unmasked so the agent sees the real reason an index/search call failed.
+    mask_error_details=False,
 )
 
 search_service = SearchService()

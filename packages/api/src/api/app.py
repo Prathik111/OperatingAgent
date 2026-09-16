@@ -154,9 +154,10 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                     "file_based",
                 }:
                     raise
+                detail = str(exc).strip() or type(exc).__name__
                 reason = (
                     "task repository: postgres connection failed "
-                    f"({exc}); using explicitly configured {resolved_settings.repository_fallback} fallback"
+                    f"({detail}); using explicitly configured {resolved_settings.repository_fallback} fallback"
                 )
                 log.error("%s", reason)
                 degraded.append(reason)
@@ -296,6 +297,19 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             approval_handler=approval_gateway,
             native_service=native_service,
         )
+        # The optional LLM judge is built from the native runtime's model
+        # registry: the same wired providers the agent itself uses. One
+        # factory per process; start_evaluation builds ONE judge instance per
+        # request and shares it across every track being compared.
+        judge_factory = None
+        native_registry = getattr(native_runtime, "models", None) if native_runtime is not None else None
+        if native_registry is not None and hasattr(native_registry, "list_model_names"):
+
+            def judge_factory(model_name: str, _registry=native_registry):
+                from common.llm_judging import judge_from_registry
+
+                return judge_from_registry(_registry, model_name)
+
         app.state.settings = resolved_settings
         app.state.repository = repository
         app.state.broker = broker
@@ -308,6 +322,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             approvals=approval_gateway,
             settings=resolved_settings,
             background=background,
+            judge_factory=judge_factory,
         )
         app.state.task_service = task_service
         # Reap executions left non-terminal by a dead process BEFORE serving:

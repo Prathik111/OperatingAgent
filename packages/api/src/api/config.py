@@ -135,11 +135,16 @@ class ApiSettings:
     llm_timeout_seconds: int = 60
     llm_temperature: float = 0.0
     llm_max_tokens: int | None = None
+
+    llm_max_retries: int = 7
     llm_top_p: float = 1.0
+    llm_input_price_per_million: float = 0.0
+    llm_output_price_per_million: float = 0.0
 
     execution_max_iterations: int = 20
     execution_timeout_seconds: int = 300
     execution_retry_attempts: int = 2
+    execution_max_replans: int = 3
     execution_stream: bool = True
     execution_enable_checkpoints: bool = True
     execution_enable_interrupts: bool = True
@@ -219,12 +224,16 @@ class ApiSettings:
             llm_timeout_seconds=_env_int("LLM_TIMEOUT_SECONDS", 60),
             llm_temperature=_env_float("LLM_TEMPERATURE", 0.0),
             llm_max_tokens=_env_optional_int("LLM_MAX_TOKENS"),
+            llm_max_retries=_env_int("LLM_MAX_RETRIES", 7),
             llm_top_p=_env_float("LLM_TOP_P", 1.0),
+            llm_input_price_per_million=_env_float("LLM_INPUT_PRICE_PER_MILLION", 0.0),
+            llm_output_price_per_million=_env_float("LLM_OUTPUT_PRICE_PER_MILLION", 0.0),
             execution_max_iterations=_env_int("AGENT_MAX_ITERATIONS", 20),
             execution_timeout_seconds=_env_int(
                 "AGENT_EXECUTION_TIMEOUT_SECONDS", 300
             ),
             execution_retry_attempts=_env_int("AGENT_RETRY_ATTEMPTS", 2),
+            execution_max_replans=_env_int("AGENT_MAX_REPLANS", 3),
             execution_stream=_env_bool("AGENT_STREAM", True),
             execution_enable_checkpoints=_env_bool(
                 "AGENT_ENABLE_CHECKPOINTS", True
@@ -291,13 +300,17 @@ class ApiSettings:
                 timeout_seconds=self.llm_timeout_seconds,
                 temperature=self.llm_temperature,
                 max_tokens=self.llm_max_tokens,
+                max_retries=self.llm_max_retries,
                 top_p=self.llm_top_p,
+                input_price_per_million=self.llm_input_price_per_million,
+                output_price_per_million=self.llm_output_price_per_million,
                 base_url=self.llm_base_url,
             ),
             execution=ExecutionConfig(
                 max_iterations=self.execution_max_iterations,
                 timeout_seconds=self.execution_timeout_seconds,
                 retry_attempts=self.execution_retry_attempts,
+                max_replans=self.execution_max_replans,
                 stream=self.execution_stream,
                 enable_checkpoints=self.execution_enable_checkpoints,
                 enable_interrupts=self.execution_enable_interrupts,

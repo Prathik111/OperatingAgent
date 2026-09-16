@@ -97,15 +97,19 @@ def retry_router(state: AgentState) -> NodeType:
     ``retry_count`` is incremented upstream (executor on a tool failure,
     verifier on a rejection) and is preserved across the replan, so counting
     here would double-count and a run that keeps failing still gives up after
-    ``MAX_RETRIES`` instead of replanning forever.
+    the configured budget instead of replanning forever. The budget itself is
+    ``state["max_replans"]``, seeded by the orchestrator from
+    ``execution.max_replans`` (env ``AGENT_MAX_REPLANS``); states that predate
+    the field fall back to the module default.
 
     Args:
-        state (AgentState): The current state of the agent.
+        state (AgentState): The agent state to inspect.
 
     Returns:
-        NodeType: The next node to transition to after an error.
+        NodeType: The node to transition to after an error.
     """
-    if state.get("retry_count", 0) >= MAX_RETRIES:
+    budget = state.get("max_replans") or MAX_RETRIES
+    if state.get("retry_count", 0) >= budget:
         return RESPONDER
     if str(state.get("last_error") or "").startswith("human rejected "):
         return RESPONDER

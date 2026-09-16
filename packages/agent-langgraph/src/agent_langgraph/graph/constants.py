@@ -22,4 +22,7 @@ ROUTE_ERROR: NodeType = ERROR_HANDLER
 ROUTE_RETRY: NodeType = PLANNER
 ROUTE_PHASE: NodeType = PHASE_TRANSITION
 
-MAX_RETRIES: int = 2
+#: Fallback replan budget for states that predate the configurable
+#: ``execution.max_replans`` (checkpoints, bare test states). Live runs carry
+#: their budget on the state instead; the orchestrator seeds it.
+MAX_RETRIES: int = 3

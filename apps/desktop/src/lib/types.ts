@@ -95,6 +95,7 @@ export interface HealthResponse {
   status: string;
   repository: string;
   tracks: string[];
+  degraded?: string[];
 }
 
 export interface EvaluationMetricSummary {
@@ -110,6 +111,8 @@ export interface EvaluationRunSummary {
   started_at: string;
   finished_at: string | null;
   result_count: number;
+  excluded_count?: number;
+  rate_limited_count?: number;
   passed_count: number;
   pass_rate: number | null;
   average_score: number | null;
@@ -117,6 +120,9 @@ export interface EvaluationRunSummary {
   total_tokens?: number | null;
   total_cost?: number | null;
   tool_success_rate?: number | null;
+  judge_average?: number | null;
+  judge_judged?: number;
+  judge_errors?: number;
   status?: string;
 }
 
@@ -135,7 +141,14 @@ export interface EvaluationExecution {
   output: string | null;
   error: string | null;
   success: boolean;
+  judge_score?: number | null;
+  judge_comment?: string | null;
+  judge_error?: string | null;
   created_at: string;
+  finished_at?: string | null;
+  loading?: boolean;
+  excluded?: boolean;
+  outcome?: "passed" | "failed" | "rate_limited" | "provider_unavailable" | string;
 }
 
 export interface EvaluationDashboard {
@@ -145,15 +158,20 @@ export interface EvaluationDashboard {
   cases: number;
   runs: number;
   results: number;
+  excluded_results: number;
+  rate_limited_results: number;
   pass_rate: number | null;
   average_score: number | null;
   avg_latency_ms: number | null;
   total_tokens: number | null;
   total_cost: number | null;
   tool_success_rate: number | null;
+  judge_average: number | null;
+  judge_judged: number;
+  judge_errors: number;
   metrics: EvaluationMetricSummary[];
   run_breakdown: EvaluationRunSummary[];
-  comparison: Array<EvaluationRunSummary & { avg_latency_ms?: number | null; total_tokens?: number | null; total_cost?: number | null; tool_success_rate?: number | null; status?: string }>;
+  comparison: Array<EvaluationRunSummary & { avg_latency_ms?: number | null; total_tokens?: number | null; total_cost?: number | null; tool_success_rate?: number | null; judge_average?: number | null; judge_judged?: number; judge_errors?: number; status?: string }>;
   executions: EvaluationExecution[];
   sources: { database: boolean; langfuse: boolean };
 }

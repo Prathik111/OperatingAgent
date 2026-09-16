@@ -203,6 +203,13 @@ class SQLiteTaskRepository(InMemoryTaskRepository):
             await InMemoryTaskRepository.finish_evaluation_run(self, evaluation_run_id)
             await self._persist_locked()
 
+    async def finish_abandoned_evaluation_runs(self) -> list[str]:
+        async with self._write_lock:
+            run_ids = await InMemoryTaskRepository.finish_abandoned_evaluation_runs(self)
+            if run_ids:
+                await self._persist_locked()
+            return run_ids
+
     async def save_tool_call(self, run_id: str, record: ToolCallRecord) -> None:
         async with self._write_lock:
             await InMemoryTaskRepository.save_tool_call(self, run_id, record)

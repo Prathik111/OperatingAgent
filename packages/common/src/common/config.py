@@ -21,9 +21,22 @@ class LLMConfig:
 
     max_tokens: int | None = None
 
+    # Provider-client retries with exponential backoff on transient errors
+    # (429 rate limits, 5xx, connection resets). The native track retries in
+    # its loop; the LangGraph track relies on this passthrough. Seven retries
+    # accumulate roughly 30s of backoff, enough to outlast a typical
+    # tokens-per-minute window on a free-tier key.
+    max_retries: int = 7
+
     top_p: float = 1.0
 
     base_url: str | None = None
+
+    # Optional per-million USD pricing for computing run cost from provider-
+    # reported token usage. Zero (unset) means cost is unknown, not free: the
+    # orchestrator reports None rather than a fabricated $0.
+    input_price_per_million: float = 0.0
+    output_price_per_million: float = 0.0
 
     def __post_init__(self) -> None:
         if not self.provider.strip():
@@ -34,10 +47,14 @@ class LLMConfig:
             raise ValueError("llm.timeout_seconds must be positive")
         if self.max_tokens is not None and self.max_tokens <= 0:
             raise ValueError("llm.max_tokens must be positive when set")
+        if self.max_retries < 0:
+            raise ValueError("llm.max_retries must not be negative")
         if not 0 <= self.temperature <= 2:
             raise ValueError("llm.temperature must be between 0 and 2")
         if not 0 < self.top_p <= 1:
             raise ValueError("llm.top_p must be greater than 0 and at most 1")
+        if self.input_price_per_million < 0 or self.output_price_per_million < 0:
+            raise ValueError("llm prices must not be negative")
 
 
 # ============================================================
@@ -53,6 +70,13 @@ class ExecutionConfig:
 
     retry_attempts: int = 2
 
+    # Whole-run replan budget for a plan/replan architecture: how many times
+    # a failed step may be handed back to the planner before the run gives
+    # up and reports honestly. This is the graph counterpart of the loop
+    # architecture's per-run turn budget (max_iterations); without it the
+    # two recovery budgets cannot be compared on equal terms.
+    max_replans: int = 3
+
     stream: bool = True
 
     enable_checkpoints: bool = True
@@ -66,6 +90,8 @@ class ExecutionConfig:
             raise ValueError("execution.timeout_seconds must be positive")
         if self.retry_attempts < 0:
             raise ValueError("execution.retry_attempts must not be negative")
+        if self.max_replans < 1:
+            raise ValueError("execution.max_replans must be positive")
 
 
 # ============================================================

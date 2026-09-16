@@ -39,7 +39,8 @@ def build_terminal_server(root: str | None = None) -> FastMCP:
     server = FastMCP(
         name="terminal-server",
         version=VERSION,
-        mask_error_details=True,
+        # Unmasked so the agent sees the real reason a command was refused.
+        mask_error_details=False,
     )
     service = TerminalService(root=root)
     if _run_command_enabled():

@@ -22,6 +22,7 @@ from common.agent import AgentRunResult, AgentTask
 from common.enums import AgentTrack
 
 from .runner import EvaluationResult, EvaluationRunner
+from .scoring import LLMJudge, judge_from_registry
 from .suite import EvaluationSuite
 
 log = logging.getLogger(__name__)
@@ -128,7 +129,14 @@ async def run_suite_for_tracks(
     suite: EvaluationSuite,
     environment: EvaluationEnvironment,
     tracks: tuple[AgentTrack, ...] = (AgentTrack.NATIVE, AgentTrack.LANGGRAPH),
+    judge: LLMJudge | None = None,
 ) -> list[EvaluationResult]:
+    """Run the suite for each track, optionally under one shared LLM judge.
+
+    Fairness: a single judge instance is constructed once (when requested) and
+    reused for every track, so every output is scored by the same model with
+    the same prompt. The judge never receives track identity.
+    """
     results: list[EvaluationResult] = []
     for track in tracks:
         orchestrator = environment.orchestrators[track]
@@ -142,6 +150,7 @@ async def run_suite_for_tracks(
                 track,
                 execute,
                 session_prefix=f"eval-{track.value}-",
+                judge=judge,
             )
         )
     return results
@@ -151,9 +160,22 @@ async def run_suite(
     suite: EvaluationSuite,
     settings: ApiSettings | None = None,
     tracks: tuple[AgentTrack, ...] = (AgentTrack.NATIVE, AgentTrack.LANGGRAPH),
+    judge_model: str = "",
 ) -> list[EvaluationResult]:
+    """Run the suite, optionally judging outputs with an LLM.
+
+    ``judge_model`` names a model on the native runtime's registry (the same
+    models the agent itself uses). Empty string means: deterministic checks
+    only, exactly as before.
+    """
     async with open_evaluation_environment(settings) as environment:
-        return await run_suite_for_tracks(suite, environment, tracks)
+        judge: LLMJudge | None = None
+        if judge_model:
+            registry = getattr(environment.native_runtime, "models", None)
+            if registry is None:
+                raise RuntimeError("LLM judge requested but no model registry is available")
+            judge = judge_from_registry(registry, judge_model)
+        return await run_suite_for_tracks(suite, environment, tracks, judge=judge)
 
 
 async def _run_task(orchestrator: Any, task: Any) -> AgentRunResult:

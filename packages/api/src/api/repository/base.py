@@ -76,6 +76,10 @@ class TaskRepository(Protocol):
     async def finish_evaluation_run(self, evaluation_run_id: str) -> None:
         ...
 
+    async def finish_abandoned_evaluation_runs(self) -> list[str]:
+        """Close unfinished evaluation batches left by a previous process."""
+        ...
+
     async def get_run_metrics(self, run_id: str) -> dict:
         ...
 

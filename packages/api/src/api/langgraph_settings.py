@@ -10,15 +10,15 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from .settings import (
     RuntimeLLMSettings,
+    apply_langfuse_settings,
     clean_base_url,
+    current_langfuse_settings,
     default_model,
     normalize_base_url,
     normalize_model,
     normalize_provider,
     provider_models,
     resolve_model,
-    apply_langfuse_settings,
-    current_langfuse_settings,
 )
 
 router = APIRouter(prefix="/settings/langgraph", tags=["langgraph-settings"])
@@ -165,7 +165,10 @@ async def update_langgraph_settings(body: RuntimeLLMSettings, request: Request) 
                 timeout_seconds=body.timeout_seconds if body.timeout_seconds is not None else old.llm.timeout_seconds,
                 temperature=body.temperature if body.temperature is not None else old.llm.temperature,
                 max_tokens=body.max_tokens if "max_tokens" in body.model_fields_set else old.llm.max_tokens,
+                max_retries=old.llm.max_retries,
                 top_p=body.top_p if body.top_p is not None else old.llm.top_p,
+                input_price_per_million=old.llm.input_price_per_million,
+                output_price_per_million=old.llm.output_price_per_million,
                 base_url=base_url,
             ),
             execution=old.execution,

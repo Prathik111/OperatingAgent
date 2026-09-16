@@ -37,6 +37,7 @@ def test_execution_config_defaults() -> None:
     assert execution.max_iterations == 20
     assert execution.timeout_seconds == 300
     assert execution.retry_attempts == 2
+    assert execution.max_replans == 3
     assert execution.stream is True
     assert execution.enable_checkpoints is True
     assert execution.enable_interrupts is True
@@ -74,6 +75,7 @@ def test_sandbox_defaults() -> None:
     [
         (lambda: ExecutionConfig(max_iterations=0), "max_iterations"),
         (lambda: ExecutionConfig(retry_attempts=-1), "retry_attempts"),
+        (lambda: ExecutionConfig(max_replans=0), "max_replans"),
         (
             lambda: LLMConfig(provider="openai", model="m", api_key="k", top_p=0),
             "top_p",

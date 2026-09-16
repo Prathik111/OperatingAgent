@@ -12,6 +12,7 @@ of truth for model observations and evaluation metrics.
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
 
 from common.agent import AgentRunResult, AgentTask
@@ -28,6 +29,8 @@ from .base import OpenRun, RunSummary, ThreadRecord
 
 if TYPE_CHECKING:  # avoid importing psycopg_pool at module import time
     from psycopg_pool import AsyncConnectionPool
+
+log = logging.getLogger(__name__)
 
 #: Stable identity for the actor that owns API-created threads.
 _API_ACTOR_EXTERNAL_ID = "system:api"
@@ -76,6 +79,15 @@ class PostgresTaskRepository:
         async with self._pool.connection() as conn, conn.cursor() as cur:
             await cur.execute("UPDATE evaluation_runs SET finished_at = now() WHERE id = %s", (evaluation_run_id,))
 
+    async def finish_abandoned_evaluation_runs(self) -> list[str]:
+        async with self._pool.connection() as conn, conn.cursor() as cur:
+            await cur.execute(
+                "UPDATE evaluation_runs SET finished_at = now() "
+                "WHERE finished_at IS NULL RETURNING id"
+            )
+            rows = await cur.fetchall()
+        return [str(row[0]) for row in rows]
+
     async def get_run_metrics(self, run_id: str) -> dict:
         async with self._pool.connection() as conn, conn.cursor() as cur:
             await cur.execute("SELECT latency_ms, llm_calls, tool_calls, tool_calls_succeeded, total_tokens, cost FROM v_run_metrics_extended WHERE run_id = %s", (run_id,))
@@ -98,33 +110,175 @@ class PostgresTaskRepository:
         suites_sql = "SELECT count(*) FROM evaluation_suites"
         cases_sql = "SELECT count(*) FROM evaluation_cases"
         runs_sql = "SELECT count(*) FROM evaluation_runs"
-        results_sql = "SELECT count(*) FROM evaluation_results"
+        results_sql = """
+            SELECT count(*) FROM evaluation_results result
+            WHERE NOT EXISTS (
+                SELECT 1 FROM evaluation_scores excluded
+                WHERE excluded.result_id = result.id
+                  AND excluded.metric LIKE 'excluded.%'
+            )
+        """
+        excluded_results_sql = """
+            SELECT count(*) FROM evaluation_results result
+            WHERE EXISTS (
+                SELECT 1 FROM evaluation_scores excluded
+                WHERE excluded.result_id = result.id
+                  AND excluded.metric LIKE 'excluded.%'
+            )
+        """
+        rate_limited_results_sql = """
+            SELECT count(*) FROM evaluation_results result
+            WHERE EXISTS (
+                SELECT 1 FROM evaluation_scores excluded
+                WHERE excluded.result_id = result.id
+                  AND excluded.metric = 'excluded.rate_limited'
+            )
+        """
         overall_sql = """
             SELECT
                 count(DISTINCT er.id) FILTER (WHERE er.success) AS passed,
                 count(DISTINCT er.id) AS total,
-                avg(es.value) FILTER (WHERE es.metric = 'correctness') AS average_score
+                avg(es.value) FILTER (WHERE es.metric = 'correctness') AS average_score,
+                avg(es.value) FILTER (WHERE es.metric = 'judge.overall' AND es.value IS NOT NULL) AS judge_average,
+                count(DISTINCT er.id) FILTER (WHERE es.metric = 'judge.overall' AND es.value IS NOT NULL) AS judge_judged,
+                count(DISTINCT er.id) FILTER (WHERE es.metric = 'judge.error') AS judge_errors
             FROM evaluation_results er
             LEFT JOIN evaluation_scores es ON es.result_id = er.id
+            WHERE NOT EXISTS (
+                SELECT 1 FROM evaluation_scores excluded
+                WHERE excluded.result_id = er.id
+                  AND excluded.metric LIKE 'excluded.%'
+            )
         """
         operational_sql = """
-            SELECT
-                avg(metrics.latency_ms),
-                sum(metrics.total_tokens),
-                sum(metrics.cost),
-                CASE WHEN sum(metrics.tool_calls) > 0
-                     THEN sum(metrics.tool_calls_succeeded)::numeric / sum(metrics.tool_calls)
-                     ELSE NULL END
-            FROM evaluation_results result
-            JOIN v_run_metrics_extended metrics ON metrics.run_id = result.agent_run_id
+            WITH score_metrics AS (
+                SELECT result_id,
+                       max(value) FILTER (WHERE metric = 'latency') AS latency_ms,
+                       max(value) FILTER (WHERE metric = 'tokens') AS total_tokens,
+                       max(value) FILTER (WHERE metric = 'cost') AS cost,
+                       max(value) FILTER (WHERE metric = 'tool_success') AS tool_success_rate
+                FROM evaluation_scores
+                GROUP BY result_id
+            ), completed_per_result AS (
+                SELECT COALESCE(metrics.latency_ms, score_metrics.latency_ms) AS latency_ms,
+                       COALESCE(metrics.total_tokens, score_metrics.total_tokens) AS total_tokens,
+                       COALESCE(metrics.cost, score_metrics.cost) AS cost,
+                       COALESCE(
+                           CASE WHEN metrics.tool_calls > 0
+                                THEN metrics.tool_calls_succeeded::numeric / metrics.tool_calls END,
+                           score_metrics.tool_success_rate
+                       ) AS tool_success_rate
+                FROM evaluation_results result
+                LEFT JOIN v_run_metrics_extended metrics ON metrics.run_id = result.agent_run_id
+                LEFT JOIN score_metrics ON score_metrics.result_id = result.id
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM evaluation_scores excluded
+                    WHERE excluded.result_id = result.id
+                      AND excluded.metric LIKE 'excluded.%'
+                )
+            ), latest_runs AS (
+                SELECT DISTINCT ON (run.task_id)
+                       run.id, run.task_id
+                FROM agent_runs run
+                ORDER BY run.task_id, run.attempt DESC
+            ), active_per_result AS (
+                SELECT metrics.latency_ms,
+                       metrics.total_tokens,
+                       metrics.cost,
+                       CASE WHEN metrics.tool_calls > 0
+                            THEN metrics.tool_calls_succeeded::numeric / metrics.tool_calls END AS tool_success_rate
+                FROM evaluation_runs erun
+                JOIN agent_tasks task
+                  ON task.metadata->>'evaluation_run_id' = erun.id::text
+                 AND task.metadata->>'evaluation_case_id' IS NOT NULL
+                JOIN latest_runs latest ON latest.task_id = task.id
+                JOIN agent_runs run ON run.id = latest.id
+                JOIN v_run_metrics_extended metrics ON metrics.run_id = run.id
+                WHERE erun.finished_at IS NULL
+                  AND run.status IN ('created'::run_status, 'pending'::run_status, 'running'::run_status)
+                  AND NOT EXISTS (
+                      SELECT 1 FROM evaluation_results result
+                      WHERE result.evaluation_run_id = erun.id
+                        AND result.agent_run_id = run.id
+                  )
+            ), per_result AS (
+                SELECT * FROM completed_per_result
+                UNION ALL
+                SELECT * FROM active_per_result
+            )
+            SELECT avg(latency_ms),
+                   CASE WHEN count(total_tokens) > 0 THEN sum(total_tokens) END,
+                   CASE WHEN count(cost) > 0 THEN sum(cost) END,
+                   avg(tool_success_rate)
+            FROM per_result
         """
         metrics_sql = """
             SELECT es.metric, avg(es.value), count(*)
             FROM evaluation_scores es
+            WHERE es.metric NOT LIKE 'excluded.%'
             GROUP BY es.metric
             ORDER BY es.metric
         """
         runs_breakdown_sql = """
+            WITH latest_active_runs AS (
+                SELECT DISTINCT ON (run.task_id)
+                       run.id, run.task_id
+                FROM agent_runs run
+                ORDER BY run.task_id, run.attempt DESC
+            ), active_metrics AS (
+                SELECT erun.id AS evaluation_run_id,
+                       count(metrics.run_id) AS active_count,
+                       avg(metrics.latency_ms) AS avg_latency_ms,
+                       sum(metrics.total_tokens) AS total_tokens,
+                       sum(metrics.cost) AS total_cost,
+                       sum(metrics.tool_calls) AS tool_calls,
+                       sum(metrics.tool_calls_succeeded) AS tool_calls_succeeded
+                FROM evaluation_runs erun
+                JOIN agent_tasks task
+                  ON task.metadata->>'evaluation_run_id' = erun.id::text
+                 AND task.metadata->>'evaluation_case_id' IS NOT NULL
+                JOIN latest_active_runs latest ON latest.task_id = task.id
+                JOIN agent_runs run ON run.id = latest.id
+                JOIN v_run_metrics_extended metrics ON metrics.run_id = run.id
+                WHERE erun.finished_at IS NULL
+                  AND run.status IN ('created'::run_status, 'pending'::run_status, 'running'::run_status)
+                  AND NOT EXISTS (
+                      SELECT 1 FROM evaluation_results result
+                      WHERE result.evaluation_run_id = erun.id
+                        AND result.agent_run_id = run.id
+                  )
+                GROUP BY erun.id
+            ), completed_metrics AS (
+                SELECT evaluation_run_id,
+                       count(metrics.run_id) AS metric_count,
+                       avg(metrics.latency_ms) AS avg_latency_ms,
+                       sum(metrics.total_tokens) AS total_tokens,
+                       sum(metrics.cost) AS total_cost,
+                       sum(metrics.tool_calls) AS tool_calls,
+                       sum(metrics.tool_calls_succeeded) AS tool_calls_succeeded
+                FROM evaluation_results result
+                JOIN v_run_metrics_extended metrics ON metrics.run_id = result.agent_run_id
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM evaluation_scores excluded
+                    WHERE excluded.result_id = result.id
+                      AND excluded.metric LIKE 'excluded.%'
+                )
+                GROUP BY evaluation_run_id
+            ), score_metrics AS (
+                SELECT r2.evaluation_run_id,
+                       avg(es.value) FILTER (WHERE es.metric = 'latency') AS score_latency,
+                       sum(es.value) FILTER (WHERE es.metric = 'tokens') AS score_tokens,
+                       sum(es.value) FILTER (WHERE es.metric = 'cost') AS score_cost,
+                       avg(es.value) FILTER (WHERE es.metric = 'tool_success') AS score_tool_success
+                FROM evaluation_results r2
+                JOIN evaluation_scores es ON es.result_id = r2.id
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM evaluation_scores excluded
+                    WHERE excluded.result_id = r2.id
+                      AND excluded.metric LIKE 'excluded.%'
+                )
+                GROUP BY r2.evaluation_run_id
+            )
             SELECT
                 erun.id,
                 suite.name,
@@ -132,33 +286,51 @@ class PostgresTaskRepository:
                 erun.track::text,
                 erun.started_at,
                 erun.finished_at,
-                count(DISTINCT result.id) AS result_count,
-                count(DISTINCT result.id) FILTER (WHERE result.success) AS passed_count,
-                avg(score.value) FILTER (WHERE score.metric = 'correctness') AS average_score,
-                run_metrics.avg_latency_ms,
-                run_metrics.total_tokens,
-                run_metrics.total_cost,
-                run_metrics.tool_success_rate
+                count(DISTINCT result.id) FILTER (WHERE excluded.metric IS NULL) AS result_count,
+                count(DISTINCT result.id) FILTER (WHERE result.success AND excluded.metric IS NULL) AS passed_count,
+                count(DISTINCT result.id) FILTER (WHERE excluded.metric IS NOT NULL) AS excluded_count,
+                count(DISTINCT result.id) FILTER (WHERE excluded.metric = 'excluded.rate_limited') AS rate_limited_count,
+                avg(score.value) FILTER (WHERE score.metric = 'correctness' AND excluded.metric IS NULL) AS average_score,
+                CASE WHEN COALESCE(completed_metrics.metric_count, 0) + COALESCE(active_metrics.active_count, 0) > 0
+                     THEN (COALESCE(completed_metrics.avg_latency_ms, 0) * COALESCE(completed_metrics.metric_count, 0)
+                           + COALESCE(active_metrics.avg_latency_ms, 0) * COALESCE(active_metrics.active_count, 0))
+                          / (COALESCE(completed_metrics.metric_count, 0) + COALESCE(active_metrics.active_count, 0))
+                     ELSE score_metrics.score_latency END AS avg_latency_ms,
+                CASE WHEN completed_metrics.total_tokens IS NOT NULL OR active_metrics.total_tokens IS NOT NULL
+                     THEN COALESCE(completed_metrics.total_tokens, 0) + COALESCE(active_metrics.total_tokens, 0)
+                     ELSE score_metrics.score_tokens END AS total_tokens,
+                CASE WHEN completed_metrics.total_cost IS NOT NULL OR active_metrics.total_cost IS NOT NULL
+                     THEN COALESCE(completed_metrics.total_cost, 0) + COALESCE(active_metrics.total_cost, 0)
+                     ELSE score_metrics.score_cost END AS total_cost,
+                CASE WHEN COALESCE(completed_metrics.tool_calls, 0) + COALESCE(active_metrics.tool_calls, 0) > 0
+                     THEN (COALESCE(completed_metrics.tool_calls_succeeded, 0) + COALESCE(active_metrics.tool_calls_succeeded, 0))::numeric
+                          / (COALESCE(completed_metrics.tool_calls, 0) + COALESCE(active_metrics.tool_calls, 0))
+                     ELSE score_metrics.score_tool_success END AS tool_success_rate,
+                avg(score.value) FILTER (WHERE score.metric = 'judge.overall' AND excluded.metric IS NULL) AS judge_average,
+                count(DISTINCT result.id) FILTER (WHERE score.metric = 'judge.overall' AND score.value IS NOT NULL AND excluded.metric IS NULL) AS judge_judged,
+                count(DISTINCT result.id) FILTER (WHERE score.metric = 'judge.error' AND excluded.metric IS NULL) AS judge_errors
             FROM evaluation_runs erun
             JOIN evaluation_suites suite ON suite.id = erun.suite_id
             LEFT JOIN evaluation_results result ON result.evaluation_run_id = erun.id
             LEFT JOIN evaluation_scores score ON score.result_id = result.id
-            LEFT JOIN (
-                SELECT evaluation_run_id,
-                       avg(metrics.latency_ms) AS avg_latency_ms,
-                       sum(metrics.total_tokens) AS total_tokens,
-                       sum(metrics.cost) AS total_cost,
-                       CASE WHEN sum(metrics.tool_calls) > 0
-                            THEN sum(metrics.tool_calls_succeeded)::numeric / sum(metrics.tool_calls)
-                            ELSE NULL END AS tool_success_rate
-                FROM evaluation_results result
-                JOIN v_run_metrics_extended metrics ON metrics.run_id = result.agent_run_id
-                GROUP BY evaluation_run_id
-            ) run_metrics ON run_metrics.evaluation_run_id = erun.id
+            LEFT JOIN LATERAL (
+                SELECT metric FROM evaluation_scores
+                WHERE result_id = result.id AND metric LIKE 'excluded.%'
+                LIMIT 1
+            ) excluded ON true
+            LEFT JOIN completed_metrics ON completed_metrics.evaluation_run_id = erun.id
+            LEFT JOIN active_metrics ON active_metrics.evaluation_run_id = erun.id
+            LEFT JOIN score_metrics ON score_metrics.evaluation_run_id = erun.id
             GROUP BY erun.id, suite.name, suite.version, erun.track,
                      erun.started_at, erun.finished_at,
-                     run_metrics.avg_latency_ms, run_metrics.total_tokens,
-                     run_metrics.total_cost, run_metrics.tool_success_rate
+                      completed_metrics.metric_count, completed_metrics.avg_latency_ms,
+                      completed_metrics.total_tokens, completed_metrics.total_cost,
+                      completed_metrics.tool_calls, completed_metrics.tool_calls_succeeded,
+                      active_metrics.active_count, active_metrics.avg_latency_ms,
+                      active_metrics.total_tokens, active_metrics.total_cost,
+                      active_metrics.tool_calls, active_metrics.tool_calls_succeeded,
+                      score_metrics.score_latency, score_metrics.score_tokens,
+                      score_metrics.score_cost, score_metrics.score_tool_success
             ORDER BY erun.started_at DESC
             LIMIT 100
         """
@@ -179,13 +351,78 @@ class PostgresTaskRepository:
                 agent_run.output,
                 agent_run.last_error,
                 result.success,
-                task.created_at
+                task.created_at,
+                agent_run.finished_at,
+                judge_overall.value,
+                judge_overall.comment,
+                judge_error.comment,
+                excluded.metric
             FROM evaluation_results result
             JOIN evaluation_runs erun ON erun.id = result.evaluation_run_id
             JOIN evaluation_suites suite ON suite.id = erun.suite_id
             JOIN evaluation_cases evaluation_case ON evaluation_case.id = result.case_id
             JOIN agent_runs agent_run ON agent_run.id = result.agent_run_id
             JOIN agent_tasks task ON task.id = agent_run.task_id
+            LEFT JOIN LATERAL (
+                SELECT value, comment FROM evaluation_scores
+                WHERE result_id = result.id AND metric = 'judge.overall'
+                LIMIT 1
+            ) judge_overall ON true
+            LEFT JOIN LATERAL (
+                SELECT comment FROM evaluation_scores
+                WHERE result_id = result.id AND metric = 'judge.error'
+                LIMIT 1
+            ) judge_error ON true
+            LEFT JOIN LATERAL (
+                SELECT metric FROM evaluation_scores
+                WHERE result_id = result.id AND metric LIKE 'excluded.%'
+                LIMIT 1
+            ) excluded ON true
+            ORDER BY erun.started_at DESC, task.created_at DESC
+            LIMIT 100
+        """
+        active_executions_sql = """
+            WITH latest_runs AS (
+                SELECT DISTINCT ON (run.task_id)
+                       run.id, run.task_id, run.status, run.output,
+                       run.last_error, run.finished_at
+                FROM agent_runs run
+                ORDER BY run.task_id, run.attempt DESC
+            )
+            SELECT
+                ('pending:' || erun.id::text || ':' || (task.metadata->>'evaluation_case_id')) AS id,
+                erun.id,
+                agent_run.id,
+                task.id,
+                task.thread_id,
+                suite.name,
+                suite.version,
+                erun.track::text,
+                evaluation_case.case_key,
+                task.goal,
+                task.metadata->>'workspace',
+                agent_run.status::text,
+                agent_run.output,
+                agent_run.last_error,
+                task.created_at,
+                agent_run.finished_at
+            FROM evaluation_runs erun
+            JOIN evaluation_suites suite ON suite.id = erun.suite_id
+            JOIN agent_tasks task
+              ON task.metadata->>'evaluation_run_id' = erun.id::text
+             AND task.metadata->>'evaluation_case_id' IS NOT NULL
+            JOIN latest_runs agent_run ON agent_run.task_id = task.id
+            JOIN evaluation_cases evaluation_case
+              ON evaluation_case.suite_id = erun.suite_id
+             AND (evaluation_case.id::text = task.metadata->>'evaluation_case_id'
+                  OR evaluation_case.case_key = task.metadata->>'evaluation_case_id')
+            WHERE erun.finished_at IS NULL
+              AND agent_run.status IN ('created'::run_status, 'pending'::run_status, 'running'::run_status)
+              AND NOT EXISTS (
+                  SELECT 1 FROM evaluation_results result
+                  WHERE result.evaluation_run_id = erun.id
+                    AND result.agent_run_id = agent_run.id
+              )
             ORDER BY erun.started_at DESC, task.created_at DESC
             LIMIT 100
         """
@@ -200,8 +437,10 @@ class PostgresTaskRepository:
                 cases = await scalar(cases_sql)
                 runs = await scalar(runs_sql)
                 results = await scalar(results_sql)
+                excluded_results = await scalar(excluded_results_sql)
+                rate_limited_results = await scalar(rate_limited_results_sql)
                 await cur.execute(overall_sql)
-                overall = await cur.fetchone() or (0, 0, None)
+                overall = await cur.fetchone() or (0, 0, None, None, 0, 0)
                 await cur.execute(operational_sql)
                 operational = await cur.fetchone() or (None, None, None, None)
                 await cur.execute(metrics_sql)
@@ -210,9 +449,12 @@ class PostgresTaskRepository:
                 run_rows = await cur.fetchall()
                 await cur.execute(executions_sql)
                 execution_rows = await cur.fetchall()
-        except Exception:  # noqa: BLE001 - desktop fallback spans DB driver failures
+                await cur.execute(active_executions_sql)
+                active_execution_rows = await cur.fetchall()
+        except Exception:
             # A desktop API can run on SQLite/memory or against an older schema.
             # Surface that state to the UI instead of turning the whole app 500.
+            log.exception("evaluation dashboard query failed; check the PostgreSQL schema")
             return {
                 "available": False,
                 "reason": "Evaluation tables are not available in the configured database.",
@@ -220,20 +462,103 @@ class PostgresTaskRepository:
                 "cases": 0,
                 "runs": 0,
                 "results": 0,
+                "excluded_results": 0,
+                "rate_limited_results": 0,
                 "pass_rate": None,
                 "average_score": None,
                 "avg_latency_ms": None,
                 "total_tokens": None,
                 "total_cost": None,
                 "tool_success_rate": None,
+                "judge_average": None,
+                "judge_judged": 0,
+                "judge_errors": 0,
                 "metrics": [],
                 "run_breakdown": [],
                 "executions": [],
                 "sources": {"database": False, "langfuse": False},
             }
 
-        passed, total, average_score = overall
+        passed, total, average_score, judge_average_overall, judge_judged_overall, judge_errors_overall = overall
         avg_latency_ms, total_tokens, total_cost, tool_success_rate = operational
+        run_breakdown = [
+            {
+                "id": str(run_id),
+                "suite": f"{name} v{version}",
+                "track": track,
+                "started_at": started_at,
+                "finished_at": finished_at,
+                "result_count": int(result_count),
+                "passed_count": int(passed_count),
+                "excluded_count": int(excluded_count or 0),
+                "rate_limited_count": int(rate_limited_count or 0),
+                "pass_rate": (float(passed_count) / float(result_count)) if result_count else None,
+                "average_score": float(avg) if avg is not None else None,
+                "avg_latency_ms": float(latency) if latency is not None else None,
+                "total_tokens": int(tokens) if tokens is not None else None,
+                "total_cost": float(cost) if cost is not None else None,
+                "tool_success_rate": float(tool_success) if tool_success is not None else None,
+                "judge_average": float(judge_average) if judge_average is not None else None,
+                "judge_judged": int(judge_judged or 0),
+                "judge_errors": int(judge_errors or 0),
+                "status": "completed" if finished_at is not None else "running",
+            }
+            for run_id, name, version, track, started_at, finished_at,
+                result_count, passed_count, excluded_count, rate_limited_count,
+                avg, latency, tokens, cost, tool_success,
+                judge_average, judge_judged, judge_errors in run_rows
+        ]
+        # The per-track side-by-side the desktop reports render. Latest run per
+        # track, judged and running runs alike — a running run shows its live
+        # numbers, and the UI labels it as such.
+        comparison = []
+        for track in ("native", "langgraph"):
+            candidates = [run for run in run_breakdown if run["track"] == track]
+            if not candidates:
+                continue
+            latest = max(candidates, key=lambda run: run["started_at"])
+            comparison.append({"track": track, **{key: latest.get(key) for key in ("id", "suite", "pass_rate", "average_score", "avg_latency_ms", "total_tokens", "total_cost", "tool_success_rate", "judge_average", "judge_judged", "judge_errors", "result_count", "excluded_count", "rate_limited_count", "status")}})
+        executions = [
+            {
+                "id": str(result_id), "evaluation_run_id": str(evaluation_run_id),
+                "agent_run_id": str(agent_run_id), "task_id": str(task_id),
+                "thread_id": thread_id, "suite": f"{name} v{version}", "track": track,
+                "case_id": case_key, "goal": goal, "workspace": workspace or "",
+                "status": status, "output": output, "error": error, "success": bool(success),
+                "excluded": excluded_metric is not None,
+                "outcome": (
+                    str(excluded_metric).removeprefix("excluded.")
+                    if excluded_metric is not None
+                    else ("passed" if success else "failed")
+                ),
+                "judge_score": float(judge_score) if judge_score is not None else None,
+                "judge_comment": judge_comment or "", "judge_error": judge_error or "",
+                "created_at": created_at, "finished_at": finished_at, "loading": False,
+            }
+            for (
+                result_id, evaluation_run_id, agent_run_id, task_id, thread_id,
+                name, version, track, case_key, goal, workspace, status,
+                output, error, success, created_at, finished_at,
+                judge_score, judge_comment, judge_error, excluded_metric,
+            ) in execution_rows
+        ]
+        executions.extend(
+            {
+                "id": str(result_id), "evaluation_run_id": str(evaluation_run_id),
+                "agent_run_id": str(agent_run_id), "task_id": str(task_id),
+                "thread_id": thread_id, "suite": f"{name} v{version}", "track": track,
+                "case_id": case_key, "goal": goal, "workspace": workspace or "",
+                "status": status, "output": output, "error": error, "success": False,
+                "loading": True, "judge_score": None, "judge_comment": "", "judge_error": "",
+                "created_at": created_at, "finished_at": finished_at,
+            }
+            for (
+                result_id, evaluation_run_id, agent_run_id, task_id, thread_id,
+                name, version, track, case_key, goal, workspace, status,
+                output, error, created_at, finished_at,
+            ) in active_execution_rows
+        )
+        executions.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
         return {
             "available": True,
             "reason": None,
@@ -241,61 +566,24 @@ class PostgresTaskRepository:
             "cases": cases,
             "runs": runs,
             "results": results,
+            "excluded_results": excluded_results,
+            "rate_limited_results": rate_limited_results,
             "pass_rate": (float(passed) / float(total)) if total else None,
             "average_score": float(average_score) if average_score is not None else None,
             "avg_latency_ms": float(avg_latency_ms) if avg_latency_ms is not None else None,
             "total_tokens": int(total_tokens) if total_tokens is not None else None,
             "total_cost": float(total_cost) if total_cost is not None else None,
             "tool_success_rate": float(tool_success_rate) if tool_success_rate is not None else None,
+            "judge_average": float(judge_average_overall) if judge_average_overall is not None else None,
+            "judge_judged": int(judge_judged_overall or 0),
+            "judge_errors": int(judge_errors_overall or 0),
             "metrics": [
                 {"metric": metric, "average": float(avg) if avg is not None else None, "count": int(count)}
                 for metric, avg, count in metric_rows
             ],
-            "run_breakdown": [
-                {
-                    "id": str(run_id),
-                    "suite": f"{name} v{version}",
-                    "track": track,
-                    "started_at": started_at,
-                    "finished_at": finished_at,
-                    "result_count": int(result_count),
-                    "passed_count": int(passed_count),
-                    "pass_rate": (float(passed_count) / float(result_count)) if result_count else None,
-                    "average_score": float(avg) if avg is not None else None,
-                    "avg_latency_ms": float(latency) if latency is not None else None,
-                    "total_tokens": int(tokens) if tokens is not None else None,
-                    "total_cost": float(cost) if cost is not None else None,
-                    "tool_success_rate": float(tool_success) if tool_success is not None else None,
-                    "status": "completed" if finished_at is not None else "running",
-                }
-                for run_id, name, version, track, started_at, finished_at,
-                result_count, passed_count, avg, latency, tokens, cost, tool_success in run_rows
-            ],
-            "comparison": [],
-            "executions": [
-                {
-                    "id": str(result_id),
-                    "evaluation_run_id": str(evaluation_run_id),
-                    "agent_run_id": str(agent_run_id),
-                    "task_id": str(task_id),
-                    "thread_id": thread_id,
-                    "suite": f"{name} v{version}",
-                    "track": track,
-                    "case_id": case_key,
-                    "goal": goal,
-                    "workspace": workspace or "",
-                    "status": status,
-                    "output": output,
-                    "error": error,
-                    "success": bool(success),
-                    "created_at": created_at,
-                }
-                for (
-                    result_id, evaluation_run_id, agent_run_id, task_id, thread_id,
-                    name, version, track, case_key, goal, workspace, status,
-                    output, error, success, created_at,
-                ) in execution_rows
-            ],
+            "run_breakdown": run_breakdown,
+            "comparison": comparison,
+            "executions": executions[:100],
             "sources": {"database": True, "langfuse": False},
         }
 
@@ -630,10 +918,14 @@ class PostgresTaskRepository:
                 )
                 plan_id = await _fetch_scalar(cur)
                 for index, step in enumerate(payload.get("steps", [])):
+                    # The uuid PK cannot take a graph step's sequential int id;
+                    # only pass through string ids and let the DB mint the rest.
+                    raw_step_id = step.get("id")
+                    step_id = raw_step_id if isinstance(raw_step_id, str) and raw_step_id else None
                     await cur.execute(
                         _sql.INSERT_PLAN_STEP,
                         (
-                            step.get("id"),
+                            step_id,
                             plan_id,
                             run_id,
                             step.get("step_number", index),
