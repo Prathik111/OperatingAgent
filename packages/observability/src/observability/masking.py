@@ -9,13 +9,9 @@ credential patterns so they never leave the process, satisfying the
 from __future__ import annotations
 
 import re
+import sys
+from types import SimpleNamespace
 from typing import Any
-
-from langfuse.types import (
-    MaskOtelSpansParams,
-    MaskOtelSpansResult,
-    OtelSpanPatch,
-)
 
 # Substring match (case-insensitive) against dict keys whose values are secrets.
 _SENSITIVE_KEY_HINTS: tuple[str, ...] = (
@@ -90,7 +86,7 @@ def _mask_attribute(key: str, value: Any) -> Any:
     return value
 
 
-def mask_otel_spans(*, params: MaskOtelSpansParams) -> MaskOtelSpansResult:
+def mask_otel_spans(*, params: Any) -> Any:
     """Export-stage mask for raw OpenTelemetry span attributes.
 
     The ``mask`` hook only sees Langfuse observation inputs/outputs. Spans
@@ -103,7 +99,16 @@ def mask_otel_spans(*, params: MaskOtelSpansParams) -> MaskOtelSpansResult:
     makes Langfuse drop the whole batch, which is fail-closed, so this is left
     to propagate rather than swallow-and-export-unmasked.
     """
-    patches: dict[Any, OtelSpanPatch] = {}
+    # Importing ``langfuse.types`` eagerly makes *every* API startup import the
+    # complete SDK. On Python 3.13 that import can spend a long time generating
+    # dataclass methods, even when tracing is disabled. A real Langfuse callback
+    # necessarily passes an SDK params object, so its types module is already
+    # loaded by the time this hook is invoked. Unit callers receive compatible
+    # lightweight objects without importing the optional SDK at all.
+    types_module = sys.modules.get("langfuse.types")
+    result_type = getattr(types_module, "MaskOtelSpansResult", None)
+    patch_type = getattr(types_module, "OtelSpanPatch", None)
+    patches: dict[Any, Any] = {}
     for identifier, span in params.spans.items():
         changed: dict[str, Any] = {}
         for key, value in span.attributes.items():
@@ -111,5 +116,7 @@ def mask_otel_spans(*, params: MaskOtelSpansParams) -> MaskOtelSpansResult:
             if masked != value:
                 changed[key] = masked
         if changed:
-            patches[identifier] = OtelSpanPatch(set_attributes=changed)
-    return MaskOtelSpansResult(span_patches=patches)
+            factory = patch_type or SimpleNamespace
+            patches[identifier] = factory(set_attributes=changed)
+    factory = result_type or SimpleNamespace
+    return factory(span_patches=patches)

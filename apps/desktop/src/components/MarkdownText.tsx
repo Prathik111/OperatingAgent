@@ -92,7 +92,44 @@ type Block =
   | { type: "heading"; level: number; text: string }
   | { type: "ul"; items: string[] }
   | { type: "ol"; items: string[] }
+  | { type: "table"; headers: string[]; rows: string[][]; alignments: Array<"left" | "center" | "right"> }
   | { type: "code"; language: string; text: string };
+
+function splitTableRow(line: string): string[] | null {
+  const trimmed = line.trim();
+  if (!trimmed.includes("|")) return null;
+  const source = trimmed.startsWith("|") ? trimmed.slice(1) : trimmed;
+  const content = source.endsWith("|") ? source.slice(0, -1) : source;
+  const cells: string[] = [];
+  let cell = "";
+  let escaped = false;
+  for (const character of content) {
+    if (escaped) {
+      cell += character;
+      escaped = false;
+    } else if (character === "\\") {
+      escaped = true;
+    } else if (character === "|") {
+      cells.push(cell.trim());
+      cell = "";
+    } else {
+      cell += character;
+    }
+  }
+  if (escaped) cell += "\\";
+  cells.push(cell.trim());
+  return cells;
+}
+
+function tableAlignments(line: string, count: number): Array<"left" | "center" | "right"> | null {
+  const cells = splitTableRow(line);
+  if (!cells || cells.length !== count || cells.some((cell) => !/^:?-{3,}:?$/.test(cell))) return null;
+  return cells.map((cell) => {
+    const left = cell.startsWith(":");
+    const right = cell.endsWith(":");
+    return left && right ? "center" : right ? "right" : "left";
+  });
+}
 
 function parseBlocks(value: string): Block[] {
   const lines = value.replace(/\r\n?/g, "\n").split("\n");
@@ -161,6 +198,28 @@ function parseBlocks(value: string): Block[] {
       continue;
     }
 
+    // A table is recognized only when the following line is a valid Markdown
+    // separator. This prevents ordinary prose containing a pipe from being
+    // reformatted as a table.
+    const tableHeaders = splitTableRow(line);
+    const alignments = index + 1 < lines.length
+      ? tableAlignments(lines[index + 1], tableHeaders?.length || 0)
+      : null;
+    if (tableHeaders && alignments) {
+      flushParagraph();
+      flushList();
+      index += 2;
+      const rows: string[][] = [];
+      while (index < lines.length) {
+        const row = splitTableRow(lines[index]);
+        if (!row || row.length !== tableHeaders.length) break;
+        rows.push(row);
+        index += 1;
+      }
+      blocks.push({ type: "table", headers: tableHeaders, rows, alignments });
+      continue;
+    }
+
     flushList();
     paragraph.push(line);
     index += 1;
@@ -190,6 +249,38 @@ export function MarkdownText({ children, className = "" }: MarkdownTextProps) {
         if (block.type === "ul" || block.type === "ol") {
           const List = block.type;
           return <List key={`block-${index}`} className="ml-5 space-y-1" style={{ listStyleType: block.type === "ul" ? "disc" : "decimal" }}>{block.items.map((item, itemIndex) => <li key={`${index}-${itemIndex}`}>{inlineContent(item, `block-${index}-item-${itemIndex}`)}</li>)}</List>;
+        }
+        if (block.type === "table") {
+          return (
+            <div key={`block-${index}`} className="overflow-x-auto rounded-lg" style={{ border: "1px solid var(--bg-4)" }}>
+              <table className="w-full min-w-max border-collapse text-left text-[12px]">
+                <thead style={{ background: "var(--bg-2)" }}>
+                  <tr>
+                    {block.headers.map((header, cellIndex) => (
+                      <th
+                        key={`${index}-header-${cellIndex}`}
+                        className="px-3 py-2 font-semibold"
+                        style={{ borderBottom: "1px solid var(--bg-4)", textAlign: block.alignments[cellIndex] }}
+                      >
+                        {inlineContent(header, `block-${index}-header-${cellIndex}`)}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {block.rows.map((row, rowIndex) => (
+                    <tr key={`${index}-row-${rowIndex}`} style={{ borderBottom: rowIndex < block.rows.length - 1 ? "1px solid var(--bg-4)" : undefined }}>
+                      {block.headers.map((_header, cellIndex) => (
+                        <td key={`${index}-${rowIndex}-${cellIndex}`} className="px-3 py-2 align-top" style={{ textAlign: block.alignments[cellIndex] }}>
+                          {inlineContent(row[cellIndex] || "", `block-${index}-row-${rowIndex}-cell-${cellIndex}`)}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          );
         }
         return <p key={`block-${index}`} className="whitespace-pre-wrap break-words">{block.lines.map((line, lineIndex) => <span key={`${index}-${lineIndex}`}>{inlineContent(line, `block-${index}-line-${lineIndex}`)}{lineIndex < block.lines.length - 1 && <br />}</span>)}</p>;
       })}

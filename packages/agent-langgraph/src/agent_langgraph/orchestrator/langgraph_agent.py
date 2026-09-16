@@ -30,6 +30,7 @@ from common.enums import RunStatus, TaskStatus
 from common.events import AgentEvent
 from common.interfaces import IAgentOrchestrator
 from common.risk import RiskClassifier
+from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import HumanMessage, messages_to_dict
 from langgraph.types import Command
 
@@ -40,6 +41,78 @@ _TERMINAL_STATUS = {
     TaskStatus.FAILED: RunStatus.FAILED,
     TaskStatus.INTERRUPTED: RunStatus.INTERRUPTED,
 }
+
+
+class UsageTracker(BaseCallbackHandler):
+    """Accumulates provider-reported token usage across a graph run.
+
+    LangChain fires ``on_llm_end`` for every model call with the generation's
+    ``usage_metadata`` (input/output tokens) — the same numbers the Langfuse
+    handler would capture. Recording them here lets the run's receipt carry
+    real token totals even when Langfuse is not configured, which is what the
+    evaluation dashboard reads. Purely observational: it never raises.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+
+    def on_llm_end(self, response: Any, **kwargs: Any) -> None:
+        try:
+            captured = False
+            for generations in response.generations or []:
+                for generation in generations:
+                    message = getattr(generation, "message", None)
+                    usage = getattr(message, "usage_metadata", None) or {}
+                    if not usage and message is not None:
+                        response_metadata = getattr(message, "response_metadata", {}) or {}
+                        usage = response_metadata.get("token_usage") or response_metadata.get("usage") or {}
+                    if not usage:
+                        usage = getattr(response, "usage_metadata", None) or {}
+                    if usage:
+                        prompt = usage.get("input_tokens", usage.get("prompt_tokens", 0)) or 0
+                        completion = usage.get("output_tokens", usage.get("completion_tokens", 0)) or 0
+                        if not prompt and not completion:
+                            # A few providers report only the aggregate. Keep
+                            # the total visible rather than dropping the call.
+                            completion = usage.get("total_tokens", 0) or 0
+                        self.prompt_tokens += int(prompt)
+                        self.completion_tokens += int(completion)
+                        self.calls += 1
+                        captured = True
+            # Some LangChain integrations expose usage on llm_output rather
+            # than the returned AIMessage. Capture that shape as a fallback so
+            # provider choice does not silently turn usage into an empty dash.
+            if not captured:
+                raw = getattr(response, "llm_output", None) or {}
+                usage = raw.get("token_usage") if isinstance(raw, dict) else None
+                usage = usage or (raw.get("usage") if isinstance(raw, dict) else None)
+                if isinstance(usage, dict):
+                    prompt = usage.get("prompt_tokens", usage.get("input_tokens", 0))
+                    completion = usage.get("completion_tokens", usage.get("output_tokens", 0))
+                    if not prompt and not completion:
+                        completion = usage.get("total_tokens", 0) or 0
+                    self.prompt_tokens += int(prompt or 0)
+                    self.completion_tokens += int(completion or 0)
+                    self.calls += 1
+        except Exception as exc:  # noqa: BLE001 - usage capture must never break a run
+            log.debug("could not read usage from an LLM result: %s", exc)
+
+    @property
+    def total_tokens(self) -> int:
+        return self.prompt_tokens + self.completion_tokens
+
+    def cost(self, config: AgentConfig) -> float | None:
+        """Price the captured usage, or None when pricing is not configured."""
+        llm = config.llm
+        if llm.input_price_per_million <= 0 and llm.output_price_per_million <= 0:
+            return None
+        return (
+            self.prompt_tokens * llm.input_price_per_million
+            + self.completion_tokens * llm.output_price_per_million
+        ) / 1_000_000
 
 
 class LangGraphAgent(IAgentOrchestrator):
@@ -276,6 +349,44 @@ class LangGraphAgent(IAgentOrchestrator):
             async def event_sink(event: AgentEvent) -> None:
                 await self._emit(on_event, event)
         handler = next(iter(invocation["callbacks"]), None)
+        usage_tracker = UsageTracker()
+        invocation["callbacks"].append(usage_tracker)
+
+        async def attach_usage(result: AgentRunResult) -> AgentRunResult:
+            """Put captured usage on the receipt and persist it as an llm_call.
+
+            The service persists llm_call events into the llm_calls table (the
+            Postgres metrics view and the in-memory backend both sum it), and
+            the evaluation path falls back to the receipt metadata — so both
+            surfaces see the same totals.
+            """
+            if usage_tracker.calls:
+                await self._emit(
+                    event_sink,
+                    AgentEvent(
+                        type="llm_call",
+                        payload={
+                            "node_name": "langgraph_run",
+                            "provider": config.llm.provider,
+                            "model": config.llm.model,
+                            "prompt_tokens": usage_tracker.prompt_tokens,
+                            "completion_tokens": usage_tracker.completion_tokens,
+                            "cost": usage_tracker.cost(config),
+                        },
+                    ),
+                )
+                result.llm_calls = usage_tracker.calls
+                result.total_tokens = usage_tracker.total_tokens
+                cost = usage_tracker.cost(config)
+                if cost is not None:
+                    result.cost = cost
+                result.metadata["llm_calls"] = usage_tracker.calls
+                result.metadata["total_tokens"] = usage_tracker.total_tokens
+                if cost is not None:
+                    result.metadata["cost"] = cost
+            return result
+
+        handler = next(iter(invocation["callbacks"][:-1]), None)
 
         started = time.perf_counter()
         final_state: dict[str, Any] | None = None
@@ -294,6 +405,9 @@ class LangGraphAgent(IAgentOrchestrator):
                     "messages": [HumanMessage(content=task.goal)],
                     "current_step": 0,
                     "retry_count": 0,
+                    # The (pure) retry router reads the replan budget from
+                    # state, so seed it here from the run's configuration.
+                    "max_replans": config.execution.max_replans,
                 }
                 if task.execution_mode == "continue":
                     # A new conversational turn keeps the transcript but must
@@ -334,7 +448,7 @@ class LangGraphAgent(IAgentOrchestrator):
             log.exception("graph execution failed for task %s", task.id)
             await self._emit(on_event, AgentEvent(type="error", payload={"error": str(exc)}))
             checkpoint_id = await self._latest_checkpoint_id(graph, invocation)
-            return self._result(
+            return await attach_usage(self._result(
                 status=RunStatus.FAILED,
                 output=None,
                 started=started,
@@ -342,14 +456,14 @@ class LangGraphAgent(IAgentOrchestrator):
                 error=str(exc),
                 handler=handler,
                 checkpoint_id=checkpoint_id,
-            )
+            ))
         finally:
             # Buffered spans must be delivered even when the run failed.
             self._tracer.flush()
 
         checkpoint_id = await self._latest_checkpoint_id(graph, invocation)
 
-        result = self._result(
+        result = await attach_usage(self._result(
             status=_run_status(final_state),
             output=_final_output(final_state),
             started=started,
@@ -357,7 +471,7 @@ class LangGraphAgent(IAgentOrchestrator):
             error=(final_state or {}).get("last_error"),
             handler=handler,
             checkpoint_id=checkpoint_id,
-        )
+        ))
         await self._emit(
             on_event,
             AgentEvent(
@@ -388,8 +502,9 @@ class LangGraphAgent(IAgentOrchestrator):
 
         ``langfuse_trace_id`` is what lets a stored run be joined to its trace
         (the AGENT_RUNS.langfuse_trace_id column in the database design).
-        Token and cost totals are deliberately left at zero here: Langfuse is
-        the source of truth for those, captured per-generation by the handler.
+        Token and cost totals start at zero and are filled in by
+        ``attach_usage`` from the run's captured usage, so the receipt carries
+        real numbers even without Langfuse.
         """
         plan = (state or {}).get("plan")
         steps = getattr(plan, "steps", []) or []

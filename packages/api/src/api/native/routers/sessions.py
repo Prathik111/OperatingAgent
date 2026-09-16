@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query, Request, status
@@ -17,6 +18,7 @@ from ..schemas import (
 )
 
 router = APIRouter(prefix="/native/sessions", tags=["native-sessions"])
+log = logging.getLogger(__name__)
 
 NativeServiceDep = Annotated[Any, Depends(get_native_service)]
 Limit = Annotated[int, Query(ge=0, le=500)]
@@ -85,6 +87,15 @@ async def delete_session(session_id: str, service: NativeServiceDep):
     deleted = await service.delete_session(session_id)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"session '{session_id}' not found")
+    pool = getattr(service.runtime, "sandbox", None)
+    if pool is not None:
+        try:
+            await pool.destroy_session(session_id)
+        except Exception as exc:  # noqa: BLE001 - cleanup must not hide a successful delete
+            # Session deletion remains successful even if Docker is already
+            # unavailable; application shutdown will reap any remaining pool
+            # containers.
+            log.debug("sandbox cleanup failed for deleted session %s: %s", session_id, exc)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

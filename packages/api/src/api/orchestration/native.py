@@ -147,11 +147,38 @@ class NativeAgentOrchestrator(IAgentOrchestrator):
             "limit_reached": RunStatus.INTERRUPTED,
         }.get(native_status, RunStatus.FAILED)
         usage = getattr(result, "usage", None)
+        input_tokens = int(getattr(usage, "input_tokens", 0) or getattr(result, "input_tokens", 0) or 0)
+        output_tokens = int(getattr(usage, "output_tokens", 0) or getattr(result, "output_tokens", 0) or 0)
+        cost = float(getattr(result, "cost_usd", 0.0) or 0.0)
+        # Native stores detailed usage in its own runtime database. Mirror one
+        # normalized record into the shared API repository for evaluations.
+        if int(getattr(result, "turns", 0) or 0) or input_tokens or output_tokens or cost:
+            await _emit(
+                on_event,
+                AgentEvent(
+                    type="llm_call",
+                    payload={
+                        "node_name": "native_run",
+                        "provider": "native",
+                        "model": str(getattr(result, "model", "") or ""),
+                        "prompt_tokens": input_tokens,
+                        "completion_tokens": output_tokens,
+                        "cost": cost,
+                    },
+                ),
+            )
         metadata = {
             "native_run_id": str(getattr(result, "run_id", "") or ""),
             "native_status": native_status,
             "model": str(getattr(result, "model", "") or ""),
             "trace_id": str(getattr(result, "trace_id", "") or ""),
+            # Keep the terminal receipt self-contained. The native runtime may
+            # persist detailed usage in its own database, but the API evaluation
+            # tables only see this shared run.
+            "llm_calls": int(getattr(result, "turns", 0) or 0),
+            "tool_calls": tool_calls,
+            "total_tokens": input_tokens + output_tokens,
+            "cost": cost,
         }
         error = str(getattr(result, "error", "") or "")
         if error:
@@ -162,8 +189,8 @@ class NativeAgentOrchestrator(IAgentOrchestrator):
             duration_ms=float(getattr(result, "duration_seconds", 0.0) or 0.0) * 1000,
             llm_calls=int(getattr(result, "turns", 0) or 0),
             tool_calls=tool_calls,
-            total_tokens=int(getattr(usage, "total_tokens", 0) or 0),
-            cost=float(getattr(result, "cost_usd", 0.0) or 0.0),
+            total_tokens=input_tokens + output_tokens,
+            cost=cost,
             metadata=metadata,
         )
 

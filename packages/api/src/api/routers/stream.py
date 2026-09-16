@@ -9,6 +9,8 @@ string instead of tearing down the stream.
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 from sse_starlette.sse import EventSourceResponse
 
@@ -16,6 +18,7 @@ from ..errors import TaskNotFound, TaskNotInThread
 from ..serialization import event_to_dict, event_to_sse
 
 router = APIRouter(tags=["stream"])
+log = logging.getLogger(__name__)
 
 
 async def _task_event_response(task_id: str, request: Request) -> EventSourceResponse:
@@ -56,8 +59,18 @@ async def _stream_ws(websocket: WebSocket, task_id: str) -> None:
     try:
         async for event in service.stream_task(task_id):
             await websocket.send_json(event_to_dict(event))
-    except WebSocketDisconnect:
-        pass
+    except (WebSocketDisconnect, RuntimeError) as exc:
+        log.debug("websocket stream ended for task %s: %s", task_id, exc)
+    finally:
+        # ``EventBroker`` ends the iterator when the run reaches a terminal
+        # state, but returning from an endpoint does not reliably send a close
+        # frame on every ASGI server. Close explicitly so desktop clients do
+        # not retain a half-open socket after a completed/error run.
+        try:
+            await websocket.close(code=1000)
+        except (RuntimeError, WebSocketDisconnect) as exc:
+            # The peer may already have closed the connection.
+            log.debug("websocket close skipped for task %s: %s", task_id, exc)
 
 
 @router.websocket("/ws/threads/{thread_id}/tasks/{task_id}")

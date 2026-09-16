@@ -46,6 +46,7 @@ class ModelProvider:
                 num_predict=config.llm.max_tokens,
                 base_url=_ollama_base_url(config.llm.base_url),
                 client_kwargs={"timeout": config.llm.timeout_seconds},
+                async_client_kwargs={"timeout": config.llm.timeout_seconds},
             )
 
         if provider == "groq":
@@ -58,6 +59,7 @@ class ModelProvider:
                 model_kwargs={"top_p": config.llm.top_p},
                 api_key=SecretStr(config.llm.api_key),
                 base_url=(config.llm.base_url or None),
+                max_retries=config.llm.max_retries,
             )
 
         if provider == "anthropic":
@@ -71,6 +73,7 @@ class ModelProvider:
                 api_key=SecretStr(config.llm.api_key),
                 base_url=(config.llm.base_url or None),
                 stop=None,
+                max_retries=config.llm.max_retries,
             )
 
         if provider == "openai":
@@ -83,6 +86,7 @@ class ModelProvider:
                 max_completion_tokens=config.llm.max_tokens,
                 api_key=SecretStr(config.llm.api_key),
                 base_url=(config.llm.base_url or None),
+                max_retries=config.llm.max_retries,
             )
 
         raise NotImplementedError(

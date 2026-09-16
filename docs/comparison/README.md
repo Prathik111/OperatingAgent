@@ -39,6 +39,14 @@ one Markdown file:
   the same task differently.
 - **Where they differ** — the tasks one track passed and the other failed.
 
+When the runs were produced with `--judge-model`, the report additionally has
+a **Deterministic checks** matrix (per-case named checks) and an **LLM judge**
+section: cases judged cleanly, judge errors, average judge score, per-criterion
+pass rates, per-case scores with deltas over the cases both tracks had judged
+cleanly, and the judge's own token/cost overhead. The judge is one shared
+model instance for every track, blinded to track identity, and its scores
+never replace the deterministic pass rate.
+
 ## Two honesty rules, enforced in code
 
 1. **Compare like with like.** Reports built on different suite versions are refused,

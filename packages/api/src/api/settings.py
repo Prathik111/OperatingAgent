@@ -5,9 +5,57 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 
+def apply_langfuse_settings(mode: str | None, host: str | None, public_key: str | None, secret_key: str | None) -> dict[str, object]:
+    """Apply desktop Langfuse settings to this API process and reload tracing."""
+    import os
+    from observability import LangfuseSettings, reload_tracing
+
+    selected = (mode or "").strip().lower()
+    if selected not in {"", "disabled", "cloud", "local"}:
+        raise ValueError("langfuse_mode must be disabled, cloud, or local")
+    if selected == "disabled":
+        os.environ.pop("LANGFUSE_PUBLIC_KEY", None)
+        os.environ.pop("LANGFUSE_SECRET_KEY", None)
+    else:
+        if host is not None and host.strip():
+            os.environ["LANGFUSE_HOST"] = host.strip().rstrip("/")
+        if public_key is not None:
+            os.environ["LANGFUSE_PUBLIC_KEY"] = public_key.strip()
+        if secret_key is not None:
+            os.environ["LANGFUSE_SECRET_KEY"] = secret_key.strip()
+    settings = LangfuseSettings.from_env()
+    client = reload_tracing(settings)
+    return {
+        "langfuse_mode": "disabled" if client is None else (selected or "cloud"),
+        "langfuse_host": settings.host,
+        "langfuse_enabled": client is not None,
+        "langfuse_public_key_set": bool(settings.public_key),
+        "langfuse_secret_key_set": bool(settings.secret_key),
+    }
+
+
+def current_langfuse_settings() -> dict[str, object]:
+    """Return non-secret Langfuse settings for settings forms and health views."""
+    from observability import LangfuseSettings
+
+    settings = LangfuseSettings.from_env()
+    host = settings.host.rstrip("/")
+    local = host.startswith("http://localhost") or host.startswith("http://127.0.0.1") or host.startswith("http://[::1]")
+    return {
+        "langfuse_mode": "disabled" if not settings.enabled else ("local" if local else "cloud"),
+        "langfuse_host": settings.host,
+        "langfuse_enabled": settings.enabled,
+        "langfuse_public_key_set": bool(settings.public_key),
+        "langfuse_secret_key_set": bool(settings.secret_key),
+    }
+
+
 class RuntimeLLMSettings(BaseModel):
     provider: str | None = Field(default=None, min_length=1)
     model: str | None = None
+    # Write-only from the desktop settings UI. GET endpoints expose only
+    # whether a key is configured, never the secret itself.
+    api_key: str | None = None
     base_url: str | None = None
     temperature: float | None = Field(default=None, ge=0, le=2)
     top_p: float | None = Field(default=None, gt=0, le=1)
@@ -17,6 +65,10 @@ class RuntimeLLMSettings(BaseModel):
         default=None,
         description="Skip approval prompts (denials still enforced)",
     )
+    langfuse_mode: str | None = None
+    langfuse_host: str | None = None
+    langfuse_public_key: str | None = None
+    langfuse_secret_key: str | None = None
 
 
 _DEFAULT_MODELS: dict[str, str] = {

@@ -60,6 +60,29 @@ class OpenRun:
 
 @runtime_checkable
 class TaskRepository(Protocol):
+    async def get_evaluation_dashboard(self) -> dict:
+        """Return evaluation-table aggregates for the desktop dashboard."""
+        ...
+
+    async def create_evaluation_run(self, name: str, version: str, track: str, cases: list[dict]) -> dict:
+        ...
+
+    async def save_evaluation_result(self, evaluation_run_id: str, suite_id: str, case_id: str, agent_run_id: str, success: bool, failure_reason: str | None) -> str:
+        ...
+
+    async def save_evaluation_score(self, result_id: str, metric: str, value: float | None, unit: str | None = None, comment: str | None = None) -> None:
+        ...
+
+    async def finish_evaluation_run(self, evaluation_run_id: str) -> None:
+        ...
+
+    async def finish_abandoned_evaluation_runs(self) -> list[str]:
+        """Close unfinished evaluation batches left by a previous process."""
+        ...
+
+    async def get_run_metrics(self, run_id: str) -> dict:
+        ...
+
     async def create_thread(self, thread_id: str, title: str | None = None) -> ThreadRecord:
         """Create an empty conversation thread for the desktop UI."""
         ...

@@ -9,7 +9,9 @@ from typing import Any
 
 from common.agent import AgentRunResult, AgentTask
 from common.enums import AgentTrack
+from common.judging import expected_output_check, judge_output
 
+from .scoring import LLMJudge
 from .suite import EvaluationCase, EvaluationSuite
 
 CaseRunner = Callable[[AgentTask], Awaitable[AgentRunResult]]
@@ -29,6 +31,8 @@ class EvaluationResult:
     reasoning_tokens: int = 0
     cost: float = 0.0
     duration_seconds: float = 0.0
+    checks: list[dict[str, Any]] = field(default_factory=list)
+    judge: dict[str, Any] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -46,6 +50,8 @@ class EvaluationResult:
             reasoning_tokens=int(data.get("reasoning_tokens", 0) or 0),
             cost=float(data.get("cost", 0.0) or 0.0),
             duration_seconds=float(data.get("duration_seconds", 0.0) or 0.0),
+            checks=list(data.get("checks", []) or []),
+            judge=dict(data["judge"]) if data.get("judge") else None,
             metadata=dict(data.get("metadata", {}) or {}),
         )
 
@@ -59,11 +65,14 @@ class EvaluationRunner:
         track: AgentTrack,
         run_case: CaseRunner,
         session_prefix: str = "eval-",
+        judge: LLMJudge | None = None,
     ) -> list[EvaluationResult]:
         results: list[EvaluationResult] = []
         for case in self._suite.cases:
             results.append(
-                await self.run_case(case, track, run_case, session_prefix=session_prefix)
+                await self.run_case(
+                    case, track, run_case, session_prefix=session_prefix, judge=judge
+                )
             )
         return results
 
@@ -73,6 +82,7 @@ class EvaluationRunner:
         track: AgentTrack,
         run_case: CaseRunner,
         session_prefix: str = "eval-",
+        judge: LLMJudge | None = None,
     ) -> EvaluationResult:
         task = AgentTask(
             id=f"eval-{case.id}",
@@ -97,14 +107,27 @@ class EvaluationRunner:
                 metadata=dict(task.metadata),
             )
         output = result.output or ""
-        expected = case.expected_output_contains.lower()
-        passed = bool(output) and (not expected or expected in output.lower())
+        completed = result.status.value == "completed"
+        # Deterministic judgement stays the headline: completed run, non-empty
+        # output, and every named check passing. The LLM judge, when present,
+        # never influences `passed` — its verdict is recorded beside it.
+        checks = _case_checks(case)
+        judgment = judge_output(output, checks) if completed else None
+        passed = bool(output) and judgment is not None and judgment.passed
+        judge_payload: dict[str, Any] | None = None
+        if judge is not None and completed and output.strip():
+            verdict = await judge.judge(goal=case.goal, output=output, checks=checks)
+            judge_payload = verdict.to_dict()
+        error = str(result.metadata.get("error", "") if result.metadata else "")
+        if not passed and judgment is not None and judgment.failure_summary():
+            detail = judgment.failure_summary()
+            error = f"{error}; {detail}" if error else detail
         return EvaluationResult(
             case_id=case.id,
             track=track.value,
-            passed=passed and result.status.value == "completed",
+            passed=passed,
             output=output,
-            error=str(result.metadata.get("error", "") if result.metadata else ""),
+            error=error,
             turns=int(result.llm_calls or 0),
             input_tokens=int(result.total_tokens or 0),
             output_tokens=0,
@@ -112,8 +135,21 @@ class EvaluationRunner:
             reasoning_tokens=0,
             cost=float(result.cost or 0.0),
             duration_seconds=round(time.perf_counter() - started, 3),
+            checks=[
+                {"name": item.name, "passed": item.passed, "detail": item.detail}
+                for item in (judgment.results if judgment else ())
+            ],
+            judge=judge_payload,
             metadata=dict(result.metadata or {}),
         )
+
+
+def _case_checks(case: EvaluationCase) -> tuple:
+    checks = list(case.checks)
+    legacy = expected_output_check(case.expected_output_contains)
+    if legacy is not None and all(check.name != legacy.name for check in checks):
+        checks.append(legacy)
+    return tuple(checks)
 
 
 async def run_case(case: EvaluationCase, track: AgentTrack, run_case: CaseRunner) -> EvaluationResult:

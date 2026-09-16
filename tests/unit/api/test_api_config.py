@@ -41,6 +41,7 @@ def test_from_env_populates_runtime_agent_configuration(monkeypatch, tmp_path) -
     monkeypatch.setenv("LLM_MAX_TOKENS", "900")
     monkeypatch.setenv("AGENT_MAX_ITERATIONS", "7")
     monkeypatch.setenv("AGENT_RETRY_ATTEMPTS", "4")
+    monkeypatch.setenv("AGENT_MAX_REPLANS", "6")
     monkeypatch.setenv("AGENT_STREAM", "false")
     monkeypatch.setenv("AGENT_ENABLE_INTERRUPTS", "false")
     monkeypatch.setenv("AGENT_PERMISSION_TERMINAL", "false")
@@ -62,6 +63,7 @@ def test_from_env_populates_runtime_agent_configuration(monkeypatch, tmp_path) -
     assert config.llm.max_tokens == 900
     assert config.execution.max_iterations == 7
     assert config.execution.retry_attempts == 4
+    assert config.execution.max_replans == 6
     assert config.execution.stream is False
     assert config.execution.enable_interrupts is False
     assert config.permissions.terminal is False

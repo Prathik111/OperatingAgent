@@ -187,6 +187,7 @@ class AgentRuntime:
         *,
         provider: str,
         model: str,
+        api_key: str | None = None,
         base_url: str | None = None,
         temperature: float = 0.0,
         top_p: float = 1.0,
@@ -207,7 +208,10 @@ class AgentRuntime:
         if provider == "groq":
             from .models.groq_model import Groq
 
-            groq = Groq(base_url=base_url)
+            groq = Groq(
+                api_key=api_key.strip() if api_key is not None else None,
+                base_url=base_url,
+            )
             if not groq.has_key:
                 raise ValueError("GROQ_API_KEY is required for the Groq provider")
             self.models.register_provider("groq", groq)

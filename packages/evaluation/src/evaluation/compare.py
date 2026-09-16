@@ -1,4 +1,14 @@
-"""Comparison helpers for evaluation results."""
+"""Comparison helpers for evaluation results.
+
+Two honesty rules are enforced here, mirroring the report contract:
+
+1. **Compare like with like.** Results over different suites are refused.
+2. **Keep the judge separate.** The deterministic pass rate and the LLM-judge
+   scores are rendered in distinct tables; a judge score never becomes the
+   pass rate. Head-to-head judge deltas are only computed over cases both
+   tracks had judged cleanly, and the counts are shown so an average can never
+   masquerade as complete coverage.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +16,7 @@ from collections import Counter
 from dataclasses import dataclass
 
 from .runner import EvaluationResult
+from .scoring import JudgeVerdict, summarize_judgments
 
 
 @dataclass(slots=True)
@@ -75,7 +86,27 @@ def compare_results(left: list[EvaluationResult], right: list[EvaluationResult])
     return ComparisonReport(left_label="left", right_label="right", rows=rows)
 
 
+def _verdict(result: EvaluationResult) -> JudgeVerdict | None:
+    if not result.judge:
+        return None
+    return JudgeVerdict.from_dict(result.judge)
+
+
+def _score_of(verdicts: dict[str, JudgeVerdict | None], case_id: str) -> float | None:
+    verdict = verdicts.get(case_id)
+    return verdict.score if verdict is not None else None
+
+
+def _format_score(value: float | None) -> str:
+    return "—" if value is None else f"{value:.2f}"
+
+
+def _pass_rate(results: list[EvaluationResult]) -> float | None:
+    return (sum(1 for result in results if result.passed) / len(results)) if results else None
+
+
 def render_comparison_markdown(report: ComparisonReport) -> str:
+    """Render the legacy two-column table (deterministic results only)."""
     lines = [
         "# Evaluation Comparison",
         "",
@@ -87,3 +118,167 @@ def render_comparison_markdown(report: ComparisonReport) -> str:
             f"| {row.case_id} | {'pass' if row.left_passed else 'fail'} | {'pass' if row.right_passed else 'fail'} | {row.right_turns - row.left_turns:+d} | {row.right_cost - row.left_cost:+.4f} |"
         )
     return "\n".join(lines)
+
+
+def render_full_comparison_markdown(
+    left: list[EvaluationResult],
+    right: list[EvaluationResult],
+    *,
+    left_label: str = "left",
+    right_label: str = "right",
+) -> str:
+    """Render the side-by-side report: deterministic results, then judge scores."""
+    report = compare_results(left, right)
+    report.left_label = left_label
+    report.right_label = right_label
+    left_by_case = {result.case_id: result for result in left}
+    right_by_case = {result.case_id: result for result in right}
+
+    left_rate = _pass_rate(left)
+    right_rate = _pass_rate(right)
+    lines: list[str] = [
+        "# Evaluation Comparison",
+        "",
+        "## Deterministic results",
+        "",
+        "| Metric | " + f"{left_label} | {right_label} |",
+        "| --- | --- | --- |",
+        f"| Pass rate | {_format_score(left_rate)} | {_format_score(right_rate)} |",
+        f"| Passed | {sum(1 for r in left if r.passed)}/{len(left)} | {sum(1 for r in right if r.passed)}/{len(right)} |",
+        f"| Total turns | {sum(r.turns for r in left)} | {sum(r.turns for r in right)} |",
+        f"| Total cost (USD) | {sum(r.cost for r in left):.4f} | {sum(r.cost for r in right):.4f} |",
+        "",
+        "| Case | " + f"{left_label} | {right_label} | d Turns | d Cost |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for row in report.rows:
+        lines.append(
+            f"| {row.case_id} | {'pass' if row.left_passed else 'fail'} | {'pass' if row.right_passed else 'fail'} | {row.right_turns - row.left_turns:+d} | {row.right_cost - row.left_cost:+.4f} |"
+        )
+
+    lines += _render_check_matrix(left_by_case, right_by_case, left_label, right_label)
+    lines += _render_judge_section(left_by_case, right_by_case, left_label, right_label)
+    return "\n".join(lines)
+
+
+def _render_check_matrix(
+    left_by_case: dict[str, EvaluationResult],
+    right_by_case: dict[str, EvaluationResult],
+    left_label: str,
+    right_label: str,
+) -> list[str]:
+    check_names: list[str] = []
+    for results_by_case in (left_by_case, right_by_case):
+        for case_id in sorted(results_by_case):
+            for check in results_by_case[case_id].checks:
+                if check["name"] not in check_names:
+                    check_names.append(check["name"])
+    if not check_names:
+        return []
+    lines = [
+        "",
+        "## Deterministic checks",
+        "",
+        "Per-case named checks; `+` passed, `-` failed, blank = check not present for that case.",
+        "",
+        "| Check | Case | " + f"{left_label} | {right_label} |",
+        "| --- | --- | --- | --- |",
+    ]
+
+    def outcome(result: EvaluationResult | None, name: str) -> str:
+        if result is None:
+            return ""
+        for check in result.checks:
+            if check["name"] == name:
+                return "+" if check["passed"] else "-"
+        return ""
+
+    for name in check_names:
+        for case_id in sorted(left_by_case):
+            left_mark = outcome(left_by_case.get(case_id), name)
+            right_mark = outcome(right_by_case.get(case_id), name)
+            if not left_mark and not right_mark:
+                continue
+            lines.append(f"| {name} | {case_id} | {left_mark} | {right_mark} |")
+    return lines
+
+
+def _render_judge_section(
+    left_by_case: dict[str, EvaluationResult],
+    right_by_case: dict[str, EvaluationResult],
+    left_label: str,
+    right_label: str,
+) -> list[str]:
+    left_verdicts = {case_id: _verdict(result) for case_id, result in left_by_case.items()}
+    right_verdicts = {case_id: _verdict(result) for case_id, result in right_by_case.items()}
+    has_any = any(v is not None for v in left_verdicts.values()) or any(
+        v is not None for v in right_verdicts.values()
+    )
+    if not has_any:
+        return []
+    left_summary = summarize_judgments(left_verdicts)
+    right_summary = summarize_judgments(right_verdicts)
+    models = sorted(
+        {
+            verdict.model
+            for verdict in (*left_verdicts.values(), *right_verdicts.values())
+            if verdict is not None and verdict.model
+        }
+    )
+    lines = [
+        "",
+        "## LLM judge",
+        "",
+        "Non-deterministic scorer, reported separately from the deterministic pass rate.",
+    ]
+    if models:
+        lines.append(f"Judge model(s): {', '.join(models)}.")
+    lines += [
+        "",
+        "| Metric | " + f"{left_label} | {right_label} |",
+        "| --- | --- | --- |",
+        f"| Cases judged cleanly | {left_summary['judged']} | {right_summary['judged']} |",
+        f"| Judge errors | {left_summary['errors']} | {right_summary['errors']} |",
+        f"| Average judge score | {_format_score(left_summary['average_score'])} | {_format_score(right_summary['average_score'])} |",
+        f"| Judge tokens | {left_summary['tokens']} | {right_summary['tokens']} |",
+        f"| Judge cost (USD) | {left_summary['cost']:.4f} | {right_summary['cost']:.4f} |",
+        "",
+        "### Judge score by criterion",
+        "",
+        "| Criterion | " + f"{left_label} | {right_label} |",
+        "| --- | --- | --- |",
+    ]
+    criteria = sorted(set(left_summary["criteria_pass_rate"]) | set(right_summary["criteria_pass_rate"]))
+    for name in criteria:
+        left_rate = left_summary["criteria_pass_rate"].get(name)
+        right_rate = right_summary["criteria_pass_rate"].get(name)
+        lines.append(
+            f"| {name} | {_format_score(left_rate)} | {_format_score(right_rate)} |"
+        )
+
+    lines += [
+        "",
+        "### Judge score by case",
+        "",
+        "Only cases both tracks had judged cleanly are listed with a delta; `—` means not cleanly judged.",
+        "",
+        "| Case | " + f"{left_label} | {right_label} | d Score |",
+        "| --- | --- | --- | --- |",
+    ]
+    both_judged = 0
+    for case_id in sorted(left_by_case):
+        left_score = _score_of(left_verdicts, case_id)
+        right_score = _score_of(right_verdicts, case_id)
+        if left_score is not None and right_score is not None:
+            delta = f"{right_score - left_score:+.2f}"
+            both_judged += 1
+        else:
+            delta = "—"
+        lines.append(
+            f"| {case_id} | {_format_score(left_score)} | {_format_score(right_score)} | {delta} |"
+        )
+    lines.append("")
+    lines.append(
+        f"Deltas computed over {both_judged} case(s) judged cleanly on both tracks."
+    )
+    return lines

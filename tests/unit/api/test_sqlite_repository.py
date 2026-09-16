@@ -104,6 +104,24 @@ async def test_native_sqlite_database_survives_reopen(tmp_path) -> None:
     await second.close()
 
 
+async def test_native_sqlite_upgrades_sessions_without_timestamps(tmp_path) -> None:
+    path = tmp_path / "legacy-native.db"
+    first = SQLiteDatabase(path)
+    legacy = Session(id="legacy-session", working_directory=str(tmp_path))
+    del legacy.created_at
+    del legacy.updated_at
+    first._sessions[legacy.id] = legacy
+    await first.close()
+
+    second = SQLiteDatabase(path)
+    restored = await second.get_session(legacy.id)
+    assert restored is not None
+    assert restored.created_at.tzinfo is UTC
+    assert restored.updated_at.tzinfo is UTC
+    assert [item.id for item in await second.list_sessions()] == [legacy.id]
+    await second.close()
+
+
 def test_sqlite_settings_propagate_repository_and_checkpoint_path(tmp_path) -> None:
     settings = ApiSettings(
         repository_backend="sqlite",

@@ -31,6 +31,31 @@ def _utc(value: datetime) -> datetime:
     return value.astimezone(UTC)
 
 
+def _normalize_session(session: Any, messages: list[Any] | None = None) -> Any:
+    """Upgrade sessions pickled before timestamp fields were introduced."""
+    message_times = [
+        _utc(value)
+        for message in messages or []
+        if isinstance((value := getattr(message, "created_at", None)), datetime)
+    ]
+    now = datetime.now(UTC)
+    raw_created = getattr(session, "created_at", None)
+    created_at = (
+        _utc(raw_created)
+        if isinstance(raw_created, datetime)
+        else min(message_times, default=now)
+    )
+    raw_updated = getattr(session, "updated_at", None)
+    updated_at = (
+        _utc(raw_updated) if isinstance(raw_updated, datetime) else created_at
+    )
+    if message_times:
+        updated_at = max(updated_at, *message_times)
+    session.created_at = created_at
+    session.updated_at = max(created_at, updated_at)
+    return session
+
+
 class Database(ABC):
     """The one interface the agent stores things through."""
 
@@ -136,13 +161,17 @@ class MemoryDatabase(Database):
         self._memories: dict = {}      # memory id -> Memory
 
     async def create_session(self, session: Session) -> None:
+        _normalize_session(session)
         self._sessions[session.id] = session
         self._messages.setdefault(session.id, [])
         self._events.setdefault(session.id, [])
         self._sequence.setdefault(session.id, 0)
 
     async def get_session(self, session_id: str) -> Session | None:
-        return self._sessions.get(session_id)
+        session = self._sessions.get(session_id)
+        if session is None:
+            return None
+        return _normalize_session(session, self._messages.get(session_id, []))
 
     async def delete_session(self, session_id: str) -> bool:
         existed = session_id in self._sessions
@@ -170,8 +199,7 @@ class MemoryDatabase(Database):
                 s for s in sessions if getattr(s, "working_directory", "") == working_directory
             ]
         for session in sessions:
-            session.created_at = _utc(session.created_at)
-            session.updated_at = _utc(session.updated_at)
+            _normalize_session(session, self._messages.get(session.id, []))
         sessions.sort(key=lambda s: (s.updated_at, s.id), reverse=True)
         if limit and limit > 0:
             sessions = sessions[:limit]
@@ -181,8 +209,7 @@ class MemoryDatabase(Database):
         message.created_at = _utc(message.created_at)
         session = self._sessions.get(message.session_id)
         if session is not None:
-            session.created_at = _utc(session.created_at)
-            session.updated_at = _utc(session.updated_at)
+            _normalize_session(session, self._messages.get(message.session_id, []))
             session.updated_at = max(session.updated_at, message.created_at)
         self._messages.setdefault(message.session_id, []).append(message)
 

@@ -10,7 +10,9 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from .settings import (
     RuntimeLLMSettings,
+    apply_langfuse_settings,
     clean_base_url,
+    current_langfuse_settings,
     default_model,
     normalize_base_url,
     normalize_model,
@@ -44,6 +46,7 @@ async def get_langgraph_settings(request: Request) -> dict[str, Any]:
     return {
         "track": "langgraph",
         "provider": config.llm.provider,
+        "api_key_set": bool(config.llm.api_key),
         "model": config.llm.model,
         "base_url": config.llm.base_url,
         "temperature": config.llm.temperature,
@@ -54,6 +57,7 @@ async def get_langgraph_settings(request: Request) -> dict[str, Any]:
         "default_model": default_model(config.llm.provider, models or None),
         "auto_approve_all": bool(getattr(agent, "auto_approve_all", False)),
         "applies_to": "new runs",
+        **current_langfuse_settings(),
     }
 
 
@@ -79,6 +83,7 @@ _LLM_PATCH_FIELDS = frozenset(
     {
         "provider",
         "model",
+        "api_key",
         "base_url",
         "temperature",
         "top_p",
@@ -99,6 +104,7 @@ def _apply_auto_approve(agent: Any, value: bool | None) -> None:
 @router.patch("")
 async def update_langgraph_settings(body: RuntimeLLMSettings, request: Request) -> dict[str, Any]:
     agent = _orchestrator(request)
+    langfuse_info = apply_langfuse_settings(body.langfuse_mode, body.langfuse_host, body.langfuse_public_key, body.langfuse_secret_key) if any(value is not None for value in (body.langfuse_mode, body.langfuse_host, body.langfuse_public_key, body.langfuse_secret_key)) else {}
     if not (set(body.model_fields_set) & _LLM_PATCH_FIELDS):
         # Flags-only patch: nothing about the model changes, so provider
         # validation must not block it.
@@ -107,9 +113,11 @@ async def update_langgraph_settings(body: RuntimeLLMSettings, request: Request) 
             "track": "langgraph",
             "auto_approve_all": bool(getattr(agent, "auto_approve_all", False)),
             "applies_to": "new runs",
+            **langfuse_info,
         }
     old = agent.config
     provider = normalize_provider(body.provider or old.llm.provider)
+    provider_changed = provider != normalize_provider(old.llm.provider)
     if provider not in _LANGGRAPH_PROVIDERS:
         raise HTTPException(
             status_code=422,
@@ -137,18 +145,30 @@ async def update_langgraph_settings(body: RuntimeLLMSettings, request: Request) 
                 )
             if model not in downloaded:
                 raise ValueError(f"Ollama model {model!r} is not installed; available: {downloaded}")
-        elif provider == "groq":
-            if not os.getenv("GROQ_API_KEY", "").strip():
-                raise ValueError("GROQ_API_KEY is not configured for the API process")
+        if "api_key" in body.model_fields_set:
+            # An explicitly empty field means “fall back to the process
+            # environment”, which lets the desktop clear a previous override.
+            api_key = (body.api_key or "").strip() or os.getenv(
+                f"{provider.upper()}_API_KEY", ""
+            )
+        elif provider_changed:
+            api_key = os.getenv(f"{provider.upper()}_API_KEY", "")
+        else:
+            api_key = old.llm.api_key
+        if provider != "ollama" and not api_key.strip():
+            raise ValueError(f"An API key is required for the {provider} provider")
         config = AgentConfig(
             llm=LLMConfig(
                 provider=provider,
                 model=model,
-                api_key=old.llm.api_key,
+                api_key=api_key.strip(),
                 timeout_seconds=body.timeout_seconds if body.timeout_seconds is not None else old.llm.timeout_seconds,
                 temperature=body.temperature if body.temperature is not None else old.llm.temperature,
                 max_tokens=body.max_tokens if "max_tokens" in body.model_fields_set else old.llm.max_tokens,
+                max_retries=old.llm.max_retries,
                 top_p=body.top_p if body.top_p is not None else old.llm.top_p,
+                input_price_per_million=old.llm.input_price_per_million,
+                output_price_per_million=old.llm.output_price_per_million,
                 base_url=base_url,
             ),
             execution=old.execution,
@@ -180,4 +200,5 @@ async def update_langgraph_settings(body: RuntimeLLMSettings, request: Request) 
         "timeout_seconds": config.llm.timeout_seconds,
         "auto_approve_all": bool(getattr(agent, "auto_approve_all", False)),
         "applies_to": "new runs",
+        **langfuse_info,
     }

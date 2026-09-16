@@ -144,6 +144,12 @@ class AgentState(TypedDict):
     # Retry / Recovery
     retry_count: int
 
+    # Whole-run replan budget, seeded once by the orchestrator from
+    # execution.max_replans so the (pure) retry router can read it from state.
+    # Absent on checkpoints written before the field existed; the router then
+    # falls back to the module default.
+    max_replans: int
+
     last_error: str | None
 
     # Overall execution

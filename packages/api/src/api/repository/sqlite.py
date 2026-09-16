@@ -36,6 +36,7 @@ _STATE_FIELDS = (
     "_runs",
     "_approvals",
     "_tools",
+    "_evaluations",
 )
 
 
@@ -179,6 +180,35 @@ class SQLiteTaskRepository(InMemoryTaskRepository):
         async with self._write_lock:
             await InMemoryTaskRepository.save_llm_call(self, run_id, record)
             await self._persist_locked()
+
+    async def create_evaluation_run(self, name: str, version: str, track: str, cases: list[dict]) -> dict:
+        async with self._write_lock:
+            value = await InMemoryTaskRepository.create_evaluation_run(self, name, version, track, cases)
+            await self._persist_locked()
+            return value
+
+    async def save_evaluation_result(self, evaluation_run_id: str, suite_id: str, case_id: str, agent_run_id: str, success: bool, failure_reason: str | None) -> str:
+        async with self._write_lock:
+            value = await InMemoryTaskRepository.save_evaluation_result(self, evaluation_run_id, suite_id, case_id, agent_run_id, success, failure_reason)
+            await self._persist_locked()
+            return value
+
+    async def save_evaluation_score(self, result_id: str, metric: str, value: float | None, unit: str | None = None, comment: str | None = None) -> None:
+        async with self._write_lock:
+            await InMemoryTaskRepository.save_evaluation_score(self, result_id, metric, value, unit, comment)
+            await self._persist_locked()
+
+    async def finish_evaluation_run(self, evaluation_run_id: str) -> None:
+        async with self._write_lock:
+            await InMemoryTaskRepository.finish_evaluation_run(self, evaluation_run_id)
+            await self._persist_locked()
+
+    async def finish_abandoned_evaluation_runs(self) -> list[str]:
+        async with self._write_lock:
+            run_ids = await InMemoryTaskRepository.finish_abandoned_evaluation_runs(self)
+            if run_ids:
+                await self._persist_locked()
+            return run_ids
 
     async def save_tool_call(self, run_id: str, record: ToolCallRecord) -> None:
         async with self._write_lock:

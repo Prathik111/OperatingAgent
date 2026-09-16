@@ -74,7 +74,12 @@ def build_gateway(root: str | None = None) -> FastMCP:
             "all mounted servers."
         ),
         lifespan=lifespan,
-        mask_error_details=True,
+        # Tool errors ARE the agent's feedback loop: "path must be provided"
+        # or "File not found: x" is what lets a planner correct the next
+        # attempt. Masking them to a bare "Error calling tool" turns a
+        # recoverable mistake into an unexplainable failure. The mounted
+        # servers are our own; their messages carry no secrets.
+        mask_error_details=False,
         list_page_size=50,
         strict_input_validation=True,
     )

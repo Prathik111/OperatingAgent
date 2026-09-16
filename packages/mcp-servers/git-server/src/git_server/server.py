@@ -21,7 +21,8 @@ VERSION: Final[str] = "0.1.0"
 
 def build_git_server(root: str | None = None) -> FastMCP:
     """Build a Git server confined to ``root`` when supplied."""
-    server = FastMCP(name="git-server", version=VERSION, mask_error_details=True)
+    # Unmasked so the agent sees the real reason a git call was refused.
+    server = FastMCP(name="git-server", version=VERSION, mask_error_details=False)
     service = GitService(root=root)
     register_git_status(server, service)
     register_list_branches(server, service)

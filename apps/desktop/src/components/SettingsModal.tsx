@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { nativeApi, taskApi } from "../lib/api";
-import { isTauri, pickDirectory } from "../lib/pickFolder";
+import { folderName, isTauri, pickDirectory } from "../lib/pickFolder";
 import type { SandboxStatusResponse } from "../lib/types";
 
 export interface DesktopSettings {
@@ -16,6 +16,10 @@ export interface DesktopSettings {
   maxTurns: string;
   maxCost: string;
   autoApproveAll: boolean;
+  langfuseMode: "disabled" | "cloud" | "local";
+  langfuseHost: string;
+  langfusePublicKey: string;
+  langfuseSecretKey: string;
 }
 
 export const SETTINGS_KEY = "operating-agent:settings";
@@ -32,12 +36,17 @@ export const DEFAULT_SETTINGS: DesktopSettings = {
   maxTurns: "10",
   maxCost: "0.05",
   autoApproveAll: false,
+  langfuseMode: "disabled",
+  langfuseHost: "https://cloud.langfuse.com",
+  langfusePublicKey: "",
+  langfuseSecretKey: "",
 };
 
 export function loadSettings(): DesktopSettings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    return raw ? { ...DEFAULT_SETTINGS, ...JSON.parse(raw) } : DEFAULT_SETTINGS;
+    if (!raw) return DEFAULT_SETTINGS;
+    return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
   } catch {
     return DEFAULT_SETTINGS;
   }
@@ -65,6 +74,9 @@ export function SettingsModal({
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState("");
   const [sandbox, setSandbox] = useState<SandboxStatusResponse | null>(null);
+  const [apiKeys, setApiKeys] = useState<Partial<Record<DesktopSettings["provider"], string>>>({});
+  const [apiKeySet, setApiKeySet] = useState(false);
+  const [showApiKey, setShowApiKey] = useState(false);
 
   // The native track only serves ollama/groq: a provider persisted from the
   // LangGraph track (openai/anthropic) is shown and saved as the native
@@ -100,7 +112,12 @@ export function SettingsModal({
           topP: current.top_p == null ? prev.topP : String(current.top_p),
           maxTokens: current.max_tokens == null ? "" : String(current.max_tokens),
           autoApproveAll: typeof current.auto_approve_all === "boolean" ? current.auto_approve_all : prev.autoApproveAll,
+          langfuseMode: current.langfuse_mode === "local" || current.langfuse_mode === "cloud" || current.langfuse_mode === "disabled"
+            ? current.langfuse_mode
+            : (current.langfuse_enabled === true ? "cloud" : prev.langfuseMode),
+          langfuseHost: typeof current.langfuse_host === "string" ? current.langfuse_host : prev.langfuseHost,
         }));
+        setApiKeySet(current.api_key_set === true);
         if (Array.isArray(current.models)) {
           setModels((current.models as unknown[]).map(String));
         }
@@ -161,7 +178,6 @@ export function SettingsModal({
   // flips this to connected on the next poll with no restart, and new shell
   // commands then run in containers automatically.
   useEffect(() => {
-    if (track !== "native") return;
     let cancelled = false;
     const load = async () => {
       try {
@@ -190,6 +206,12 @@ export function SettingsModal({
   const set = <K extends keyof DesktopSettings>(key: K, value: DesktopSettings[K]) =>
     setSettings((current) => ({ ...current, [key]: value }));
 
+  const selectProvider = (next: DesktopSettings["provider"]) => {
+    if (next === provider) return;
+    setApiKeySet(false);
+    setSettings((current) => ({ ...current, provider: next, model: "", baseUrl: "" }));
+  };
+
   const handleSave = async () => {
     setError("");
     const previous = loadSettings();
@@ -200,6 +222,7 @@ export function SettingsModal({
       model: providerChanged ? "" : settings.model,
       baseUrl: providerChanged ? "" : settings.baseUrl,
     };
+    const apiKeyEdited = Object.prototype.hasOwnProperty.call(apiKeys, normalized.provider);
     setSettings(normalized);
     saveSettings(normalized);
     try {
@@ -212,7 +235,14 @@ export function SettingsModal({
         max_tokens: normalized.maxTokens ? Number(normalized.maxTokens) : null,
         timeout_seconds: 60,
         auto_approve_all: normalized.autoApproveAll,
+        langfuse_mode: normalized.langfuseMode,
+        langfuse_host: normalized.langfuseHost || null,
+        langfuse_public_key: normalized.langfusePublicKey || null,
+        langfuse_secret_key: normalized.langfuseSecretKey || null,
       };
+      if (apiKeyEdited) {
+        (body as Record<string, unknown>).api_key = apiKeys[normalized.provider]?.trim() || "";
+      }
       if (track === "native") await nativeApi.updateSettings(body);
       else await taskApi.updateSettings(body);
       onSaved(normalized);
@@ -244,7 +274,9 @@ export function SettingsModal({
             <div className="grid sm:grid-cols-2 gap-3">
               <Field label="Workspace" hint="Must be an existing directory">
                 <span className="flex gap-1.5">
-                  <input value={settings.workspace} onChange={(e) => set("workspace", e.target.value)} placeholder="." className="field mono flex-1 min-w-0" />
+                  <button type="button" disabled={!isTauri()} onClick={async () => { const dir = await pickDirectory(settings.workspace); if (dir) set("workspace", dir); }} title="Choose workspace folder" className="field mono flex-1 min-w-0 text-left truncate disabled:opacity-60">
+                    {settings.workspace === "." ? "Choose workspace folder" : folderName(settings.workspace)}
+                  </button>
                   {isTauri() && (
                     <button
                       onClick={async () => {
@@ -252,7 +284,7 @@ export function SettingsModal({
                         if (dir) set("workspace", dir);
                       }}
                       title="Choose folder in file explorer"
-                      className="btn-quiet h-9 px-2.5 rounded-lg text-[11px] font-medium shrink-0"
+                      className="hidden"
                       style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)", color: "var(--fg-1)" }}
                     >
                       Browse…
@@ -261,7 +293,7 @@ export function SettingsModal({
                 </span>
               </Field>
               <Field label="Terminal isolation">
-                {track === "native" ? (
+                {sandbox ? (
                   <div className="min-h-9 px-3 py-2 rounded-lg text-[12px] space-y-1" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)", color: "var(--fg-2)" }}>
                     <span
                       className={`inline-flex items-center gap-1.5 text-[11px] font-semibold px-2 py-0.5 rounded-full ${sandbox?.available ? "" : "anim-pulse-dot"}`}
@@ -280,12 +312,12 @@ export function SettingsModal({
                       <div className="text-[11px]">{sandbox.reason}</div>
                     )}
                     <div className="text-[10px]" style={{ color: "var(--fg-3)" }}>
-                      Workspace mounted read/write at /workspace. Start Docker anytime — new shell commands connect automatically.
+                      Workspace mounted read/write at /workspace. New terminal commands connect automatically when Docker is available.
                     </div>
                   </div>
                 ) : (
                   <div className="min-h-9 px-3 py-2 rounded-lg text-[12px]" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)", color: "var(--fg-2)" }}>
-                    Docker required; workspace mounted read/write at /workspace.
+                    Checking Docker connection…
                   </div>
                 )}
               </Field>
@@ -294,15 +326,45 @@ export function SettingsModal({
 
           <section className="space-y-3">
             <SectionTitle>Model Provider</SectionTitle>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {([
+                ["ollama", "Ollama", "Local"],
+                ["groq", "Groq", "Cloud"],
+                ...(track === "langgraph" ? [["openai", "OpenAI", "Cloud"], ["anthropic", "Anthropic", "Cloud"]] : []),
+              ] as const).map(([id, name, mode]) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => selectProvider(id as DesktopSettings["provider"])}
+                  className="rounded-xl px-3 py-2.5 text-left transition-all"
+                  style={{
+                    background: provider === id ? "var(--accent-soft)" : "var(--bg-2)",
+                    border: `1px solid ${provider === id ? "var(--accent-ring)" : "var(--bg-4)"}`,
+                    boxShadow: provider === id ? "0 0 0 2px rgba(34,211,238,0.08)" : "none",
+                  }}
+                >
+                  <span className="block text-[12px] font-semibold" style={{ color: provider === id ? "var(--accent)" : "var(--fg-1)" }}>{name}</span>
+                  <span className="block text-[10px] mt-0.5" style={{ color: "var(--fg-3)" }}>{mode}</span>
+                </button>
+              ))}
+            </div>
             <div className="grid sm:grid-cols-2 gap-3">
-              <Field label="Provider">
-                <select value={provider} onChange={(e) => setSettings((current) => ({ ...current, provider: e.target.value as DesktopSettings["provider"], model: "", baseUrl: "" }))} className="field">
+              <div className="rounded-xl px-3 py-2.5" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)" }}>
+                <div className="text-[10px] uppercase tracking-wide" style={{ color: "var(--fg-3)" }}>Selected provider</div>
+                <div className="mt-1 text-[13px] font-semibold" style={{ color: "var(--fg-0)" }}>{provider}</div>
+              </div>
+              {/* Provider cards above are the selection control. Keep the native
+                  select in the DOM for backwards-compatible form semantics. */}
+              <div className="hidden">
+                <select aria-hidden="true" tabIndex={-1} value={provider} onChange={(e) => selectProvider(e.target.value as DesktopSettings["provider"])} className="hidden">
                   <option value="ollama">Ollama · local</option>
                   <option value="groq">Groq · cloud</option>
                   {track === "langgraph" && <option value="openai">OpenAI · cloud</option>}
                   {track === "langgraph" && <option value="anthropic">Anthropic · cloud</option>}
                 </select>
-              </Field>
+              </div>
+              </div>
+            <div className="grid sm:grid-cols-2 gap-3">
               <Field label="Model" hint={defaultModel ? `Empty uses default: ${defaultModel}` : "Empty uses provider default"}>
                 <input
                   value={settings.model}
@@ -315,6 +377,39 @@ export function SettingsModal({
             <Field label="Base URL" hint="Optional. For Ollama use http://localhost:11434">
               <input value={settings.baseUrl} onChange={(e) => set("baseUrl", e.target.value)} placeholder="Provider default" className="field mono" />
             </Field>
+            {provider !== "ollama" && (
+              <Field
+                label={`${provider === "groq" ? "Groq" : provider === "openai" ? "OpenAI" : "Anthropic"} API key`}
+                hint={Object.prototype.hasOwnProperty.call(apiKeys, provider) ? "Sent securely to the API on Apply" : "Leave unchanged to use the API environment"}
+              >
+                <div className="relative">
+                  <input
+                    type={showApiKey ? "text" : "password"}
+                    value={apiKeys[provider] || ""}
+                    onChange={(e) => {
+                      setApiKeys((current) => ({ ...current, [provider]: e.target.value }));
+                    }}
+                    placeholder={apiKeySet ? "Configured in API environment · enter to replace" : "Paste provider API key"}
+                    className="field mono pr-20"
+                    autoComplete="off"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowApiKey((value) => !value)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 px-2 py-1 rounded-md text-[10px]"
+                    style={{ color: "var(--fg-2)", background: "var(--bg-2)", border: "1px solid var(--bg-4)" }}
+                  >
+                    {showApiKey ? "Hide" : "Reveal"}
+                  </button>
+                </div>
+              </Field>
+            )}
+            <div className="flex items-center gap-2 rounded-xl px-3 py-2.5" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)" }}>
+              <span className="h-2 w-2 rounded-full" style={{ background: provider === "ollama" ? "var(--success)" : "var(--accent)" }} />
+              <span className="text-[11px]" style={{ color: "var(--fg-2)" }}>
+                {provider === "ollama" ? "Runs locally through your Ollama host." : "Keys are kept in memory by the desktop form and never returned by the API."}
+              </span>
+            </div>
             <div className="rounded-lg px-3 py-2 space-y-2" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)" }}>
               <div className="flex items-center gap-2 text-[11px] font-medium" style={{ color: "var(--fg-1)" }}>
                 <span>{provider === "ollama" ? `Downloaded Ollama models (${models.length})` : `Known ${provider} models (${models.length})`}</span>
@@ -366,6 +461,29 @@ export function SettingsModal({
                     : "Empty — will use provider default."}
               </div>
             </div>
+            <section className="space-y-3">
+              <SectionTitle>Langfuse observability</SectionTitle>
+              <div className="grid sm:grid-cols-3 gap-2">
+                {(["disabled", "cloud", "local"] as const).map((mode) => (
+                  <button key={mode} type="button" onClick={() => set("langfuseMode", mode)} className="rounded-xl px-3 py-2.5 text-left" style={{ background: settings.langfuseMode === mode ? "var(--accent-soft)" : "var(--bg-2)", border: `1px solid ${settings.langfuseMode === mode ? "var(--accent-ring)" : "var(--bg-4)"}` }}>
+                    <span className="block text-[12px] font-semibold capitalize" style={{ color: settings.langfuseMode === mode ? "var(--accent)" : "var(--fg-1)" }}>{mode}</span>
+                    <span className="block text-[10px] mt-0.5" style={{ color: "var(--fg-3)" }}>{mode === "cloud" ? "Langfuse Cloud" : mode === "local" ? "Self-hosted instance" : "No trace export"}</span>
+                  </button>
+                ))}
+              </div>
+              {settings.langfuseMode !== "disabled" && (
+                <>
+                  <Field label="Langfuse host" hint={settings.langfuseMode === "local" ? "Example: http://127.0.0.1:3000" : "Cloud endpoint"}>
+                    <input value={settings.langfuseHost} onChange={(e) => set("langfuseHost", e.target.value)} placeholder={settings.langfuseMode === "local" ? "http://127.0.0.1:3000" : "https://cloud.langfuse.com"} className="field mono" />
+                  </Field>
+                  <div className="grid sm:grid-cols-2 gap-3">
+                    <Field label="Public key" hint="Write-only; never shown by the API"><input value={settings.langfusePublicKey} onChange={(e) => set("langfusePublicKey", e.target.value)} placeholder="pk-lf-…" className="field mono" autoComplete="off" /></Field>
+                    <Field label="Secret key" hint="Write-only; restart API after changing"><input type="password" value={settings.langfuseSecretKey} onChange={(e) => set("langfuseSecretKey", e.target.value)} placeholder="sk-lf-…" className="field mono" autoComplete="off" /></Field>
+                  </div>
+                  <div className="text-[10px]" style={{ color: "var(--fg-3)" }}>These values are stored in desktop settings and used as deployment configuration. The running API reads `LANGFUSE_HOST`, `LANGFUSE_PUBLIC_KEY`, and `LANGFUSE_SECRET_KEY` on startup.</div>
+                </>
+              )}
+            </section>
             <div className="rounded-lg px-3 py-2 text-[11px] leading-relaxed" style={{ background: "var(--accent-soft)", border: "1px solid var(--accent-ring)", color: "var(--fg-1)" }}>
               Applying to the <b>{track}</b> track only. Active runs keep their current model; new runs use these settings immediately without restarting.
             </div>

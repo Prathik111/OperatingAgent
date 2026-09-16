@@ -48,6 +48,7 @@ class _Run:
     trace_refs: list[dict] = field(default_factory=list)
     approvals: list[dict] = field(default_factory=list)
     metadata: dict = field(default_factory=dict)
+    finished_at: datetime | None = None
 
 
 @dataclass(slots=True)
@@ -67,7 +68,324 @@ class InMemoryTaskRepository:
         self._approvals: dict[str, ApprovalRecord] = {}
         self._order = itertools.count()
         self._tools: dict[tuple[str, str], tuple[str, dict]] = {}
+        self._evaluations: dict[str, dict] = {}
 
+    async def get_evaluation_dashboard(self) -> dict:
+        runs = list(self._evaluations.values())
+        all_results = [result for run in runs for result in run["results"]]
+
+        def _excluded_kind(result: dict) -> str | None:
+            marker = next(
+                (
+                    str(score.get("metric", "")).removeprefix("excluded.")
+                    for score in result["scores"]
+                    if str(score.get("metric", "")).startswith("excluded.")
+                ),
+                None,
+            )
+            return marker or None
+
+        results = [result for result in all_results if _excluded_kind(result) is None]
+        scores = [score for result in results for score in result["scores"] if score.get("value") is not None]
+        correctness = [float(score["value"]) for score in scores if score.get("metric") == "correctness"]
+        metrics: dict[str, list[float]] = {}
+        for item in scores:
+            metrics.setdefault(item["metric"], []).append(float(item["value"]))
+        passed = sum(1 for result in results if result["success"])
+        tool_rates = [float(r["tool_success_rate"]) for r in results if r.get("tool_success_rate") is not None]
+        unique_cases = {(run["suite_id"], case_id) for run in runs for case_id in run["case_ids"]}
+
+        def _judge_stats(run_results):
+            scores = [float(s["value"]) for r in run_results for s in r["scores"] if s.get("metric") == "judge.overall" and s.get("value") is not None]
+            errors = sum(1 for r in run_results for s in r["scores"] if s.get("metric") == "judge.error")
+            return (sum(scores) / len(scores)) if scores else None, len(scores), errors
+
+        judge_stats = {
+            run["id"]: _judge_stats(
+                [result for result in run["results"] if _excluded_kind(result) is None]
+            )
+            for run in runs
+        }
+        judged_runs = [stats for stats in judge_stats.values() if stats[0] is not None and stats[1] > 0]
+        active_metrics: dict[str, dict[str, float]] = {}
+        for evaluation in runs:
+            if evaluation.get("finished_at"):
+                continue
+            aggregate = {"latency_ms": 0.0, "tokens": 0.0, "cost": 0.0, "runs": 0.0}
+            for task in self._tasks.values():
+                if str(task.metadata.get("evaluation_run_id") or "") != str(evaluation["id"]):
+                    continue
+                latest = await self.get_latest_run(task.id)
+                if latest is None or latest.status not in OPEN_RUN_STATUSES:
+                    continue
+                metrics = await self.get_run_metrics(latest.run_id)
+                aggregate["runs"] += 1
+                aggregate["latency_ms"] += float(metrics.get("latency_ms") or 0)
+                aggregate["tokens"] += float(metrics.get("total_tokens") or 0)
+                aggregate["cost"] += float(metrics.get("cost") or 0)
+            active_metrics[evaluation["id"]] = aggregate
+        run_breakdown = []
+        for run in runs:
+            scored_results = [
+                result for result in run["results"] if _excluded_kind(result) is None
+            ]
+            excluded_results = [
+                result for result in run["results"] if _excluded_kind(result) is not None
+            ]
+            correctness_scores = [
+                float(score["value"])
+                for result in scored_results
+                for score in result["scores"]
+                if score.get("metric") == "correctness"
+                and score.get("value") is not None
+            ]
+            run_tool_rates = [
+                float(result["tool_success_rate"])
+                for result in scored_results
+                if result.get("tool_success_rate") is not None
+            ]
+            run_breakdown.append({
+                "id": run["id"],
+                "suite": f'{run["name"]} v{run["version"]}',
+                "track": run["track"],
+                "started_at": run["started_at"],
+                "finished_at": run.get("finished_at"),
+                "result_count": len(scored_results),
+                "excluded_count": len(excluded_results),
+                "rate_limited_count": sum(
+                    1 for result in excluded_results
+                    if _excluded_kind(result) == "rate_limited"
+                ),
+                "passed_count": sum(1 for result in scored_results if result["success"]),
+                "pass_rate": (
+                    sum(1 for result in scored_results if result["success"])
+                    / len(scored_results)
+                ) if scored_results else None,
+                "average_score": (
+                    sum(correctness_scores) / len(correctness_scores)
+                ) if correctness_scores else None,
+                "avg_latency_ms": (
+                    sum(float(result.get("latency_ms", 0) or 0) for result in scored_results)
+                    / len(scored_results)
+                ) if scored_results else None,
+                "total_tokens": sum(
+                    int(result.get("total_tokens", 0) or 0) for result in scored_results
+                ),
+                "total_cost": sum(
+                    float(result.get("cost", 0) or 0) for result in scored_results
+                ),
+                "tool_success_rate": (
+                    sum(run_tool_rates) / len(run_tool_rates)
+                ) if run_tool_rates else None,
+                "judge_average": judge_stats[run["id"]][0],
+                "judge_judged": judge_stats[run["id"]][1],
+                "judge_errors": judge_stats[run["id"]][2],
+                "status": "completed" if run.get("finished_at") else "running",
+            })
+        for summary in run_breakdown:
+            active = active_metrics.get(summary["id"])
+            if not active or not active["runs"]:
+                continue
+            completed_count = summary["result_count"]
+            active_count = int(active["runs"])
+            summary["total_tokens"] = int(summary["total_tokens"] or 0) + int(active["tokens"])
+            summary["total_cost"] = float(summary["total_cost"] or 0) + active["cost"]
+            summary["avg_latency_ms"] = (
+                (float(summary["avg_latency_ms"] or 0) * completed_count + active["latency_ms"])
+                / max(1, completed_count + active_count)
+            )
+        comparison = []
+        for track in ("native", "langgraph"):
+            candidates = [run for run in run_breakdown if run["track"] == track]
+            if not candidates:
+                continue
+            latest = max(candidates, key=lambda run: run["started_at"])
+            comparison.append({"track": track, **{key: latest.get(key) for key in ("id", "suite", "pass_rate", "average_score", "avg_latency_ms", "total_tokens", "total_cost", "tool_success_rate", "judge_average", "judge_judged", "judge_errors", "result_count", "excluded_count", "rate_limited_count", "status")}})
+        executions = []
+        for evaluation in sorted(runs, key=lambda run: run["started_at"], reverse=True):
+            case_keys = {
+                case_id: str(case.get("id") or case_id)
+                for case_id, case in zip(evaluation["case_ids"], evaluation["cases"])
+            }
+            for result in evaluation["results"]:
+                agent_run = self._runs.get(result["agent_run_id"])
+                if agent_run is None:
+                    continue
+                task = self._tasks.get(agent_run.task_id)
+                if task is None:
+                    continue
+                judge_row = next(
+                    (s for s in result["scores"] if s.get("metric") == "judge.overall"), None
+                )
+                judge_error_row = next(
+                    (s for s in result["scores"] if s.get("metric") == "judge.error"), None
+                )
+                executions.append({
+                    "id": result["id"],
+                    "evaluation_run_id": evaluation["id"],
+                    "agent_run_id": agent_run.id,
+                    "task_id": task.id,
+                    "thread_id": task.thread_id,
+                    "suite": f'{evaluation["name"]} v{evaluation["version"]}',
+                    "track": evaluation["track"],
+                    "case_id": case_keys.get(result["case_id"], result["case_id"]),
+                    "goal": task.goal,
+                    "workspace": str(task.metadata.get("workspace") or ""),
+                    "status": agent_run.status.value,
+                    "output": agent_run.output,
+                    "error": agent_run.last_error,
+                    "success": bool(result["success"]),
+                    "excluded": _excluded_kind(result) is not None,
+                    "outcome": _excluded_kind(result) or ("passed" if result["success"] else "failed"),
+                    "judge_score": float(judge_row["value"]) if judge_row is not None and judge_row.get("value") is not None else None,
+                    "judge_comment": str(judge_row.get("comment") or "") if judge_row is not None else "",
+                    "judge_error": str(judge_error_row.get("comment") or "") if judge_error_row is not None else "",
+                    "created_at": task.created_at.isoformat(),
+                    "finished_at": getattr(agent_run, "finished_at", None).isoformat() if getattr(agent_run, "finished_at", None) else None,
+                })
+            # Evaluation tasks are persisted before their result row. Expose
+            # those in-flight cases so the dashboard can render a live
+            # execution card and seamlessly replace it with the final result.
+            completed_case_ids = {str(result["case_id"]) for result in evaluation["results"]}
+            for index, case in enumerate(evaluation.get("cases", [])):
+                case_id = str(evaluation["case_ids"][index])
+                if case_id in completed_case_ids:
+                    continue
+                expected_ids = {case_id, str(case.get("id") or "")}
+                candidates = []
+                for task in self._tasks.values():
+                    metadata = task.metadata
+                    if str(metadata.get("evaluation_run_id") or "") != str(evaluation["id"]):
+                        continue
+                    if str(metadata.get("evaluation_case_id") or "") not in expected_ids:
+                        continue
+                    if task.track.value != evaluation["track"]:
+                        continue
+                    run_ids = [run for run in self._runs.values() if run.task_id == task.id]
+                    if run_ids:
+                        candidates.append((task, max(run_ids, key=lambda run: run.order)))
+                if not candidates:
+                    continue
+                task, agent_run = max(candidates, key=lambda item: _utc(item[0].created_at))
+                finished_at = getattr(agent_run, "finished_at", None)
+                if finished_at is not None or agent_run.status not in OPEN_RUN_STATUSES:
+                    # A terminal run should have a result shortly; avoid
+                    # showing a stale loading card if persistence lags.
+                    continue
+                executions.append({
+                    "id": f"pending:{evaluation['id']}:{case_id}",
+                    "evaluation_run_id": evaluation["id"],
+                    "agent_run_id": agent_run.id,
+                    "task_id": task.id,
+                    "thread_id": task.thread_id,
+                    "suite": f'{evaluation["name"]} v{evaluation["version"]}',
+                    "track": evaluation["track"],
+                    "case_id": str(case.get("id") or case_id),
+                    "goal": task.goal,
+                    "workspace": str(task.metadata.get("workspace") or ""),
+                    "status": agent_run.status.value,
+                    "output": agent_run.output,
+                    "error": agent_run.last_error,
+                    "success": False,
+                    "loading": True,
+                    "judge_score": None,
+                    "judge_comment": "",
+                    "judge_error": "",
+                    "created_at": task.created_at.isoformat(),
+                    "finished_at": None,
+                })
+        executions = executions[:100]
+        return {
+            "available": bool(runs),
+            "reason": None if runs else "Run an evaluation to populate this dashboard.",
+            "suites": len({run["suite_id"] for run in runs}),
+            "cases": len(unique_cases),
+            "runs": len(runs),
+            "results": len(results),
+            "excluded_results": len(all_results) - len(results),
+            "rate_limited_results": sum(1 for result in all_results if _excluded_kind(result) == "rate_limited"),
+            "pass_rate": passed / len(results) if results else None,
+            "average_score": sum(correctness) / len(correctness) if correctness else None,
+            "avg_latency_ms": sum(float(r.get("latency_ms", 0) or 0) for r in results) / len(results) if results else None,
+            "total_tokens": sum(int(r.get("total_tokens", 0)) for r in results) if results else None,
+            "total_cost": sum(float(r.get("cost", 0)) for r in results) if results else None,
+            "tool_success_rate": sum(tool_rates) / len(tool_rates) if tool_rates else None,
+            "judge_average": (sum(v[0] * v[1] for v in judged_runs) / sum(v[1] for v in judged_runs)) if judged_runs else None,
+            "judge_judged": sum(v[1] for v in judge_stats.values()),
+            "judge_errors": sum(v[2] for v in judge_stats.values()),
+            "metrics": [{"metric": key, "average": sum(values) / len(values), "count": len(values)} for key, values in sorted(metrics.items())],
+            "run_breakdown": run_breakdown,
+            "comparison": comparison,
+            "executions": executions,
+            "sources": {"database": True, "langfuse": False},
+        }
+
+    async def create_evaluation_run(self, name: str, version: str, track: str, cases: list[dict]) -> dict:
+        run_id, suite_id = str(uuid4()), str(uuid4())
+        # Reuse the logical suite/case identity for repeated benchmark runs.
+        # PostgreSQL enforces this with unique constraints; the memory/SQLite
+        # backends mirror that behavior so the dashboard does not inflate the
+        # suite and case totals every time the same comparison is rerun.
+        existing = next(
+            (run for run in self._evaluations.values()
+             if run["name"] == name and run["version"] == version),
+            None,
+        )
+        if existing is not None and len(existing.get("cases", [])) == len(cases):
+            suite_id = existing["suite_id"]
+            case_ids = list(existing["case_ids"])
+        else:
+            case_ids = [str(uuid4()) for _ in cases]
+        self._evaluations[run_id] = {"id": run_id, "suite_id": suite_id, "name": name, "version": version, "track": track, "case_ids": case_ids, "cases": cases, "results": [], "started_at": datetime.now(UTC).isoformat(), "finished_at": None}
+        return {"id": run_id, "suite_id": suite_id, "case_ids": case_ids}
+
+    async def save_evaluation_result(self, evaluation_run_id: str, suite_id: str, case_id: str, agent_run_id: str, success: bool, failure_reason: str | None) -> str:
+        result_id = str(uuid4())
+        self._evaluations[evaluation_run_id]["results"].append({"id": result_id, "case_id": case_id, "agent_run_id": agent_run_id, "success": success, "failure_reason": failure_reason, "scores": []})
+        return result_id
+
+    async def save_evaluation_score(self, result_id: str, metric: str, value: float | None, unit: str | None = None, comment: str | None = None) -> None:
+        for run in self._evaluations.values():
+            for result in run["results"]:
+                if result["id"] == result_id:
+                    result["scores"].append({"metric": metric, "value": value, "unit": unit, "comment": comment})
+                    if metric == "latency":
+                        result["latency_ms"] = value
+                    elif metric == "tokens":
+                        result["total_tokens"] = value
+                    elif metric == "cost":
+                        result["cost"] = value
+                    elif metric == "tool_success":
+                        result["tool_success_rate"] = value
+                    return
+
+    async def finish_evaluation_run(self, evaluation_run_id: str) -> None:
+        self._evaluations[evaluation_run_id]["finished_at"] = datetime.now(UTC).isoformat()
+
+    async def finish_abandoned_evaluation_runs(self) -> list[str]:
+        abandoned = [
+            run_id
+            for run_id, evaluation in self._evaluations.items()
+            if not evaluation.get("finished_at")
+        ]
+        finished_at = datetime.now(UTC).isoformat()
+        for run_id in abandoned:
+            self._evaluations[run_id]["finished_at"] = finished_at
+        return abandoned
+
+    async def get_run_metrics(self, run_id: str) -> dict:
+        run = self._runs[run_id]
+        tool_total = len(run.tool_calls)
+        succeeded = sum(1 for call in run.tool_calls if call.success is True)
+        return {
+            "latency_ms": run.metadata.get("duration_ms"),
+            "llm_calls": len(run.llm_calls),
+            "tool_calls": tool_total,
+            "tool_calls_succeeded": succeeded,
+            "tool_success_rate": succeeded / tool_total if tool_total else None,
+            "total_tokens": sum((call.prompt_tokens or 0) + (call.completion_tokens or 0) for call in run.llm_calls),
+            "cost": sum((float(call.cost) if call.cost is not None else 0.0) for call in run.llm_calls),
+        }
     async def save_task(self, task: AgentTask) -> None:
         task.created_at = _utc(task.created_at)
         self._tasks[task.id] = task
@@ -287,6 +605,8 @@ class InMemoryTaskRepository:
         run.output = result.output
         run.last_error = result.metadata.get("error")
         run.metadata.update(result.metadata)
+        run.metadata["duration_ms"] = result.duration_ms
+        run.finished_at = datetime.now(UTC)
 
     async def update_task_status(self, task_id: str, status: TaskStatus) -> None:
         self._task_status[task_id] = status

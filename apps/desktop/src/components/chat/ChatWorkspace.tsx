@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { activitySignature, isActivityEvent, nativeApi, readSSEStream, sseSubscribe, taskApi } from "../../lib/api";
-import { isTauri, pickDirectory } from "../../lib/pickFolder";
+import { folderName, isTauri, pickDirectory } from "../../lib/pickFolder";
 import type { EventResponse, PermissionResponse, SessionResponse, ThreadResponse } from "../../lib/types";
 import { loadSettings, saveSettings } from "../SettingsModal";
 import { AlertDialog, ConfirmDialog, PromptDialog } from "../Modal";
@@ -164,6 +164,50 @@ function ThinkingBlock({ text, live }: { text: string; live: boolean }) {
   );
 }
 
+// Typewriter for streamed answers. New characters animate in at a steady
+// rate (bounded batches every tick), so an answer that arrives in a single
+// chunk — langgraph emits the whole response as one assistant_delta — types
+// itself out exactly like a token-by-token stream, native parity. The state
+// is keyed by message id: polls that rebuild the message list keep the same
+// React instance, so the animation never restarts mid-answer.
+const TYPO_TICK_MS = 24;
+const TYPO_CHARS_PER_TICK = 14;
+
+function AssistantAnswer({
+  messageId,
+  text,
+  streaming,
+}: {
+  messageId: string;
+  text: string;
+  streaming?: boolean;
+}) {
+  const [shown, setShown] = useState(() => (streaming ? 0 : text.length));
+  const textRef = useRef(text);
+  useEffect(() => {
+    textRef.current = text;
+  }, [text]);
+
+  const typing = shown < text.length;
+  useEffect(() => {
+    if (!typing) return;
+    const timer = setInterval(() => {
+      setShown((cur) => {
+        const target = textRef.current.length;
+        return cur >= target ? target : Math.min(cur + TYPO_CHARS_PER_TICK, target);
+      });
+    }, TYPO_TICK_MS);
+    return () => clearInterval(timer);
+  }, [typing]);
+
+  const caret = typing || !!streaming;
+  return (
+    <MarkdownText className={`text-[13px] leading-relaxed ${caret ? "stream-caret" : ""}`}>
+      {typing ? text.slice(0, shown) : text}
+    </MarkdownText>
+  );
+}
+
 function workspaceLabel(workspace: string): string {
   if (!workspace || workspace === ".") return "";
   const parts = workspace.split(/[/\\]/).filter(Boolean);
@@ -202,6 +246,7 @@ export function ChatWorkspace({
 }) {
   const [chats, setChats] = useState<ChatItem[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
+  const selectedRef = useRef<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [events, setEvents] = useState<EventResponse[]>([]);
   const [permissions, setPermissions] = useState<PermissionResponse[]>([]);
@@ -221,12 +266,18 @@ export function ChatWorkspace({
   useEffect(() => {
     pendingTaskIdRef.current = pendingTaskId;
   }, [pendingTaskId]);
+  useEffect(() => {
+    selectedRef.current = selected;
+  }, [selected]);
   const [search, setSearch] = useState("");
   const [workspace, setWorkspace] = useState(() => loadSettings().workspace || ".");
   const [titleOverrides, setTitleOverrides] = useState<Record<string, string>>(loadTitleOverrides);
   const listRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const refreshGenerationRef = useRef(0);
+  // Ref to current messages for merge logic to avoid duplicating live bubbles
+  const messagesRef = useRef<ChatMessage[]>([]);
+  useEffect(() => { messagesRef.current = messages; }, [messages]);
   // Stable Activity keys for track rows without backend sequences (langgraph):
   // the SSE replay and the REST history describe the same events, so both are
   // keyed by content signature. Without this, every 2s poll remaps keys 1..N
@@ -248,6 +299,11 @@ export function ChatWorkspace({
     eventKeyRef.current = 0;
     eventSigRef.current = new Map();
     streamActivityIndexRef.current = 0;
+    // Live buffers belong to one selected conversation. Keeping a completed
+    // task's unpersisted text here lets a later refresh merge it into another
+    // turn while the database catches up.
+    liveTextRef.current.clear();
+    liveThinkRef.current.clear();
   }, [selected, track]);
 
   // Workspace adopted from a task below: saveSettings dispatches synchronously,
@@ -322,13 +378,17 @@ export function ChatWorkspace({
     if (track === "native") {
       let sessions: SessionResponse[];
       try {
-        sessions = await nativeApi.listSessions({ workspace, limit: 100 });
+        // Evaluation sessions are intentionally kept in the native transcript
+        // store, but older runs may use a different resolved workspace string.
+        // Fetch the full session list and retain the selected workspace plus the
+        // reserved evaluation namespace so native benchmark chats remain visible.
+        sessions = await nativeApi.listSessions({ limit: 100 });
       } catch {
         // Keep the sidebar intact while the API is restarting. The polling
         // effect below retries once the server is reachable again.
         return;
       }
-      const items: ChatItem[] = sessions.map((s) => ({
+      const items: ChatItem[] = sessions.filter((s) => s.workspace === workspace || s.id.startsWith("evaluation-")).map((s) => ({
         kind: "native" as const,
         id: s.id,
         title: overrides[`native:${s.id}`] || s.title || s.id.slice(0, 12),
@@ -336,7 +396,9 @@ export function ChatWorkspace({
         updatedAt: s.updated_at || s.created_at || "",
       }));
       setChats(items);
-      if (!selected && items[0]) setSelected(items[0].id);
+      const current = selectedRef.current;
+      if (!current && items[0]) setSelected(items[0].id);
+      else if (current && !items.some((item) => item.id === current)) setSelected(null);
     } else {
       let threads: ThreadResponse[];
       try {
@@ -345,17 +407,24 @@ export function ChatWorkspace({
         // Do not turn a temporary API outage into an empty chat history.
         return;
       }
-      const items: ChatItem[] = threads.map((t) => ({
+      // Evaluation executions use the reserved ``evaluation-`` thread
+      // namespace. They have their own transcript browser in Evaluate and
+      // must not leak into a user's normal LangGraph conversation list.
+      const items: ChatItem[] = threads
+        .filter((thread) => !thread.id.startsWith("evaluation-"))
+        .map((t) => ({
         kind: "langgraph" as const,
         id: t.id,
         title: overrides[`langgraph:${t.id}`] || t.title || t.id.slice(0, 12),
         subtitle: `${t.task_count} tasks`,
         updatedAt: t.updated_at,
-      }));
+        }));
       setChats(items);
-      if (!selected && items[0]) setSelected(items[0].id);
+      const current = selectedRef.current;
+      if (!current && items[0]) setSelected(items[0].id);
+      else if (current && !items.some((item) => item.id === current)) setSelected(null);
     }
-  }, [track, selected, workspace]);
+  }, [track, workspace]);
 
   const refreshConversation = useCallback(
     async (id: string) => {
@@ -445,34 +514,47 @@ export function ChatWorkspace({
                   ? [{ id: `${t.id}-error`, role: "assistant" as const, text: `Run failed: ${t.error}`, time: t.created_at }]
                   : []),
             ]);
-          // Re-apply live SSE content the server has not persisted yet. The
-          // polling response can lag behind the stream, so replacing the live
-          // bubble here would make the current answer flicker or disappear.
+// Re-apply live SSE content the server has not persisted yet. The
+          // polling response can lag behind the stream, so rebuilding the
+          // list from tasks alone would drop the live bubble on every poll
+          // and it would flicker (or vanish entirely until the run settles).
+          // Instead, carry the existing live bubble over — the SSE stream
+          // keeps it fresh in place — and only replace it once the server
+          // has a persisted answer for that task.
           const merged = [...msgs];
           const liveTaskIds = new Set([
             ...liveTextRef.current.keys(),
             ...liveThinkRef.current.keys(),
           ]);
           for (const taskId of liveTaskIds) {
-            const liveText = liveTextRef.current.get(taskId) || "";
-            const liveThink = liveThinkRef.current.get(taskId) ?? thinkByTask.get(taskId);
             const hasServerAnswer = merged.some(
               (m) => m.id === `${taskId}-assistant` || m.id === `${taskId}-error`,
             );
             if (hasServerAnswer) {
+              // The run settled: the persisted bubble is authoritative.
               liveTextRef.current.delete(taskId);
               liveThinkRef.current.delete(taskId);
               continue;
             }
-            if (!liveText && !liveThink) continue;
-            const entry: ChatMessage = {
-              id: `${taskId}-assistant`,
-              role: "assistant",
-              text: liveText,
-              thinking: liveThink || undefined,
-              streaming: pendingTaskIdRef.current === taskId,
-              time: new Date().toISOString(),
-            };
+            const liveText = liveTextRef.current.get(taskId) || "";
+            const liveThink = liveThinkRef.current.get(taskId) ?? thinkByTask.get(taskId);
+            const existing = messagesRef.current.find((m) => m.id === `${taskId}-assistant`);
+            if (!liveText && !liveThink && !existing) continue;
+            const entry: ChatMessage = existing
+              ? {
+                  ...existing,
+                  text: liveText || existing.text || "",
+                  thinking: liveThink || existing.thinking,
+                  streaming: pendingTaskIdRef.current === taskId,
+                }
+              : {
+                  id: `${taskId}-assistant`,
+                  role: "assistant",
+                  text: liveText,
+                  thinking: liveThink || undefined,
+                  streaming: pendingTaskIdRef.current === taskId,
+                  time: new Date().toISOString(),
+                };
             const userIdx = merged.findIndex((m) => m.id === `${taskId}-user`);
             if (userIdx >= 0) merged.splice(userIdx + 1, 0, entry);
             else merged.push(entry);
@@ -592,13 +674,12 @@ export function ChatWorkspace({
   // like repeated approval requests.
   useEffect(() => {
     const t = setInterval(async () => {
-      if (track === "native" && selected) {
-        const perms = await nativeApi.listPermissions(selected).catch(() => [] as PermissionResponse[]);
-        setPermissions(perms);
-      }
+      if (track !== "native" || !selected || !sending) return;
+      const perms = await nativeApi.listPermissions(selected).catch(() => [] as PermissionResponse[]);
+      setPermissions(perms);
     }, 2500);
     return () => clearInterval(t);
-  }, [track, selected]);
+  }, [track, selected, sending]);
 
   // ——— actions ———
   const onNewChat = async () => {
@@ -607,6 +688,7 @@ export function ChatWorkspace({
       try {
         const s = await nativeApi.createSession({ title, workspace, agent: "build" });
         setChats((prev) => [{ kind: "native", id: s.id, title: s.title || s.id, subtitle: workspaceLabel(s.workspace), updatedAt: s.updated_at || s.created_at || "" }, ...prev]);
+        suppressSelectLoadRef.current = true;
         setSelected(s.id);
         setMessages([]);
       } catch (e) {
@@ -616,6 +698,7 @@ export function ChatWorkspace({
       try {
         const thread = await taskApi.createThread(title);
         setChats((prev) => [{ kind: "langgraph", id: thread.id, title: thread.title || thread.id, subtitle: "0 tasks", updatedAt: thread.updated_at }, ...prev]);
+        suppressSelectLoadRef.current = true;
         setSelected(thread.id);
         setMessages([]);
         setEvents([]);
@@ -698,6 +781,15 @@ export function ChatWorkspace({
   const onSend = async () => {
     const text = composer.trim();
     if (!text || sending) return;
+    // A chat is an explicit user-owned container. Do not create a session or
+    // thread as a side effect of sending; only New chat provisions one.
+    if (!selected) {
+      setDialog({
+        kind: "error",
+        message: "Create a new chat before sending a message.",
+      });
+      return;
+    }
     setSending(true);
     const userMsg: ChatMessage = { id: `local-${Date.now()}`, role: "user", text };
     setMessages((prev) => [...prev, userMsg]);
@@ -706,21 +798,7 @@ export function ChatWorkspace({
     setTimeout(scrollToEnd, 50);
 
     if (track === "native") {
-      // ensure we have a session
-      let sid = selected;
-      if (!sid) {
-        try {
-          const s = await nativeApi.createSession({ title: text.slice(0, 40), workspace, agent: "build" });
-          sid = s.id;
-          setChats((prev) => [{ kind: "native", id: s.id, title: s.title || s.id, subtitle: workspaceLabel(s.workspace), updatedAt: s.updated_at || s.created_at || "" }, ...prev]);
-          suppressSelectLoadRef.current = true;
-          setSelected(s.id);
-        } catch (e) {
-          setMessages((prev) => [...prev, { id: `err-${Date.now()}`, role: "assistant", text: `Failed to create session: ${(e as Error).message}` }]);
-          setSending(false);
-          return;
-        }
-      }
+      const sid = selected;
       // Live assistant bubble: deltas grow this message in place, so the
       // answer streams instead of popping in as one full block at the end.
       const liveId = `live-${Date.now()}`;
@@ -795,13 +873,12 @@ export function ChatWorkspace({
     } else {
       // langgraph
       try {
+        // Each task owns exactly one live assistant bubble. Drop any stale
+        // stream residue from a prior task before creating the next one.
+        liveTextRef.current.clear();
+        liveThinkRef.current.clear();
         const body = { goal: text, track: "langgraph" as const, workspace, metadata: {} };
-        const task = selected ? await taskApi.createThreadTask(selected, body) : await taskApi.createTask(body);
-        if (!selected) {
-          suppressSelectLoadRef.current = true;
-          setSelected(task.thread_id);
-          setChats((prev) => [{ kind: "langgraph", id: task.thread_id, title: task.thread_id.slice(0, 12), subtitle: "1 tasks", updatedAt: new Date().toISOString() }, ...prev]);
-        }
+        const task = await taskApi.createThreadTask(selected, body);
         setPendingTaskId(task.id);
         // Live assistant bubble, native parity: deltas grow this message in
         // place, so the answer (and Thought process) streams instead of
@@ -819,6 +896,11 @@ export function ChatWorkspace({
         closeStream = sseSubscribe(
           url,
           (event) => {
+            // The stream belongs to the thread it was opened for. If the user
+            // switched chats mid-send, never write this run's deltas or
+            // receipt into the newly selected conversation — that paints the
+            // previous response into the wrong thread.
+            if (selectedRef.current !== task.thread_id) return;
             let data: Record<string, unknown> = { raw: event.data.slice(0, 200) };
              try {
               const parsed = JSON.parse(event.data);
@@ -947,12 +1029,14 @@ export function ChatWorkspace({
           <label className="block">
             <span className="block text-[10px] font-semibold uppercase tracking-wider mb-1" style={{ color: "var(--fg-3)" }}>Working directory</span>
             <span className="flex gap-1.5">
-              <input value={workspace} onChange={(e) => setWorkspace(e.target.value)} onBlur={() => selectWorkspace(workspace)} placeholder="/path/to/workspace" className="field !h-8 !text-[11px] mono flex-1 min-w-0" />
+              <button type="button" onClick={browseWorkspace} disabled={!canBrowse} className="field !h-8 !text-[11px] mono flex-1 min-w-0 text-left truncate disabled:opacity-60" title="Choose working directory">
+                {workspace === "." ? "Choose workspace folder" : folderName(workspace)}
+              </button>
               {canBrowse && (
                 <button
                   onClick={browseWorkspace}
                   title="Choose folder in file explorer"
-                  className="btn-quiet h-8 px-2.5 rounded-lg text-[11px] font-medium shrink-0"
+                  className="hidden"
                   style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)", color: "var(--fg-1)" }}
                 >
                   Browse…
@@ -1117,7 +1201,7 @@ export function ChatWorkspace({
                       )}
                       {m.text ? (
                         m.role === "assistant" ? (
-                          <MarkdownText className={`text-[13px] leading-relaxed ${m.streaming ? "stream-caret" : ""}`}>{m.text}</MarkdownText>
+                          <AssistantAnswer key={m.id} messageId={m.id} text={m.text} streaming={m.streaming} />
                         ) : (
                           <div className={`text-[13px] leading-relaxed whitespace-pre-wrap break-words ${m.streaming ? "stream-caret" : ""}`}>{m.text}</div>
                         )
@@ -1136,7 +1220,7 @@ export function ChatWorkspace({
                     {m.role === "user" && <span className="w-7 h-7 rounded-full grid place-items-center text-[11px] font-semibold shrink-0 mt-0.5" style={{ background: "var(--bg-2)", border: "1px solid var(--bg-4)", color: "var(--fg-2)" }}>you</span>}
                   </div>
                 ))}
-                {pendingTaskId && (
+                {pendingTaskId && !messages.some(m => m.id === `${pendingTaskId}-assistant`) && (
                   <div className="flex gap-3 anim-fade-up">
                     <span className="w-7 h-7 rounded-lg grid place-items-center text-[11px] font-bold shrink-0" style={{ background: "var(--accent-grad)", color: "white", boxShadow: "0 2px 10px rgba(34,211,238,0.2)" }}>⬢</span>
                     <div className="max-w-[78%] rounded-2xl rounded-bl-sm px-3.5 py-2.5" style={{ background: "var(--bg-1)", border: "1px solid var(--accent-ring)" }}>
@@ -1172,12 +1256,12 @@ export function ChatWorkspace({
                   onSend();
                 }
               }}
-              placeholder={selected ? "Message the agent…" : "Message the agent to start a new chat…"}
+              placeholder={selected ? "Message the agent…" : "Create a new chat to start messaging…"}
               rows={composer.includes("\n") ? 3 : 1}
               className="flex-1 min-h-[44px] max-h-28 py-2.5 text-[13px] leading-relaxed outline-none resize-none bg-transparent"
               style={{ color: "var(--fg-0)" }}
             />
-            <button onClick={onSend} disabled={sending || !composer.trim()} className="btn-grad h-10 px-5 rounded-xl text-[13px] font-semibold shrink-0" style={{ color: "white", border: "1px solid transparent" }}>
+            <button onClick={onSend} disabled={sending || !selected || !composer.trim()} className="btn-grad h-10 px-5 rounded-xl text-[13px] font-semibold shrink-0" style={{ color: "white", border: "1px solid transparent" }}>
               {sending ? "…" : "Send →"}
             </button>
           </div>

@@ -28,7 +28,7 @@ from .orchestration.factory import build_orchestrators
 from .repository.factory import build_repository
 from .repository.memory import InMemoryTaskRepository
 from .repository.sqlite import SQLiteTaskRepository
-from .routers import approvals, health, stream, tasks, threads
+from .routers import approvals, evaluations, health, stream, tasks, threads
 from .security import SecurityHeadersMiddleware
 from .services.approval_gateway import ApprovalGateway
 from .services.event_broker import EventBroker
@@ -154,9 +154,10 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                     "file_based",
                 }:
                     raise
+                detail = str(exc).strip() or type(exc).__name__
                 reason = (
                     "task repository: postgres connection failed "
-                    f"({exc}); using explicitly configured {resolved_settings.repository_fallback} fallback"
+                    f"({detail}); using explicitly configured {resolved_settings.repository_fallback} fallback"
                 )
                 log.error("%s", reason)
                 degraded.append(reason)
@@ -261,7 +262,8 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
                             native_sandbox.status_line(),
                         )
                     except Exception as exc:  # noqa: BLE001 - sandbox is optional
-                        log.warning("Native sandbox probe failed; terminal commands will fail closed: %s", exc)
+                        detail = str(exc) or type(exc).__name__
+                        log.warning("Native sandbox probe failed; terminal commands will fail closed: %s", detail)
                 native_runtime = AgentRuntime(
                     database=native_db,
                     agents=[native_config],
@@ -295,6 +297,19 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             approval_handler=approval_gateway,
             native_service=native_service,
         )
+        # The optional LLM judge is built from the native runtime's model
+        # registry: the same wired providers the agent itself uses. One
+        # factory per process; start_evaluation builds ONE judge instance per
+        # request and shares it across every track being compared.
+        judge_factory = None
+        native_registry = getattr(native_runtime, "models", None) if native_runtime is not None else None
+        if native_registry is not None and hasattr(native_registry, "list_model_names"):
+
+            def judge_factory(model_name: str, _registry=native_registry):
+                from common.llm_judging import judge_from_registry
+
+                return judge_from_registry(_registry, model_name)
+
         app.state.settings = resolved_settings
         app.state.repository = repository
         app.state.broker = broker
@@ -307,6 +322,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
             approvals=approval_gateway,
             settings=resolved_settings,
             background=background,
+            judge_factory=judge_factory,
         )
         app.state.task_service = task_service
         # Reap executions left non-terminal by a dead process BEFORE serving:
@@ -409,6 +425,7 @@ def create_app(settings: ApiSettings | None = None) -> FastAPI:
     app.include_router(threads.router)
     app.include_router(stream.router)
     app.include_router(approvals.router)
+    app.include_router(evaluations.router)
     app.include_router(langgraph_settings_router)
     # Native-track routes — mounted separately so existing paths are untouched
     if _NATIVE_ROUTERS_AVAILABLE:

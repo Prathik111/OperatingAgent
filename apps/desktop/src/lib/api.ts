@@ -5,9 +5,12 @@ import type {
   EnvironmentResponse,
   EventResponse,
   HealthResponse,
+  EvaluationDashboard,
+  StartEvaluationResponse,
   NativeHealthResponse,
   PermissionResponse,
   RunResponse,
+  SandboxContainerResponse,
   SandboxStatusResponse,
   SessionResponse,
   SessionWithRunsResponse,
@@ -30,6 +33,9 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
   try {
     res = await fetch(`${apiBase()}${path}`, {
+      // Webviews (and some browsers) heuristically cache identical GETs;
+      // the evaluation dashboard and thread polls must always hit the API.
+      cache: "no-store",
       headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
       ...init,
     });
@@ -37,8 +43,16 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(`API unavailable at ${apiBase()}. Start the desktop app with Tauri or run 'uv run --package api api'.`);
   }
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`${res.status} ${res.statusText}${text ? `: ${text.slice(0, 400)}` : ""}`);
+    const body = await res.text().catch(() => "");
+    let detail = body;
+    try {
+      const parsed = JSON.parse(body) as { detail?: unknown };
+      if (typeof parsed.detail === "string") detail = parsed.detail;
+      else if (parsed.detail != null) detail = JSON.stringify(parsed.detail);
+    } catch {
+      // Keep plain-text responses readable as well.
+    }
+    throw new Error(`${res.status} ${res.statusText}${detail ? `: ${detail.slice(0, 600)}` : ""}`);
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -87,6 +101,13 @@ export const nativeApi = {
     `${apiBase()}/native/sessions/${encodeURIComponent(sessionId)}/events?from=${from}&stream=${stream}`,
 
   getSandbox: () => req<SandboxStatusResponse>("/native/sandbox"),
+  createSandboxContainer: (sessionId: string) =>
+    req<SandboxContainerResponse>("/native/sandbox/containers", {
+      method: "POST",
+      body: JSON.stringify({ session_id: sessionId }),
+    }),
+  deleteSandboxContainer: (sessionId: string) =>
+    req<{ session_id: string; deleted: number }>(`/native/sandbox/containers/${encodeURIComponent(sessionId)}`, { method: "DELETE" }),
   getEnvironment: () => req<EnvironmentResponse>("/native/environment"),
 
   listRuns: (sessionId: string) => req<RunResponse[]>(`/native/sessions/${encodeURIComponent(sessionId)}/runs`),
@@ -115,6 +136,9 @@ export const nativeApi = {
 // ——— Task / LangGraph ———
 export const taskApi = {
   health: () => req<HealthResponse>("/health"),
+  evaluationDashboard: () => req<EvaluationDashboard>("/evaluations/dashboard"),
+  startEvaluation: (body: { name: string; version: string; tracks: Array<"native" | "langgraph">; judge_model?: string; cases: Array<{ id: string; goal: string; working_directory?: string; expected_output_contains?: string; checks?: Array<Record<string, unknown>>; metadata?: Record<string, unknown> }> }) =>
+    req<StartEvaluationResponse>("/evaluations/runs", { method: "POST", body: JSON.stringify(body) }),
 
   createTask: (body: CreateTaskRequest) =>
     req<TaskResponse>("/tasks", { method: "POST", body: JSON.stringify(body) }),

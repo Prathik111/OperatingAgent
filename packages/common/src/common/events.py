@@ -1,4 +1,4 @@
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 from datetime import datetime
 from typing import Any
 
@@ -20,8 +20,16 @@ def _payload(data: dict[str, Any]) -> dict[str, Any]:
     return {key: convert(value) for key, value in data.items()}
 
 
-def _record_values(payload: dict[str, Any]) -> dict[str, Any]:
-    values = dict(payload)
+def _record_values(record_cls: type, payload: dict[str, Any]) -> dict[str, Any]:
+    """Project an event payload onto a record's fields.
+
+    Emitters attach correlation keys the record does not model (``call_id``,
+    ``step_id``, ``truncated``, ``native_*``…); persisting must not blow up on
+    them, and silently dropping them keeps the event stream the authoritative
+    correlation source (the record is a metrics row, not a join table).
+    """
+    valid = {field.name for field in fields(record_cls)}
+    values = {key: value for key, value in payload.items() if key in valid}
     for key in ("started_at", "finished_at"):
         if isinstance(values.get(key), str):
             values[key] = datetime.fromisoformat(values[key])
@@ -47,7 +55,7 @@ class LLMCallRecord:
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> "LLMCallRecord":
-        return cls(**_record_values(payload))
+        return cls(**_record_values(cls, payload))
 
 
 @dataclass(slots=True)
@@ -73,7 +81,7 @@ class ToolCallRecord:
 
     @classmethod
     def from_payload(cls, payload: dict[str, Any]) -> "ToolCallRecord":
-        return cls(**_record_values(payload))
+        return cls(**_record_values(cls, payload))
 
 
 @dataclass(slots=True)

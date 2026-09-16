@@ -47,6 +47,15 @@ async def test_unknown_thread_is_404(client):
     assert "thread 'does-not-exist' not found" == response.json()["detail"]
 
 
+async def test_scoped_task_creation_does_not_implicitly_create_thread(client):
+    response = await client.post(
+        "/threads/does-not-exist/tasks",
+        json={"goal": "must fail", "track": "langgraph"},
+    )
+    assert response.status_code == 404
+    assert "thread 'does-not-exist' not found" == response.json()["detail"]
+
+
 async def test_delete_thread_removes_it_and_its_tasks(client, task_service):
     created = await client.post("/threads", json={"title": "to delete"})
     assert created.status_code == 201
